@@ -1,0 +1,41 @@
+# Stub from setup step 3. Each job carries the final required-check name
+# (D93) and passes at once; M1a replaces this file with the real gate.
+name: ci
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  pins-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "stub until M1a"
+
+  artifact-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "stub until M1a"
+
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "stub until M1a"
+
+  gate-linux-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "stub until M1a; the real job runs on arm64"
+
+  must-fail:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "stub until M1a"

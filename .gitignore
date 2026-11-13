@@ -1,0 +1,6 @@
+# Toolchains fetched or staged by toolchain:fetch and workflow steps.
+.cache/
+# Artifacts written by artifact:build.
+dist/
+# Local devcontainer settings; never committed.
+.devcontainer/.env

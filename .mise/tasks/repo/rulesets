@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#MISE description="Apply or verify the main-branch ruleset in .github/rulesets/main.json"
+#USAGE flag "--phase <phase>" required=#true help="Setup phase whose settings apply" {
+#USAGE   choices "bootstrap" "m1a"
+#USAGE }
+#USAGE flag "--verify" help="Check the live settings instead of applying them"
+#USAGE flag "--repo <repo>" help="Repository to act on" default="ray-manaloto/cpp-standard"
+#
+# First version, from setup step 3 (environment-standard.md section 6, D53,
+# D60, D63, D93, D97). The bootstrap phase leaves out required status checks;
+# m1a adds them. The m1b phase (immutable releases, the toolchain tag
+# ruleset) comes with M1b. Reading bypass_actors needs a token with
+# Administration write.
+set -euo pipefail
+
+phase="${usage_phase:?--phase is required}"
+repo="${usage_repo:-ray-manaloto/cpp-standard}"
+root="$(git rev-parse --show-toplevel)"
+file="$root/.github/rulesets/main.json"
+ci_file="$root/.github/workflows/ci.yml"
+
+# The ci.yml job names that are the required checks (D93).
+required_checks='["artifact-check","gate-linux-arm64","must-fail","pins-validate","resolve"]'
+
+# The ruleset body for this phase.
+desired() {
+  case "$phase" in
+    bootstrap) jq 'del(.rules[] | select(.type == "required_status_checks"))' "$file" ;;
+    m1a) jq '.' "$file" ;;
+  esac
+}
+
+ruleset_id() {
+  gh api "repos/$repo/rulesets" --jq '.[] | select(.name == "main" and .source_type == "Repository") | .id'
+}
+
+apply() {
+  local id
+  id="$(ruleset_id)"
+  if [[ -n "$id" ]]; then
+    desired | gh api -X PUT "repos/$repo/rulesets/$id" --input - --jq '"updated ruleset \(.id)"'
+  else
+    desired | gh api -X POST "repos/$repo/rulesets" --input - --jq '"created ruleset \(.id)"'
+  fi
+}
+
+failures=0
+fail() {
+  echo "FAIL: $*" >&2
+  failures=$((failures + 1))
+}
+
+verify() {
+  local id live want
+  id="$(ruleset_id)"
+  if [[ -z "$id" ]]; then
+    fail "no ruleset named main"
+    return
+  fi
+  live="$(gh api "repos/$repo/rulesets/$id")"
+  want="$(desired)"
+
+  [[ "$(jq -r '.enforcement' <<<"$live")" == active ]] || fail "ruleset main is not active"
+  jq -e '.conditions.ref_name.include == ["~DEFAULT_BRANCH"]' <<<"$live" >/dev/null ||
+    fail "ruleset main does not target the default branch"
+
+  # The only bypass actor is the organization admin, and only on pull
+  # requests. A missing bypass_actors key means the token cannot read it.
+  if ! jq -e 'has("bypass_actors")' <<<"$live" >/dev/null; then
+    fail "bypass_actors not returned; the token needs Administration write"
+  elif ! jq -e --argjson w "$want" \
+    '[.bypass_actors[] | {actor_type, bypass_mode}] == [$w.bypass_actors[] | {actor_type, bypass_mode}]' \
+    <<<"$live" >/dev/null; then
+    fail "bypass actors differ from main.json: $(jq -c '.bypass_actors' <<<"$live")"
+  fi
+  local admins
+  admins="$(gh api "orgs/${repo%%/*}/members?role=admin" --jq 'length')"
+  [[ "$admins" == 1 ]] || fail "the organization has $admins admins; the owner must be the only one"
+
+  # Every rule in main.json is live with the same parameter values.
+  local type
+  while IFS= read -r type; do
+    if ! jq -e --arg t "$type" --argjson w "$want" '
+        ($w.rules[] | select(.type == $t) | .parameters // {}) as $p
+        | any(.rules[]; .type == $t
+              and ((.parameters // {}) as $l | all($p | keys[]; . as $k | $l[$k] == $p[$k])))' \
+      <<<"$live" >/dev/null; then
+      fail "rule $type is missing or differs from main.json"
+    fi
+  done < <(jq -r '.rules[].type' <<<"$want")
+
+  if [[ "$phase" == m1a ]]; then
+    jq -e --argjson r "$required_checks" \
+      '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | sort == $r' \
+      <<<"$live" >/dev/null || fail "required checks differ from $required_checks"
+    local job
+    for job in $(jq -r '.[]' <<<"$required_checks"); do
+      grep -Eq "^  ${job}:" "$ci_file" || fail "ci.yml has no job $job"
+    done
+  fi
+
+  # No workflow is disabled.
+  local disabled
+  disabled="$(gh api "repos/$repo/actions/workflows" --jq '[.workflows[] | select(.state != "active") | .path] | join(", ")')"
+  [[ -z "$disabled" ]] || fail "disabled workflows: $disabled"
+
+  if ((failures > 0)); then
+    echo "repo:rulesets --verify --phase $phase: $failures failure(s)" >&2
+    exit 1
+  fi
+  echo "repo:rulesets --verify --phase $phase: ok"
+}
+
+if [[ "${usage_verify:-false}" == true ]]; then
+  verify
+else
+  apply
+fi

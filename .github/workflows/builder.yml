@@ -1,0 +1,19 @@
+# Minimal builder from setup step 3: only the publish job, which has
+# nothing to publish yet. M0 (i) and M1a add the build and publish steps
+# (environment-standard.md section 2, D59, D98). Toolchain signatures name
+# this file at refs/heads/main, so its path must not change.
+name: builder
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "nothing to publish until M0 (i)"

@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+#MISE description="Mint a one-hour cpp-standard agent App token; also a git credential helper"
+#USAGE arg "[operation]" help="git credential-helper operation (get, store, erase); omit to print the token"
+#
+# First version, from setup step 3 (environment-standard.md section 6, D71,
+# D80, D84). Runs on the Mac host only. The login Keychain item
+# cpp-standard-agent-app holds the App's client ID as its account and the
+# base64 of the App's private key (PEM) as its password; setup step 6
+# creates it. The key goes from the Keychain to openssl through a pipe and
+# is never printed or written to disk. The token is cached until 5 minutes
+# before it expires.
+#
+#   GH_TOKEN="$(mise run -q agent:token)" gh ...
+#   git config credential.https://github.com.helper '!mise run -q agent:token'
+set -euo pipefail
+
+item="cpp-standard-agent-app"
+repo="ray-manaloto/cpp-standard"
+api="https://api.github.com"
+operation="${usage_operation:-print}"
+cache="${TMPDIR:-/tmp}/cpp-standard-agent-token.json"
+
+case "$operation" in
+  store | erase) exit 0 ;;
+  get)
+    # git sends key=value lines; answer only for https://github.com.
+    protocol="" host=""
+    while IFS='=' read -r key value && [[ -n "$key" ]]; do
+      case "$key" in
+        protocol) protocol="$value" ;;
+        host) host="$value" ;;
+      esac
+    done
+    [[ "$protocol" == https && "$host" == github.com ]] || exit 0
+    ;;
+  print) ;;
+  *)
+    echo "agent:token: unknown operation $operation" >&2
+    exit 2
+    ;;
+esac
+
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+
+mint() {
+  local client_id now header payload unsigned signature jwt installation
+  client_id="$({ security find-generic-password -s "$item" 2>/dev/null || true; } |
+    sed -n 's/^ *"acct"<blob>="\(.*\)"$/\1/p')"
+  if [[ -z "$client_id" ]]; then
+    echo "agent:token: Keychain item $item not found or has no account" >&2
+    exit 1
+  fi
+  now="$(date +%s)"
+  header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
+  payload="$(jq -cn --arg iss "$client_id" --argjson now "$now" \
+    '{iat: ($now - 60), exp: ($now + 540), iss: $iss}' | b64url)"
+  unsigned="$header.$payload"
+  signature="$(printf '%s' "$unsigned" |
+    openssl dgst -sha256 -sign <(security find-generic-password -s "$item" -w | openssl base64 -d -A) |
+    b64url)"
+  jwt="$unsigned.$signature"
+
+  installation="$(curl -fsS -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" \
+    "$api/repos/$repo/installation" | jq -r '.id')"
+  (
+    umask 077
+    curl -fsS -X POST -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" \
+      "$api/app/installations/$installation/access_tokens" |
+      jq '{token, expires_at: (.expires_at | fromdateiso8601)}' >"$cache.new"
+    mv "$cache.new" "$cache"
+  )
+}
+
+if ! [[ -f "$cache" ]] ||
+  ! jq -e --argjson now "$(date +%s)" '.expires_at - 300 > $now' "$cache" >/dev/null 2>&1; then
+  mint
+fi
+token="$(jq -r '.token' "$cache")"
+
+if [[ "$operation" == get ]]; then
+  printf 'username=x-access-token\npassword=%s\n' "$token"
+else
+  printf '%s\n' "$token"
+fi
