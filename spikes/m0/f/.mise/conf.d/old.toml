@@ -1,0 +1,4 @@
+# M0 (f) fixture: a conf.d fragment with a deliberately old pin, so a
+# Renovate run that reads .mise/conf.d/ has something to update.
+[tools]
+node = "20.0.0"
