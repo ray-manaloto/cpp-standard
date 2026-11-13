@@ -1,8 +1,8 @@
 # cpp-standard: the C++ environment and project standard (Level 1)
 
-*   **Author:** ray-manaloto
-*   **Status:** EGM review complete (Stage 9 re-audit fixes applied)
-*   **Date:** 2026-11-13
+- **Author:** ray-manaloto
+- **Status:** EGM review complete (Stage 9 re-audit fixes applied)
+- **Date:** 2026-11-13
 
 --------------------------------------------------------------------------------
 
@@ -32,8 +32,9 @@ brainstorm, decides what glaze FIX implements. The critical path to that date
 is Linux-first (D44, D53, §10).
 
 **Inputs:**
+
 - [concepts_brief.md](level-1/concepts_brief.md);
-- [decisions-log.md](level-1/decisions-log.md), D1 to D101. "Dnn" in this
+- [decisions-log.md](level-1/decisions-log.md), D1 to D102. "Dnn" in this
   document means row Dnn of that log;
 - the reports in [level-1/research/](level-1/research/), and
   [goldfish_brainstorm_report.md](level-1/goldfish_brainstorm_report.md);
@@ -51,6 +52,7 @@ cloned offline and mapped in code. Each claim cites its source.
 
 Where this design differs from `concepts_brief.md`, this design wins. The
 owner confirmed three such differences:
+
 - the reference project includes the owner's reflection module (D22);
 - updates are daily, with p2996 automated (D31, D32, D34);
 - the implementing agent does the work, and asks the owner only for steps
@@ -58,7 +60,7 @@ owner confirmed three such differences:
 
 ### Glossary
 
-**Process terms**
+#### Process terms
 
 | Term | Meaning |
 |---|---|
@@ -71,7 +73,7 @@ owner confirmed three such differences:
 | **Abbreviations** | **CUJ**: critical user journey. **CLT**: Apple's Command Line Tools. **SOH**: the FIX field separator, byte `0x01`. **GHCR**: GitHub Container Registry. **P2996** / **P3394**: the C++ proposals for static reflection and for annotations. |
 | **Two-VM rule** | Apple's licence lets a Mac run at most two macOS VMs at once. The dev VM and one runner or golden-build VM share that limit (D68). |
 
-**Code, paths and pins**
+#### Code, paths and pins
 
 | Term | Meaning |
 |---|---|
@@ -91,7 +93,7 @@ owner confirmed three such differences:
 | **ut** | Boost.ext ut (`bext-ut`), the header-only C++ unit-test framework. |
 | **Prior repositories** | a private prototype ("the prototype"), glaze-build-setup, cpp-core and the cpp-utilities catalogue each had their own build-preset setup. symphony-cpp built hash-tagged toolchains. dotfiles is the owner's current machine setup; dotfiles-legacy is its older version. cpp-core is a separate project, developed by agents on low-cost models. |
 
-**Machines and images**
+#### Machines and images
 
 | Term | Meaning |
 |---|---|
@@ -99,7 +101,7 @@ owner confirmed three such differences:
 | **Dev VM** | A clone of the Mac golden image where the owner and agents work. |
 | **Runner VM** | A one-job clone of a golden image, made and deleted by gha-outrunner (D65). |
 
-**Tools**
+#### Tools
 
 | Term | Meaning |
 |---|---|
@@ -111,7 +113,7 @@ owner confirmed three such differences:
 | **gha-outrunner** | A small controller on GitHub's `actions/scaleset` client that runs each job in a fresh libvirt or Tart VM (D65). |
 | **Context7, codebase-memory** | Two MCP servers available to agents. Context7 serves current library documentation. codebase-memory indexes this repository's code as a searchable graph. |
 
-**Identities**
+#### Identities
 
 | Term | Meaning |
 |---|---|
@@ -152,111 +154,111 @@ and then used, not grown.
 
 ## Goals
 
-*   **G1. One pinned environment from one configuration, at the newest
-    versions.** A single mise bootstrap project builds a Tart macOS VM and
-    Ubuntu 26.10 arm64 and amd64 images (D13, D25, D45).
-    - Every input is pinned by version, hash or digest. Every tool is kept
-      at its newest release by daily Renovate; Action SHAs are batched weekly.
-    - Images and toolchains are tagged by a hash of their inputs (D49).
-    - Measure: the tags computed from a commit's inputs always resolve to the
-      same toolchain versions. An old commit is reproduced by pulling them,
-      not by rebuilding.
-    - Accepted limit: the Mac golden image is local only, and depends on the
-      cirruslabs vanilla image staying available by digest.
-*   **G2. Three compilers, each with a written role** (D1, D3, D6, D25). §1
-    has the table.
-    - **LLVM/clang 23 with libc++** is the daily compiler and runs the
-      tier-1 sanitizer checks.
-    - **GCC 16.2 with libstdc++** is the second compiler that must pass the
-      gate. It runs Valgrind and also compiles reflection code.
-    - **clang-p2996 with its own libc++** is the reflection reference
-      compiler.
-    - Measure: the §1 table holds for every environment, as recorded in the
-      capability lock.
-*   **G3. One gate, `mise run ci`, identical locally and in CI** (§5, D19,
-    D37, D42).
-    - Measure: the same commit gives the same tier-1 result in the
-      devcontainer, the dev VM and Actions, and every applicable must-fail
-      fixture fails.
-*   **G4. Reflection learning on real code.**
-    - **The owner's module (D22):** a FIX-shaped encoder of about 100 lines.
-      Tag numbers come from P3394 annotations. It builds on GCC 16 and
-      clang-p2996, with 100% coverage, and seeds glaze FIX.
-    - **The reflection canary (D20, D47)** shows the compilers and libraries
-      cope with real reflection code.
-    - Measure: the encoder is green in the gate on both reflection compilers;
-      the canary's glaze row is green or allow-listed.
-*   **G5. Isolation from everything else** (D4, D17, D18).
-    - The C++ work and its agents run in the Tart VM and the images.
-    - The host's global agent setup, dotfiles and the parked C++ projects are
-      not dependencies of the build. The host keeps only credentials: the
-      agent App key behind the `agent:token` broker, the runner PAT, and the
-      PC SSH access (D65, D70, D71).
-    - D17 is provisional until M0 (a) reports. If agents can't work inside
-      the VM, they stay on the host, and only builds and tests run in the VM
-      and containers.
-    - Measure: CUJ 1 changes no file outside the VM.
-*   **G6. No collisions between agents** (D23). One worktree and branch per
-    agent, and a GitHub merge queue into `main` (§9).
-    - Measure: the digest shows the agent count under the cap, and no merge
-      bypasses the queue.
-*   **G7. Visible progress, finished on a date** (D14, D21, D44).
-    - Level 1 is a checklist of gate items. An item is ticked only by a green
-      `mise run ci` on `main`. macOS items are ticked by the post-merge
-      macOS run (D46).
-    - A daily digest with no model calls shows the checklist and anything
-      off-track (§9).
-    - On 2026-11-27, whatever tier-1 items are green form the standard.
-      Unfinished items become dated tickets, in the cut order (D53).
-    - Measure: the checklist on 2026-11-27.
-*   **G8. Enough CI capacity at no cost, without exposing the owner's
-    hardware** (D16, D48). The repository is public. §6 holds the fence.
-    - Measure: the negative test at the M2 entry gate (D58, D77) shows no
-      non-`main` job starts on the PC or Mac.
+- **G1. One pinned environment from one configuration, at the newest
+  versions.** A single mise bootstrap project builds a Tart macOS VM and
+  Ubuntu 26.10 arm64 and amd64 images (D13, D25, D45).
+  - Every input is pinned by version, hash or digest. Every tool is kept
+    at its newest release by daily Renovate; Action SHAs are batched weekly.
+  - Images and toolchains are tagged by a hash of their inputs (D49).
+  - Measure: the tags computed from a commit's inputs always resolve to the
+    same toolchain versions. An old commit is reproduced by pulling them,
+    not by rebuilding.
+  - Accepted limit: the Mac golden image is local only, and depends on the
+    cirruslabs vanilla image staying available by digest.
+- **G2. Three compilers, each with a written role** (D1, D3, D6, D25). §1
+  has the table.
+  - **LLVM/clang 23 with libc++** is the daily compiler and runs the
+    tier-1 sanitizer checks.
+  - **GCC 16.2 with libstdc++** is the second compiler that must pass the
+    gate. It runs Valgrind and also compiles reflection code.
+  - **clang-p2996 with its own libc++** is the reflection reference
+    compiler.
+  - Measure: the §1 table holds for every environment, as recorded in the
+    capability lock.
+- **G3. One gate, `mise run ci`, identical locally and in CI** (§5, D19,
+  D37, D42).
+  - Measure: the same commit gives the same tier-1 result in the
+    devcontainer, the dev VM and Actions, and every applicable must-fail
+    fixture fails.
+- **G4. Reflection learning on real code.**
+  - **The owner's module (D22):** a FIX-shaped encoder of about 100 lines.
+    Tag numbers come from P3394 annotations. It builds on GCC 16 and
+    clang-p2996, with 100% coverage, and seeds glaze FIX.
+  - **The reflection canary (D20, D47)** shows the compilers and libraries
+    cope with real reflection code.
+  - Measure: the encoder is green in the gate on both reflection compilers;
+    the canary's glaze row is green or allow-listed.
+- **G5. Isolation from everything else** (D4, D17, D18).
+  - The C++ work and its agents run in the Tart VM and the images.
+  - The host's global agent setup, dotfiles and the parked C++ projects are
+    not dependencies of the build. The host keeps only credentials: the
+    agent App key behind the `agent:token` broker, the runner PAT, and the
+    PC SSH access (D65, D70, D71).
+  - D17 is provisional until M0 (a) reports. If agents can't work inside
+    the VM, they stay on the host, and only builds and tests run in the VM
+    and containers.
+  - Measure: CUJ 1 changes no file outside the VM.
+- **G6. No collisions between agents** (D23). One worktree and branch per
+  agent, and a GitHub merge queue into `main` (§9).
+  - Measure: the digest shows the agent count under the cap, and no merge
+    bypasses the queue.
+- **G7. Visible progress, finished on a date** (D14, D21, D44).
+  - Level 1 is a checklist of gate items. An item is ticked only by a green
+    `mise run ci` on `main`. macOS items are ticked by the post-merge
+    macOS run (D46).
+  - A daily digest with no model calls shows the checklist and anything
+    off-track (§9).
+  - On 2026-11-27, whatever tier-1 items are green form the standard.
+    Unfinished items become dated tickets, in the cut order (D53).
+  - Measure: the checklist on 2026-11-27.
+- **G8. Enough CI capacity at no cost, without exposing the owner's
+  hardware** (D16, D48). The repository is public. §6 holds the fence.
+  - Measure: the negative test at the M2 entry gate (D58, D77) shows no
+    non-`main` job starts on the PC or Mac.
 
 ## Non-Goals
 
-*   **glaze FIX itself.** This covers the Orchestra XML-to-C++ generator and
-    the serializer. Level 2 designs them. Level 1 only provides the owner's
-    small encoder module as a seed.
-*   **cpp-core.** It stays a separate project, developed by agents on
-    low-cost models, and gets its own brainstorm later.
-*   **The parked projects** (D4): the private prototype, cpp-utilities,
-    cmake_template, modern_cpp_project_template, cpp-playground and
-    hftuniversity. Pieces of them are copied in only when needed, with a link
-    to the source.
-*   **The glaze worktrees and spikes.** They move into the glaze FIX repo in
-    Level 2.
-*   **Cleaning up the host's agent setup, the owner's existing
-    rulings, and the rest of dotfiles** (D18). dotfiles' C++ parts
-    retire, and nothing else changes in Level 1.
-*   **A project-template generator** (the mise "cookiecutter"). It is a
-    separate later project.
-*   **Windows.**
-*   **Performance results used as claims, and the tooling for them** (D46).
-    Level 1 has the metrics standard (§8) and one unprivileged task,
-    `perf:instructions`. Hardware counters, the privileged perf container and
-    macOS profilers move to Level 2.
-*   **A vcpkg binary cache** (D52). The only dependency, ut, is header-only.
-*   **Upstream changes to mise or Renovate.** The three drafted posts stay
-    unposted until the owner decides. Level 1 works around the gaps.
+- **glaze FIX itself.** This covers the Orchestra XML-to-C++ generator and
+  the serializer. Level 2 designs them. Level 1 only provides the owner's
+  small encoder module as a seed.
+- **cpp-core.** It stays a separate project, developed by agents on
+  low-cost models, and gets its own brainstorm later.
+- **The parked projects** (D4): the private prototype, cpp-utilities,
+  cmake_template, modern_cpp_project_template, cpp-playground and
+  hftuniversity. Pieces of them are copied in only when needed, with a link
+  to the source.
+- **The glaze worktrees and spikes.** They move into the glaze FIX repo in
+  Level 2.
+- **Cleaning up the host's agent setup, the owner's existing
+  rulings, and the rest of dotfiles** (D18). dotfiles' C++ parts
+  retire, and nothing else changes in Level 1.
+- **A project-template generator** (the mise "cookiecutter"). It is a
+  separate later project.
+- **Windows.**
+- **Performance results used as claims, and the tooling for them** (D46).
+  Level 1 has the metrics standard (§8) and one unprivileged task,
+  `perf:instructions`. Hardware counters, the privileged perf container and
+  macOS profilers move to Level 2.
+- **A vcpkg binary cache** (D52). The only dependency, ut, is header-only.
+- **Upstream changes to mise or Renovate.** The three drafted posts stay
+  unposted until the owner decides. Level 1 works around the gaps.
 
 ## Open Questions
 
-*   **Q1. Before going public.**
-    - Scrub local paths, session ids, internal account names and internal
-      tool names from all of `docs/designs/`.
-    - rosetta lists no license, so it is built for testing and not
-      redistributed.
-    - Check the FIX Orchestra license before glaze FIX goes public.
-*   **Q2. The mise and Renovate upstream posts.** The three drafts are ready
-    and verified on 26.10. When, if at all, to post them is the owner's call.
-*   **Q3. License.** cpp-standard needs a `LICENSE` before it goes public.
-    The choice is the owner's.
-*   **Q4. When the post-merge macOS run becomes a required check** (D46).
-    The owner decides by hand, or later automates it with a rule such as "N
-    consecutive green daily runs". Until then, a red post-merge macOS run is
-    fixed or reverted by the owner; there are no Mac-only pins (D85).
+- **Q1. Before going public.**
+  - Scrub local paths, session ids, internal account names and internal
+    tool names from all of `docs/designs/`.
+  - rosetta lists no license, so it is built for testing and not
+    redistributed.
+  - Check the FIX Orchestra license before glaze FIX goes public.
+- **Q2. The mise and Renovate upstream posts.** The three drafts are ready
+  and verified on 26.10. When, if at all, to post them is the owner's call.
+- **Q3. License.** cpp-standard needs a `LICENSE` before it goes public.
+  The choice is the owner's.
+- **Q4. When the post-merge macOS run becomes a required check** (D46).
+  The owner decides by hand, or later automates it with a rule such as "N
+  consecutive green daily runs". Until then, a red post-merge macOS run is
+  fixed or reverted by the owner; there are no Mac-only pins (D85).
 
 The settled questions are listed at the end of the Technical Plan.
 
@@ -264,77 +266,77 @@ The settled questions are listed at the end of the Technical Plan.
 
 ### CUJ 1: Fresh Mac to a green gate
 
-*   **Given**: An Apple Silicon Mac with only Tart and git installed, and
-    the cpp-standard repository URL.
-*   **When**: The owner clones the pinned Tart macOS image and runs the
-    pinned mise installer and `mise bootstrap --from <repo>?ref=<sha>` inside
-    the VM. They then run `mise run ci`.
-*   **Then**:
-    - The VM gets the mise tools, including the LLVM release tarball, from
-      `.mise/mise.lock`. `mise run toolchain:fetch` installs GCC 16.2 and
-      clang-p2996 with the packslip CLI, which checks they were signed by
-      `main`'s builder (D72). If Mac GCC was cut, reflection is gated on
-      p2996 only.
-    - Every tier-1 check runs for the macOS compiler set and passes, and the
-      probes match the capability lock.
-    - No file outside the VM changes.
+- **Given**: An Apple Silicon Mac with only Tart and git installed, and
+  the cpp-standard repository URL.
+- **When**: The owner clones the pinned Tart macOS image and runs the
+  pinned mise installer and `mise bootstrap --from <repo>?ref=<sha>` inside
+  the VM. They then run `mise run ci`.
+- **Then**:
+  - The VM gets the mise tools, including the LLVM release tarball, from
+    `.mise/mise.lock`. `mise run toolchain:fetch` installs GCC 16.2 and
+    clang-p2996 with the packslip CLI, which checks they were signed by
+    `main`'s builder (D72). If Mac GCC was cut, reflection is gated on
+    p2996 only.
+  - Every tier-1 check runs for the macOS compiler set and passes, and the
+    probes match the capability lock.
+  - No file outside the VM changes.
 
 ### CUJ 2: The Linux image, locally and in CI
 
-*   **Given**: A commit on any branch of cpp-standard.
-*   **When**: `mise run artifact:tag` computes the base and tools tags from the
-    commit's image inputs (§2). If either tag is missing, the builder builds
-    it on hosted runners for arm64 (and amd64 from M2).
-*   **Then**:
-    - The same tools tag is the devcontainer image and the CI job
-      `container:`. Outside PR jobs, the pull is checked against `main`'s
-      attestation (D59).
-    - A non-root user can run every tool. Toolchains are installed by
-      `toolchain:fetch` when the job starts, by the one fetch rule in §2:
-      `main`'s signed release for the hash, else the PR's artifact or cache,
-      else a rebuild (D72, D83).
-    - `mise run ci` gives the same result in the devcontainer and in GitHub
-      Actions.
+- **Given**: A commit on any branch of cpp-standard.
+- **When**: `mise run artifact:tag` computes the base and tools tags from the
+  commit's image inputs (§2). If either tag is missing, the builder builds
+  it on hosted runners for arm64 (and amd64 from M2).
+- **Then**:
+  - The same tools tag is the devcontainer image and the CI job
+    `container:`. Outside PR jobs, the pull is checked against `main`'s
+    attestation (D59).
+  - A non-root user can run every tool. Toolchains are installed by
+    `toolchain:fetch` when the job starts, by the one fetch rule in §2:
+    `main`'s signed release for the hash, else the PR's artifact or cache,
+    else a rebuild (D72, D83).
+  - `mise run ci` gives the same result in the devcontainer and in GitHub
+    Actions.
 
 ### CUJ 3: The owner writes reflection code
 
-*   **Given**: The devcontainer, or the dev VM, and the reference project.
-*   **When**: The owner edits the reflection encoder module and runs `mise run
-    ci`.
-*   **Then**:
-    - The module builds with GCC 16 `-freflection` and with clang-p2996. It
-      is not built with plain LLVM.
-    - Its ut tests and `static_assert` tests pass.
-    - Each compiler's own coverage tool reports 100% under the consteval
-      rule in §5.
-    - The sanitizers pass.
+- **Given**: The devcontainer, or the dev VM, and the reference project.
+- **When**: The owner edits the reflection encoder module and runs `mise run
+  ci`.
+- **Then**:
+  - The module builds with GCC 16 `-freflection` and with clang-p2996. It
+    is not built with plain LLVM.
+  - Its ut tests and `static_assert` tests pass.
+  - Each compiler's own coverage tool reports 100% under the consteval
+    rule in §5.
+  - The sanitizers pass.
 
 ### CUJ 4: A dependency update arrives
 
-*   **Given**: Renovate finds new versions of pinned inputs: mise tools, apt
-    packages, GitHub Actions, or a toolchain input such as the p2996 commit.
-*   **When**: Renovate opens its daily PRs (D31, D61).
-*   **Then**: the merge rule in §7 decides. Linux artifacts are built on
-    hosted runners before merge; Mac toolchains are built after merge (D62).
-    A red PR lands in the daily digest and nothing merges.
+- **Given**: Renovate finds new versions of pinned inputs: mise tools, apt
+  packages, GitHub Actions, or a toolchain input such as the p2996 commit.
+- **When**: Renovate opens its daily PRs (D31, D61).
+- **Then**: the merge rule in §7 decides. Linux artifacts are built on
+  hosted runners before merge; Mac toolchains are built after merge (D62).
+  A red PR lands in the daily digest and nothing merges.
 
 ### CUJ 5: Two agents work at once
 
-*   **Given**: Two agents, each on its own branch and worktree.
-*   **When**: Both finish and ask to merge.
-*   **Then**: The merge queue tests each one on top of `main` and the other
-    agent's change, on hosted runners, building any new input combination
-    (D61). Neither merges unless the required Linux checks pass. The daily
-    digest flags any agent count over the cap (§9).
+- **Given**: Two agents, each on its own branch and worktree.
+- **When**: Both finish and ask to merge.
+- **Then**: The merge queue tests each one on top of `main` and the other
+  agent's change, on hosted runners, building any new input combination
+  (D61). Neither merges unless the required Linux checks pass. The daily
+  digest flags any agent count over the cap (§9).
 
 ### CUJ 6: Daily review
 
-*   **Given**: The scheduled digest workflow (daily by default) and the
-    `review:cap` report.
-*   **When**: It runs `mise run review:digest`.
-*   **Then**: The owner gets the gate checklist and the other items listed in
-    §9, all with no model calls. `/egm-drift-report` runs only if code under
-    a design doc changed.
+- **Given**: The scheduled digest workflow (daily by default) and the
+  `review:cap` report.
+- **When**: It runs `mise run review:digest`.
+- **Then**: The owner gets the gate checklist and the other items listed in
+  §9, all with no model calls. `/egm-drift-report` runs only if code under
+  a design doc changed.
 
 --------------------------------------------------------------------------------
 
@@ -350,8 +352,8 @@ Implementation. What is unproven, and the accepted risks, are in
 ```mermaid
 flowchart LR
   subgraph repo[cpp-standard repo]
-    OWN[owned roots<br/>.github, mise.toml, mise tasks, fixtures, build.sh,<br/>Dockerfiles, capability lock, gate policy, hk.pkl, .jouet]
-    PINS[pins, content-validated<br/>.mise/conf.d/apt.toml, apt-toolchain-host.toml,<br/>tools.toml, .mise/mise.lock, image/base.inputs.toml,<br/>toolchains/*/pins.toml, vm/inputs.toml]
+    OWN[owned roots<br/>.github, mise.toml, mise tasks, fixtures, build.sh,<br/>Dockerfiles, capability lock, gate policy, hk.pkl<br/>and its settings files, .jouet]
+    PINS[pins, content-validated<br/>.mise/conf.d/apt.toml, apt-toolchain-host.toml,<br/>tools.toml, lint.toml, .mise/mise.lock, image/base.inputs.toml,<br/>toolchains/*/pins.toml, vm/inputs.toml]
     CODE[src, tests, presets, probes]
   end
   subgraph out[published by builder.yml on main]
@@ -561,11 +563,16 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
      `actions/cache` quota, and M0 (i) confirms the cache scoping.
    - **Trust check on use.** For source 1, `toolchain:fetch` uses the
      standalone packslip CLI:
-     `packslip install github.com/ray-manaloto/cpp-standard/<project>
-     --version <version> --identity
-     https://github.com/ray-manaloto/cpp-standard/.github/workflows/builder.yml@refs/heads/main
-     --issuer https://token.actions.githubusercontent.com --install-dir
-     <dir>`. A release signed from any other ref is refused. Not mise's
+
+     ```sh
+     packslip install github.com/ray-manaloto/cpp-standard/<project> \
+       --version <version> \
+       --identity https://github.com/ray-manaloto/cpp-standard/.github/workflows/builder.yml@refs/heads/main \
+       --issuer https://token.actions.githubusercontent.com \
+       --install-dir <dir>
+     ```
+
+     A release signed from any other ref is refused. Not mise's
      `packslip:` backend: `mise install --locked` needs a `.mise/mise.lock` entry
      for every exact version (`src/backend/mod.rs:5276-5293`), so a computed
      version would need a post-merge `mise lock` write-back. Every non-PR
@@ -592,8 +599,16 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
 ### 3. The bootstrap project, image layers and the three environments
 
 `mise.toml` is the bootstrap project (D13), and the owner owns it. It holds:
+
 - **`[tasks]`:** settings only. Every task is a file under `.mise/tasks/`
   (D93); §6 lists which ones agents may edit;
+- **`[settings]`:** a fixed `minimum_release_age` cutoff, so `mise lock`
+  gives the same lock whenever it runs (M0 (i)), bumped with the pins, and
+  `lockfile = true`; a pins PR that needs a release newer than the cutoff
+  also moves the cutoff in this owned file, which D101 allows (the checks,
+  not the owner, gate it); M1b's Renovate config does this;
+- **`[hooks] postinstall`:** `hk install --mise` outside CI, so the hk git
+  hooks (D102) are installed with the pinned tools;
 - **`min_version`**, a floor: "the oldest mise release that can use this
   file" (mise `docs/configuration.md:590`). It is not a pin and changes only
   when the config needs a newer feature. The exact mise version lives only in
@@ -601,13 +616,18 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
 
 `mise.toml` and `.mise/mise.lock` never name a toolchain version; `toolchain:fetch`
 computes it (D72). All tools are locked in `.mise/mise.lock`, which is committed
-with mode 644. Four pins fragments live in `.mise/conf.d/`, which mise loads
+with mode 644. Five pins fragments live in `.mise/conf.d/`, which mise loads
 (M0 (f) checks that bootstrap and Renovate both read them, D53):
+
 - **`tools.toml`** (D74), `[tools]` only, each at an exact version that
   Renovate bumps to the newest release: cmake, ninja, python, mold, sccache,
-  gh, packslip, gcovr, clang-format (through `pipx:`, 23.x), jouet, hk and
-  fnox, and LLVM on macOS. Tier-2 tools join in M5. It is a pins file, so the
+  gh, packslip, gcovr, clang-format (through `pipx:`, 23.x), jouet and fnox,
+  and LLVM on macOS. Tier-2 tools join in M5. It is a pins file, so the
   daily tools PR merges without the owner (§7).
+- **`lint.toml`** (D102), `[tools]` only, at exact versions: hk (the same
+  version as the `hk.pkl` package and the global pin) and the tools its
+  builtins run (jactionlint, zizmor, pinact, ghalint, shellcheck, shfmt,
+  typos, rumdl, tombi, pkl, ryl, jq, editorconfig-checker, betterleaks).
 - **`apt-sources.toml`** (D90), `[bootstrap.apt.sources.llvm]` only:
   apt.llvm.org's `llvm-toolchain-resolute-23` suite with its key fingerprint.
   `resolute` is Ubuntu 26.04; the image is 26.10, which apt.llvm.org does not
@@ -623,7 +643,8 @@ with mode 644. Four pins fragments live in `.mise/conf.d/`, which mise loads
   - from the Ubuntu archive: valgrind, bison, flex, m4 and texinfo.
 
 `pins:validate` (D51) is a required hosted check. It makes sure:
-- `tools.toml` holds only `[tools]`, `apt-sources.toml` only
+
+- `tools.toml` and `lint.toml` hold only `[tools]`, `apt-sources.toml` only
   `[bootstrap.apt.sources.*]`, and `apt.toml` and `apt-toolchain-host.toml`
   only `[bootstrap.packages]`;
 - every name is in `pins-allowlist.toml`;
@@ -642,6 +663,7 @@ with mode 644. Four pins fragments live in `.mise/conf.d/`, which mise loads
 
 **Linux images** (D45, D49). Each Dockerfile is a few lines that only call
 mise; there is no `mise oci build` (D13).
+
 1. **base:** start from the image and digest in `image/base.inputs.toml`
    (passed as build arguments). Install mise with `packslip install
    github.com/jdx/mise --pin <mise_signer>`, run from a digest-pinned
@@ -658,6 +680,7 @@ following the one fetch rule in §2 (D72, D83). The tag comes in as an
 argument, so no `.git` directory is needed in a build.
 
 **The macOS VM (D68).**
+
 1. The **golden image**, kept locally as a Tart VM named by its inputs hash,
    is built from `macos-golden-gate-vanilla` by digest. It holds the
    bootstrapped mise tools and the D58 runner hook, and is rebuilt only when
@@ -714,6 +737,7 @@ opened from the Mac host terminal (D70).
 ### 5. The gate: `mise run ci`
 
 `mise run ci` runs the same steps everywhere:
+
 1. configure, with the probes, then compare them with the capability lock;
 2. check the gate policy (`gate:policy`, D64): every preset keeps the flags
    `gate-policy.toml` requires, and first-party code holds no
@@ -751,6 +775,7 @@ project and the owner approves.
 **Negative controls (D37, D42).** The gate builds `fixtures/must-fail/`
 separately. There is one must-fail fixture for each tier-1 check listed above,
 and each must fail its own check:
+
 - an uncovered line (once for each coverage tool);
 - a coverage-exclusion marker, and a preset missing a required flag;
 - an ASan overflow;
@@ -766,8 +791,18 @@ from live probes. If any applicable fixture passes, the gate is red. The
 fixtures run daily, on every Renovate PR (D50), and on every PR that changes
 an owned root.
 
-**Local hooks (D81).** `hk.pkl` only calls `mise run ci:fast` and `mise run
-gate:policy`; `gate:policy` is the real gate.
+**Local hooks and the lint gate (D81, D102).** `hk.pkl` amends the jdx hk
+package at the pinned hk version and runs hk builtins: jactionlint
+(pedantic, strict exit), pinact, ghalint and zizmor (pedantic; offline in the hook, plus the
+online audits in CI through the `online` profile) on workflows;
+shfmt and shellcheck on shell and file tasks; ryl (YAML), jq, mise, tombi,
+pkl, rumdl, typos and editorconfig-checker on config and docs; betterleaks
+for secrets; and the hygiene checks. The tools are pinned in
+`.mise/conf.d/lint.toml`. The same steps run on pre-commit, in `mise run
+check`, and in the required `lint` job of `ci.yml` (`mise run check
+--online`), so CI refuses what a local hook refuses, and also runs the
+checks that need the GitHub API. M1a adds `gate:policy` as a further step;
+`gate:policy` stays the real build gate.
 
 **Edit-time guard (D64, M1b, cuttable).** jouet's `gate-guard` rules in `.jouet/rules` stop
 an agent, before the edit lands, from adding coverage-exclusion markers
@@ -860,6 +895,7 @@ flowchart TB
   | `retention.yml` | `schedule` | `packages: write`, `actions: write` |
   | `repo-verify.yml` | `schedule`, `workflow_dispatch` on `main` | `contents: read`, plus the `audit` environment |
   | `digest.yml` | `schedule` | `contents: read`, `actions: read`, `issues: write`, `pull-requests: read` |
+
 - **Public repository and self-hosted runners (D95).** GitHub warns against
   self-hosted runners on public repositories, because a fork's PR could run
   on them. Right after the switch to public (GitHub refuses the setting on a
@@ -890,7 +926,8 @@ flowchart TB
     use this one list;
   - `fixtures/**`;
   - `cmake/capabilities.lock.json`;
-  - `gate-policy.toml`, `hk.pkl` and `.jouet/**`;
+  - `gate-policy.toml`, `hk.pkl` and its settings files (`.editorconfig`,
+    `.rumdl.toml`, `.ryl.toml`, `_typos.toml`, D102), and `.jouet/**`;
   - `toolchains/*/build.sh` and the Mac recipe patches `toolchains/*/macos/**`;
   - `image/*.Dockerfile` and `runner/**`;
   - `pins-allowlist.toml`.
@@ -995,6 +1032,7 @@ This table is the standard. In Level 1 only the first row has a task:
 ### 10. Order of work, critical path and cuts (D44, D53)
 
 **Critical path to glaze FIX (M1a, must be green by 2026-11-27):**
+
 1. the Linux arm64 base and tools images, through the hosted builder;
 2. GCC 16 and clang-p2996 on Linux;
 3. the owned encoder module;
@@ -1016,6 +1054,7 @@ row is the failed required run itself.
 **Cut order.** If time runs short, items are cut in this order, first cut
 first, and each becomes a dated ticket (D77, D84). Each item is cut on its
 date trigger if it is not green by then:
+
 1. the jouet gate-guard (2026-11-20);
 2. Renovate polish (2026-11-20);
 3. the daily digest (2026-11-21);
@@ -1082,6 +1121,7 @@ and (j).
   report-only.
 
 **The M2 entry gate** (D77) holds the runner tests that M0 used to carry:
+
 - the runner hook refuses a branch PR job, a job with `env:
   GITHUB_REF=refs/heads/main`, a `container:` and `services:` job, and a job
   whose steps are all `always()`, all before any container starts (D58);
@@ -1117,239 +1157,239 @@ Each names the section it relates to.
 
 ### From the brainstorm (concepts_brief.md)
 
-*   **One compiler for Level 1, or all three everywhere** (§1). Rejected by
-    author. Each compiler gets a fixed role instead (D1). A single compiler
-    can't cover reflection, libstdc++ and sanitizers together, and plain
-    clang 23 can't compile P2996 (D3).
-*   **conda-forge GCC on macOS** (§1). Rejected by author. It is built
-    against libc++, which miscompiles `std::string` and `std::println` (the private prototype
-    ADR 0005; ctng-compilers patch 0002).
-*   **One coverage tool for every compiler** (§5). Rejected by author. gcov
-    and llvm-cov read different instrumentation, so each compiler uses its
-    own tool (D3). gcovr only formats their output (D88).
-*   **clang source-based coverage (`-fprofile-instr-generate`)** (§5). Rejected
-    by owner (D88). Tested on clang 23.1.5: it counts `constexpr` functions used
-    only in `static_assert` as uncovered, so 100% would need exclusion markers.
-*   **Coverage-exclusion markers for compile-time code (D47).** Rejected by
-    owner (D88). gcov-mode tools never count code that is not in the binary,
-    so markers would only be places to hide untested code.
-*   **Merging the old setup repos into cpp-standard, or keeping the private prototype
-    active.** Rejected by author. They are parked, and pieces are copied in
-    with a link when needed (D4).
-*   **cpp-standard as documentation only, or the standard kept in dotfiles.**
-    Rejected by author. Documentation alone doesn't prove the standard works,
-    and dotfiles is being cut down (D5, D18).
-*   **A preset or triplet generator** (Pkl, or the cpp-utilities catalogue)
-    (§4). Rejected by author. Four generator attempts came first; hand-written
-    layered files are simpler to read and review (D8, D52).
-*   **ccache** (§4). Rejected by author. It doesn't support C++20 named
-    modules (ccache manual; [ccache PR
-    #1523](https://github.com/ccache/ccache/pull/1523) is still a draft).
-*   **`mise oci build`** (§3). Rejected by author. It ignores
-    `[bootstrap.apt.sources]`, and the build fails with
-    `E: Unable to locate package clang-23` (`src/oci/builder.rs:365`).
-*   **A plain Dockerfile pipeline outside mise** (§3). Rejected by author.
-    The one-configuration goal needs a mise bootstrap project (D13). The
-    image Dockerfiles only call mise.
-*   **A private repository on hosted runners only** (§6). Rejected by author.
-    The Free plan gives 2,000 minutes a month, which a p2996 build alone uses
-    up (D16).
-*   **Host-native development** (§3). Rejected by author in favor of
-    isolation in a VM (D17). Host-native work brought the collisions and the
-    dotfiles coupling described in The Problem. M0 (a) decides whether agents
-    can also run in the VM.
-*   **Forking mise** (§3). Rejected by author. mise releases about daily and
-    `bootstrap.rs` changes often (`level-1/research/mise-upstream-asks.md`
-    §4), so a fork means rebasing and releasing binaries for each
-    architecture. The `--skip tools` + `install --system` workaround already
-    works. Requests go to Discussions; mise doesn't accept outside PRs
-    ([CONTRIBUTING.md](https://github.com/jdx/mise/blob/main/CONTRIBUTING.md)).
-*   **Every tool gating CI, or only four checks gating** (§5). Rejected by
-    author (D19). Modules and reflection break most tier-2 tools
-    (`level-1/research/tooling-build-analysis.md`), and four checks leave
-    tidy, Valgrind, UBSan and hardening unguarded. There are two tiers, and a
-    tool moves up when it reports zero findings.
+- **One compiler for Level 1, or all three everywhere** (§1). Rejected by
+  author. Each compiler gets a fixed role instead (D1). A single compiler
+  can't cover reflection, libstdc++ and sanitizers together, and plain
+  clang 23 can't compile P2996 (D3).
+- **conda-forge GCC on macOS** (§1). Rejected by author. It is built
+  against libc++, which miscompiles `std::string` and `std::println` (the private prototype
+  ADR 0005; ctng-compilers patch 0002).
+- **One coverage tool for every compiler** (§5). Rejected by author. gcov
+  and llvm-cov read different instrumentation, so each compiler uses its
+  own tool (D3). gcovr only formats their output (D88).
+- **clang source-based coverage (`-fprofile-instr-generate`)** (§5). Rejected
+  by owner (D88). Tested on clang 23.1.5: it counts `constexpr` functions used
+  only in `static_assert` as uncovered, so 100% would need exclusion markers.
+- **Coverage-exclusion markers for compile-time code (D47).** Rejected by
+  owner (D88). gcov-mode tools never count code that is not in the binary,
+  so markers would only be places to hide untested code.
+- **Merging the old setup repos into cpp-standard, or keeping the private prototype
+  active.** Rejected by author. They are parked, and pieces are copied in
+  with a link when needed (D4).
+- **cpp-standard as documentation only, or the standard kept in dotfiles.**
+  Rejected by author. Documentation alone doesn't prove the standard works,
+  and dotfiles is being cut down (D5, D18).
+- **A preset or triplet generator** (Pkl, or the cpp-utilities catalogue)
+  (§4). Rejected by author. Four generator attempts came first; hand-written
+  layered files are simpler to read and review (D8, D52).
+- **ccache** (§4). Rejected by author. It doesn't support C++20 named
+  modules (ccache manual; [ccache PR
+  #1523](https://github.com/ccache/ccache/pull/1523) is still a draft).
+- **`mise oci build`** (§3). Rejected by author. It ignores
+  `[bootstrap.apt.sources]`, and the build fails with
+  `E: Unable to locate package clang-23` (`src/oci/builder.rs:365`).
+- **A plain Dockerfile pipeline outside mise** (§3). Rejected by author.
+  The one-configuration goal needs a mise bootstrap project (D13). The
+  image Dockerfiles only call mise.
+- **A private repository on hosted runners only** (§6). Rejected by author.
+  The Free plan gives 2,000 minutes a month, which a p2996 build alone uses
+  up (D16).
+- **Host-native development** (§3). Rejected by author in favor of
+  isolation in a VM (D17). Host-native work brought the collisions and the
+  dotfiles coupling described in The Problem. M0 (a) decides whether agents
+  can also run in the VM.
+- **Forking mise** (§3). Rejected by author. mise releases about daily and
+  `bootstrap.rs` changes often (`level-1/research/mise-upstream-asks.md`
+  §4), so a fork means rebasing and releasing binaries for each
+  architecture. The `--skip tools` + `install --system` workaround already
+  works. Requests go to Discussions; mise doesn't accept outside PRs
+  ([CONTRIBUTING.md](https://github.com/jdx/mise/blob/main/CONTRIBUTING.md)).
+- **Every tool gating CI, or only four checks gating** (§5). Rejected by
+  author (D19). Modules and reflection break most tier-2 tools
+  (`level-1/research/tooling-build-analysis.md`), and four checks leave
+  tidy, Valgrind, UBSan and hardening unguarded. There are two tiers, and a
+  tool moves up when it reports zero findings.
 
 ### From drafting the Technical Plan
 
-*   **GCC on Linux only** (§1). Rejected by author (D26). GCC 16.2 is needed
-    in all three environments, so reflection and libstdc++ code is tested on
-    macOS too.
-*   **Homebrew GCC in the VM, or a Homebrew gcc bottle by URL** (§1).
-    Rejected by author (D33).
-    - Homebrew installs only its current gcc.
-    - Bottles disappear when Homebrew moves on.
-*   **Homebrew LLVM on macOS** (§1). Rejected by author (D38). It can't be
-    pinned on a fresh VM.
-*   **LLVM release tarballs on Linux as well** (§1). Rejected by author
-    (D38). It would reopen D27, and apt.llvm.org supplies separate libc++
-    packages and debug symbols.
-*   **conda-forge clang through mise `conda:`** (§1). Rejected by author.
-    It is pinned and checksummed, but D12 chose apt for Linux LLVM, and conda
-    GCC on macOS miscompiles (`level-1/research/mise-images.md` §5).
-*   **The `vsavkov/clang-p2996` image** (§2). Rejected by author. It is
-    third-party, built on Ubuntu 24.04, and stale
-    (`level-1/research/p2996-linux.md`).
-*   **Hosted macOS runners for the macOS gate** (§6). Rejected by author.
-    They are free for a public repository, but the OS and SDK aren't
-    controlled, and the toolchain inputs need the pinned Tart base
-    (`level-1/research/tart-macos.md` §4).
-*   **A weekly Renovate batch, or one PR per dependency** (§7). Rejected by
-    author (D31).
-    - Weekly lets tools fall behind.
-    - One PR per dependency means dozens of PRs a week.
-*   **Dependabot** (§7). Rejected by author. It has no mise support
-    (`level-1/research/external-image-examples.md` §3).
-*   **Weekly p2996 updates** (§7). Rejected by author (D32). Daily checks
-    with a cache keyed by hash cost little more.
-*   **Automerge everything green, or review everything** (§7). Rejected by
-    author (D34, D50).
-    - Automerging capability lock changes or major compiler bumps lets a
-      weakened check merge unseen.
-    - Reviewing every PR brings back the churn.
-*   **An in-place or manual Ubuntu base bump** (§7). Rejected by author
-    (D36). An in-place bump that goes red blocks every image update, and a
-    manual bump is forgotten.
-*   **Only the four negative controls from the review** (§5). Rejected by
-    author (D37). That leaves clang-tidy, Valgrind, UBSan and hardening
-    unguarded.
-*   **Agents pushing as the owner's personal account, or through
-    the existing org-admin App** (§6). Rejected by author (D28, D40).
-    - The first can't be told apart from the owner.
-    - The second can rewrite the fence.
+- **GCC on Linux only** (§1). Rejected by author (D26). GCC 16.2 is needed
+  in all three environments, so reflection and libstdc++ code is tested on
+  macOS too.
+- **Homebrew GCC in the VM, or a Homebrew gcc bottle by URL** (§1).
+  Rejected by author (D33).
+  - Homebrew installs only its current gcc.
+  - Bottles disappear when Homebrew moves on.
+- **Homebrew LLVM on macOS** (§1). Rejected by author (D38). It can't be
+  pinned on a fresh VM.
+- **LLVM release tarballs on Linux as well** (§1). Rejected by author
+  (D38). It would reopen D27, and apt.llvm.org supplies separate libc++
+  packages and debug symbols.
+- **conda-forge clang through mise `conda:`** (§1). Rejected by author.
+  It is pinned and checksummed, but D12 chose apt for Linux LLVM, and conda
+  GCC on macOS miscompiles (`level-1/research/mise-images.md` §5).
+- **The `vsavkov/clang-p2996` image** (§2). Rejected by author. It is
+  third-party, built on Ubuntu 24.04, and stale
+  (`level-1/research/p2996-linux.md`).
+- **Hosted macOS runners for the macOS gate** (§6). Rejected by author.
+  They are free for a public repository, but the OS and SDK aren't
+  controlled, and the toolchain inputs need the pinned Tart base
+  (`level-1/research/tart-macos.md` §4).
+- **A weekly Renovate batch, or one PR per dependency** (§7). Rejected by
+  author (D31).
+  - Weekly lets tools fall behind.
+  - One PR per dependency means dozens of PRs a week.
+- **Dependabot** (§7). Rejected by author. It has no mise support
+  (`level-1/research/external-image-examples.md` §3).
+- **Weekly p2996 updates** (§7). Rejected by author (D32). Daily checks
+  with a cache keyed by hash cost little more.
+- **Automerge everything green, or review everything** (§7). Rejected by
+  author (D34, D50).
+  - Automerging capability lock changes or major compiler bumps lets a
+    weakened check merge unseen.
+  - Reviewing every PR brings back the churn.
+- **An in-place or manual Ubuntu base bump** (§7). Rejected by author
+  (D36). An in-place bump that goes red blocks every image update, and a
+  manual bump is forgotten.
+- **Only the four negative controls from the review** (§5). Rejected by
+  author (D37). That leaves clang-tidy, Valgrind, UBSan and hardening
+  unguarded.
+- **Agents pushing as the owner's personal account, or through
+  the existing org-admin App** (§6). Rejected by author (D28, D40).
+  - The first can't be told apart from the owner.
+  - The second can rewrite the fence.
 
 ### From the review stages
 
-*   **Fixtures that skip on live probe results** (§5). Rejected by author
-    (D42). It hides a lost check.
-*   **A hand-kept expected table** (§5). Rejected by author (D42). It needs
-    hand edits.
-*   **Report-only probes** (§4). Rejected by author (D42). They enforce
-    nothing.
-*   **The preset matrix as the expected table** (§4). Rejected by author
-    (D42). It misses capabilities like `import std`, IPO and PIE.
-*   **Routing self-hosted jobs by actor, or by changed path with a
-    conditional Environment** (§6). Rejected by author (D43, D48).
-    - An approval doesn't change the actor.
-    - GitHub can't require approval only for some paths.
-    - Either way, unreviewed code reached the owner's hardware.
-*   **Routing alone as the fence** (§6). Rejected by author (D58). A workflow
-    file chooses its own runner, so the runner must refuse.
-*   **Self-hosted runners registered to a separate repository** (§6).
-    Rejected by author (D58). It is the strongest boundary, but it means a
-    second repository, cross-repository checkouts and statuses, and more work
-    before 2026-11-27.
-*   **Treating pins files as data that needs no check** (§3). Rejected by
-    author (D51).
-    - A mise conf.d fragment can define tasks, env and hooks.
-    - In an earlier draft, `inputs.toml` held build flags and unchecked URLs.
-    - Pins are now validated by content.
-*   **A digest file updated by bot PRs, `toolchains/lock.toml`, and
-    toolchains baked into images** (§2). Rejected by author (D43, D49).
-    - The digest and lock files duplicated the inputs hash and needed bot
-      write-backs.
-    - The digest PR merged a compiler change as a "leaf".
-    - Baking toolchains in created a build cycle on day one, and a daily
-      image rebuild.
-*   **Tag existence and a sha256 annotation as proof** (§2). Rejected by
-    author (D59). A PR workflow could pre-publish a tag `main` would later
-    trust, and the annotation is written by the same publisher.
-*   **GitHub attestations for toolchains too** (§2). Rejected by author
-    (D59, D72). Images use them; toolchains use packslip, whose signed
-    manifest checks every file's digest at install and names the exact
-    workflow ref.
-*   **PR toolchain prereleases** (§2). Rejected by author (D72). They put PR
-    builds in a second store next to `main`'s releases; `actions/cache`
-    keyed by the inputs hash shares the build between PR jobs without
-    publishing anything.
-*   **A hand-written `linux.inputs.toml` for host versions** (§2). Rejected
-    by author (D66). A copy of the apt pins drifts; D75 hashes the pins file itself.
-*   **Separate per-OS inputs files per toolchain** (`linux.inputs.toml`,
-    `macos.inputs.toml`) (§2). Rejected by author (D85). The macOS file got
-    its own daily Renovate PR that needed the owner, and that review was only
-    a Renovate setting, not enforced. One shared `pins.toml` plus each OS's
-    host inputs gives each OS its own hash from one bump.
-*   **Caching PR toolchains only in `actions/cache`** (§2). Rejected by
-    author (D83). A cache is readable only from its ref and the default
-    branch, so a merge group couldn't reuse a PR's build; the PR run's
-    workflow artifact can be downloaded by `run-id`.
-*   **An exact mise version in `min_version`** (§3). Rejected by author
-    (D86). `min_version` is a floor, and an exact value in the owned
-    `mise.toml` would need the owner for every mise release.
-*   **Toolchain hash including the base tag** (§2). Rejected by author (D66).
-    Unrelated base changes would rebuild the toolchains about daily.
-*   **One pins file for both image layers** (§3). Rejected by author (D49).
-    A leaf bump would change a base input.
-*   **Installing toolchains through mise's `packslip:` backend** (§2).
-    Rejected by author (D72). It records the signer in `.mise/mise.lock`, but
-    `mise install --locked` needs a lock entry per exact version, so every
-    toolchain bump needs a post-merge write-back PR, and `main` runs the old
-    compiler until it merges. The standalone CLI takes the computed version.
-*   **A `.N` build number and a daily `toolchain:audit`** (§2). Rejected by
-    author (D72). `.N` exists only after publishing, so it can't be computed
-    from git; a `salt` bump recovers a deleted release, and the post-merge
-    and daily runs already notice a missing one.
-*   **`toolchain-env.lock.json`, exported from the base image** (§2).
-    Rejected by author (D75). It records exact host versions, but duplicates
-    the apt pins and must be written back from an image that doesn't exist
-    when the PR opens. Splitting out `apt-toolchain-host.toml` gives the same
-    hash input with no write-back.
-*   **Folding `[tools]` into the owned `mise.toml`** (§3). Rejected by author
-    (D74). One fewer file, but the daily tools PR would then need the owner.
-*   **`mac-probe.yml`, owner-approved PR runs on the real Mac** (§6).
-    Rejected by author (D78). It catches host-only differences before merge,
-    but adds a fence exception for a file the owner already reviews; the dev
-    VM's `caps:update` and the post-merge run cover it.
-*   **The Ubuntu digest in the owned Dockerfile** (§3). Rejected by author
-    (D69). It would need an owner review almost daily.
-*   **Gating LLVM bumps by version distance** (§7). Rejected by author (D50).
-    Once the old apt pin disappears, an owner-gated minor bump blocks every
-    base change. The capability lock is the better signal.
-*   **Serializing input-changing PRs in the merge queue** (§7). Rejected by
-    author (D61). It needs a separate queue rule and lowers throughput.
-*   **A vcpkg binary cache in GHCR** (§4). Rejected by author for Level 1
-    (D52). The only dependency is header-only, and writing the cache needs a
-    token in PR jobs.
-*   **Dropping the PC runner** (§6). Rejected by author (D48: "we're going to
-    need it"). It runs native amd64 toolchain builds and heavy post-merge jobs
-    without hosted disk and time limits, for reviewed `main` work only.
-*   **The owner owning every path, with Renovate bypassing review** (§6).
-    Rejected by author (D51). It would mean reviewing every agent PR.
-*   **Presets as owned roots, or fixtures on every cmake PR** (§5). Rejected
-    by author (D64). The first means a review for every preset tweak; the
-    second proves checks run, not that flags weren't weakened.
-*   **The owner pushing workflow files instead of the App, or agents
-    working from a fork** (§6). Rejected by author (D52, D54, D60). The App
-    keeps `workflows: write` on same-repo branches, and fork PRs could also
-    target self-hosted runners. The owner accepted the remaining risk (see
-    Risks & Mitigations).
-*   **Draft PRs instead of `actions: write` for `linux:run`** (§3). Rejected
-    by author (D71). It works without the permission, but each try adds a
-    draft PR.
-*   **Agents using the PC's Docker over SSH** (§3). Rejected by author (D70).
-    Docker access is root on the PC, which breaks the fence.
-*   **Runner VM controllers other than gha-outrunner** (§6). Rejected by
-    author (D65):
-    - **incuse:** Incus VMs on Ubuntu, with plain Docker inside; early
-      (v0.1.0) and Linux-only, so the Mac needs another tool;
-    - **runscaler:** the most active Tart controller, but no libvirt;
-    - **microvm-github-runners:** NixOS only;
-    - **our own controller on `actions/scaleset`:** exactly our policy, but
-      a few hundred lines of Go to own;
-    - **Actuated:** paid and Linux-only.
-*   **Sysbox containers for runner jobs** (§6). Rejected by author (D65). Its
-    support table stops at Ubuntu 24.04, it has no binfmt support, and it
-    shares the host kernel.
-*   **A runner container with the Docker socket, or with no `container:`
-    support** (§6). Rejected by author (D65). The socket is root on the host;
-    without `container:` the jobs can't run.
-*   **A Mac-first critical path, or no cut order** (§10). Rejected by author
-    (D44). It puts the two least-proven items on the path to 2026-11-27.
-*   **Publishing the Mac golden image to GHCR** (§3). Rejected by author
-    (D49).
-    - Its only consumer is the Mac.
-    - Pushing it would need a token on the Mac, or a hosted runner with more
-      than its 14 GB of disk.
+- **Fixtures that skip on live probe results** (§5). Rejected by author
+  (D42). It hides a lost check.
+- **A hand-kept expected table** (§5). Rejected by author (D42). It needs
+  hand edits.
+- **Report-only probes** (§4). Rejected by author (D42). They enforce
+  nothing.
+- **The preset matrix as the expected table** (§4). Rejected by author
+  (D42). It misses capabilities like `import std`, IPO and PIE.
+- **Routing self-hosted jobs by actor, or by changed path with a
+  conditional Environment** (§6). Rejected by author (D43, D48).
+  - An approval doesn't change the actor.
+  - GitHub can't require approval only for some paths.
+  - Either way, unreviewed code reached the owner's hardware.
+- **Routing alone as the fence** (§6). Rejected by author (D58). A workflow
+  file chooses its own runner, so the runner must refuse.
+- **Self-hosted runners registered to a separate repository** (§6).
+  Rejected by author (D58). It is the strongest boundary, but it means a
+  second repository, cross-repository checkouts and statuses, and more work
+  before 2026-11-27.
+- **Treating pins files as data that needs no check** (§3). Rejected by
+  author (D51).
+  - A mise conf.d fragment can define tasks, env and hooks.
+  - In an earlier draft, `inputs.toml` held build flags and unchecked URLs.
+  - Pins are now validated by content.
+- **A digest file updated by bot PRs, `toolchains/lock.toml`, and
+  toolchains baked into images** (§2). Rejected by author (D43, D49).
+  - The digest and lock files duplicated the inputs hash and needed bot
+    write-backs.
+  - The digest PR merged a compiler change as a "leaf".
+  - Baking toolchains in created a build cycle on day one, and a daily
+    image rebuild.
+- **Tag existence and a sha256 annotation as proof** (§2). Rejected by
+  author (D59). A PR workflow could pre-publish a tag `main` would later
+  trust, and the annotation is written by the same publisher.
+- **GitHub attestations for toolchains too** (§2). Rejected by author
+  (D59, D72). Images use them; toolchains use packslip, whose signed
+  manifest checks every file's digest at install and names the exact
+  workflow ref.
+- **PR toolchain prereleases** (§2). Rejected by author (D72). They put PR
+  builds in a second store next to `main`'s releases; `actions/cache`
+  keyed by the inputs hash shares the build between PR jobs without
+  publishing anything.
+- **A hand-written `linux.inputs.toml` for host versions** (§2). Rejected
+  by author (D66). A copy of the apt pins drifts; D75 hashes the pins file itself.
+- **Separate per-OS inputs files per toolchain** (`linux.inputs.toml`,
+  `macos.inputs.toml`) (§2). Rejected by author (D85). The macOS file got
+  its own daily Renovate PR that needed the owner, and that review was only
+  a Renovate setting, not enforced. One shared `pins.toml` plus each OS's
+  host inputs gives each OS its own hash from one bump.
+- **Caching PR toolchains only in `actions/cache`** (§2). Rejected by
+  author (D83). A cache is readable only from its ref and the default
+  branch, so a merge group couldn't reuse a PR's build; the PR run's
+  workflow artifact can be downloaded by `run-id`.
+- **An exact mise version in `min_version`** (§3). Rejected by author
+  (D86). `min_version` is a floor, and an exact value in the owned
+  `mise.toml` would need the owner for every mise release.
+- **Toolchain hash including the base tag** (§2). Rejected by author (D66).
+  Unrelated base changes would rebuild the toolchains about daily.
+- **One pins file for both image layers** (§3). Rejected by author (D49).
+  A leaf bump would change a base input.
+- **Installing toolchains through mise's `packslip:` backend** (§2).
+  Rejected by author (D72). It records the signer in `.mise/mise.lock`, but
+  `mise install --locked` needs a lock entry per exact version, so every
+  toolchain bump needs a post-merge write-back PR, and `main` runs the old
+  compiler until it merges. The standalone CLI takes the computed version.
+- **A `.N` build number and a daily `toolchain:audit`** (§2). Rejected by
+  author (D72). `.N` exists only after publishing, so it can't be computed
+  from git; a `salt` bump recovers a deleted release, and the post-merge
+  and daily runs already notice a missing one.
+- **`toolchain-env.lock.json`, exported from the base image** (§2).
+  Rejected by author (D75). It records exact host versions, but duplicates
+  the apt pins and must be written back from an image that doesn't exist
+  when the PR opens. Splitting out `apt-toolchain-host.toml` gives the same
+  hash input with no write-back.
+- **Folding `[tools]` into the owned `mise.toml`** (§3). Rejected by author
+  (D74). One fewer file, but the daily tools PR would then need the owner.
+- **`mac-probe.yml`, owner-approved PR runs on the real Mac** (§6).
+  Rejected by author (D78). It catches host-only differences before merge,
+  but adds a fence exception for a file the owner already reviews; the dev
+  VM's `caps:update` and the post-merge run cover it.
+- **The Ubuntu digest in the owned Dockerfile** (§3). Rejected by author
+  (D69). It would need an owner review almost daily.
+- **Gating LLVM bumps by version distance** (§7). Rejected by author (D50).
+  Once the old apt pin disappears, an owner-gated minor bump blocks every
+  base change. The capability lock is the better signal.
+- **Serializing input-changing PRs in the merge queue** (§7). Rejected by
+  author (D61). It needs a separate queue rule and lowers throughput.
+- **A vcpkg binary cache in GHCR** (§4). Rejected by author for Level 1
+  (D52). The only dependency is header-only, and writing the cache needs a
+  token in PR jobs.
+- **Dropping the PC runner** (§6). Rejected by author (D48: "we're going to
+  need it"). It runs native amd64 toolchain builds and heavy post-merge jobs
+  without hosted disk and time limits, for reviewed `main` work only.
+- **The owner owning every path, with Renovate bypassing review** (§6).
+  Rejected by author (D51). It would mean reviewing every agent PR.
+- **Presets as owned roots, or fixtures on every cmake PR** (§5). Rejected
+  by author (D64). The first means a review for every preset tweak; the
+  second proves checks run, not that flags weren't weakened.
+- **The owner pushing workflow files instead of the App, or agents
+  working from a fork** (§6). Rejected by author (D52, D54, D60). The App
+  keeps `workflows: write` on same-repo branches, and fork PRs could also
+  target self-hosted runners. The owner accepted the remaining risk (see
+  Risks & Mitigations).
+- **Draft PRs instead of `actions: write` for `linux:run`** (§3). Rejected
+  by author (D71). It works without the permission, but each try adds a
+  draft PR.
+- **Agents using the PC's Docker over SSH** (§3). Rejected by author (D70).
+  Docker access is root on the PC, which breaks the fence.
+- **Runner VM controllers other than gha-outrunner** (§6). Rejected by
+  author (D65):
+  - **incuse:** Incus VMs on Ubuntu, with plain Docker inside; early
+    (v0.1.0) and Linux-only, so the Mac needs another tool;
+  - **runscaler:** the most active Tart controller, but no libvirt;
+  - **microvm-github-runners:** NixOS only;
+  - **our own controller on `actions/scaleset`:** exactly our policy, but
+    a few hundred lines of Go to own;
+  - **Actuated:** paid and Linux-only.
+- **Sysbox containers for runner jobs** (§6). Rejected by author (D65). Its
+  support table stops at Ubuntu 24.04, it has no binfmt support, and it
+  shares the host kernel.
+- **A runner container with the Docker socket, or with no `container:`
+  support** (§6). Rejected by author (D65). The socket is root on the host;
+  without `container:` the jobs can't run.
+- **A Mac-first critical path, or no cut order** (§10). Rejected by author
+  (D44). It puts the two least-proven items on the path to 2026-11-27.
+- **Publishing the Mac golden image to GHCR** (§3). Rejected by author
+  (D49).
+  - Its only consumer is the Mac.
+  - Pushing it would need a token on the Mac, or a hosted runner with more
+    than its 14 GB of disk.
 
 ## Risks & Mitigations
 
@@ -1492,6 +1532,7 @@ runs on hosted runners.
 | `spikes/m0/README.md` | One pass/fail line for each M0 check (a)-(j) in §10, each linked to its log. It ends with the M0 exit review: which D53 cuts apply. The spike code is deleted after M0, and only this README is kept. |
 
 **M0 pass lines (D93).** Each check passes only on its stated evidence:
+
 - (b) a named module test reports 100% under gcov on GCC 16;
 - (c) p2996 builds compiler-rt, and an ASan and a `--coverage` test run;
 - (f) first, `mise config ls` loads `mise.toml` and every `.mise/conf.d/*.toml` exactly as written in the schema below, with no parse error; then `mise bootstrap packages status --missing` exits 0 in the built base,
@@ -1507,6 +1548,7 @@ runs on hosted runners.
 
 **PR order (D93).** Each PR goes through the merge queue, and the next starts
 only when its check holds:
+
 1. pins, `.mise/mise.lock`, `pins:validate` and `artifact:tag` with its
    golden vectors: `pins:validate` and the vectors pass;
 2. the Dockerfiles, `builder.yml`, `artifact:*`, `image:verify`: the base and
@@ -1534,9 +1576,10 @@ is green, or cut at its §10 cut date.
 | `README.md` | What cpp-standard is (the Overview in five lines), with CUJ 1 and CUJ 2 as copy-paste steps, and links to `docs/standard/`. |
 | `AGENTS.md` | A `## Workflow facts` section: the build, test and lint commands (`mise run ci`, `mise run ci:fast`), one worktree per agent (D23), the agent App identity, the owned-roots list (D51), and the fence (D48). |
 | `LICENSE` | Chosen by the owner (Q3), before the repository goes public. |
-| `mise.toml` **(O)** | `[tasks]` settings and `min_version` (§3, D69). Never names a toolchain version (D72). Tasks are file tasks only, under `.mise/tasks/` (D93). |
+| `mise.toml` **(O)** | `[tasks]` settings, `min_version`, `[settings]` (`minimum_release_age`, `lockfile`) and the `[hooks] postinstall` that installs the hk hooks (§3, D69, D102). Never names a toolchain version (D72). Tasks are file tasks only, under `.mise/tasks/` (D93). |
 | `.mise/conf.d/apt-sources.toml` **(P)** | `[bootstrap.apt.sources.llvm]` only: `uris = "https://apt.llvm.org/resolute/"`, `suites = "llvm-toolchain-resolute-23"`, `components = "main"`, the key URL and fingerprint `6084F3CF814B57C1CF12EFD515CF4D18AF4F7421`. A base and toolchain hash input (D90). |
-| `.mise/conf.d/tools.toml` **(P)** | `[tools]` only (D74), with exact versions: cmake, ninja, python, mold, sccache, `gh`, packslip, gcovr, `"pipx:clang-format"`, jouet, hk, fnox and the tier-2 tools. vcpkg is not a mise tool (no registry entry): it is a git checkout at the `vcpkg-configuration.json` baseline, done by `mise run vcpkg:bootstrap` (D93). |
+| `.mise/conf.d/tools.toml` **(P)** | `[tools]` only (D74), with exact versions: cmake, ninja, python, mold, sccache, `gh`, packslip, gcovr, `"pipx:clang-format"`, jouet, fnox and the tier-2 tools. vcpkg is not a mise tool (no registry entry): it is a git checkout at the `vcpkg-configuration.json` baseline, done by `mise run vcpkg:bootstrap` (D93). |
+| `.mise/conf.d/lint.toml` **(P)** | `[tools]` only (D102): hk, at the `hk.pkl` package version, and the tools its builtins run. |
 | `.mise/tasks/vcpkg/bootstrap` | The `vcpkg:bootstrap` task: clones microsoft/vcpkg at the `vcpkg-configuration.json` baseline commit into `.cache/vcpkg` and runs its bootstrap script. Agent-editable (§6). Lands in M1a PR 4 (D93). |
 | `.mise/conf.d/apt-toolchain-host.toml` **(P)** | `[bootstrap.packages]` only, all `os = "linux"`: `g++-16`, binutils, make and a pinned `libc6-dev`. A toolchain hash input (D75). |
 | `.mise/conf.d/apt.toml` **(P)** | `[bootstrap.packages]` only, all `os = "linux"`: the rest of the apt packages. |
@@ -1571,7 +1614,10 @@ is green, or cut at its §10 cut date.
 | `docs/standard/coverage.md` | The gcov-mode rule for each compiler, why source-based mode is not used, and what to do with runtime code that a test can't reach: test it or remove it (D88). |
 | `fixtures/must-fail/` **(O)** | One directory per fixture, one for each tier-1 check in §5. `expected.toml` maps each fixture to its check, and the capability lock decides where each applies (D42). |
 | `.mise/tasks/ci/_default` **(O)**, `.mise/tasks/ci/fast` **(O)**, `.mise/tasks/ci-must-fail` **(O)**, `.mise/tasks/doctor` | `ci` is the gate (§5), and `ci:fast` runs one preset. `ci-must-fail` runs the applicable fixtures. `doctor` prints tool versions, artifact tags, capability files and `mise bootstrap packages status --missing`. |
-| `.github/workflows/ci.yml` **(O)** | Runs on `pull_request`, `merge_group` and `workflow_dispatch`, on hosted runners only, with the §6 permissions. Jobs, whose names are the required checks (D93): `pins-validate`, `artifact-check`, `resolve` (runs `image:verify`, outputs the digest), `gate-linux-arm64` (container `tools@<digest>`; the fetch-rule steps, `toolchain:fetch`, `mise run ci`), `must-fail` (Renovate and owned-root PRs; otherwise it passes at once). Every job runs on `merge_group` too. |
+| `.github/workflows/ci.yml` **(O)** | Runs on `pull_request`, `merge_group` and `workflow_dispatch`, on hosted runners only, with the §6 permissions. Jobs, whose names are the required checks (D93): `lint` (runs `mise run check --online`, the hk gate plus its `online` profile, D102), `pins-validate`, `artifact-check`, `resolve` (runs `image:verify`, outputs the digest), `gate-linux-arm64` (container `tools@<digest>`; the fetch-rule steps, `toolchain:fetch`, `mise run ci`), `must-fail` (Renovate and owned-root PRs; otherwise it passes at once). Every job runs on `merge_group` too. |
+| `hk.pkl` **(O)** | The lint gate: hk builtins on pre-commit, `mise run check` and the `lint` job (D102); M1a adds `gate:policy` (D81). |
+| `.mise/tasks/check` **(O)** | `mise run check [--fix] [--online]`: `hk check` (or `hk fix`) on every file (D102). |
+| `.editorconfig`, `.rumdl.toml`, `.ryl.toml`, `_typos.toml` **(O)** | Settings for the hk steps: shfmt indents, Markdown rules, YAML rules and spell-check exceptions (D102). |
 | `.github/workflows/builder.yml` **(O)** | Runs on a schedule, on dispatch, on PRs that change an input, and on `merge_group` (D61). PR and merge-queue hashes build on hosted runners; `main` hashes build in PC runner VMs or on hosted arm64, and macOS hashes in Mac runner VMs. A final hosted job publishes (§2, D59). |
 | `.github/workflows/post-merge.yml` **(O)** | Runs on push to `main`. It uses hosted runners until M2, then the PC for heavy Linux jobs. |
 | `.github/CODEOWNERS` **(O)** | The owner on every (O) path, including `.mise/tasks/**` with the agent-editable list from §6 excluded (D51, D64, D76). First version in setup step 6, before the agent App exists (D100). |
@@ -1587,7 +1633,12 @@ is green, or cut at its §10 cut date.
 ```toml
 # mise.toml (O)
 min_version = "<floor>"   # oldest mise that can read this file; not a pin (D86)
-# tasks are file tasks under .mise/tasks/ only (D93): ci/_default, ci/fast, ci-must-fail,
+[settings]
+minimum_release_age = "<date>"   # fixed cutoff, bumped with the pins (M0 (i))
+lockfile = true
+[hooks]
+postinstall = "hk install --mise, outside CI"   # D102
+# tasks are file tasks under .mise/tasks/ only (D93): check, ci/_default, ci/fast, ci-must-fail,
 # caps/update, doctor, artifact/*, toolchain/*, image/*, vm/*, linux/run, review/*, repo/*,
 # pins/validate, gate/policy, agent/token, vcpkg/bootstrap, perf/instructions,
 # runner/pc-image, canary
@@ -1603,8 +1654,13 @@ fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 
 # .mise/conf.d/tools.toml (P), the only section allowed; every version exact:
 [tools]   # cmake, ninja, python, mold, sccache, gh, packslip, gcovr,
-          # "pipx:clang-format" (23.x), jouet, hk, fnox, tier-2 tools
+          # "pipx:clang-format" (23.x), jouet, fnox, tier-2 tools
 "github:llvm/llvm-project" = { version = "23.1.5", os = ["macos"] }   # D38; apt has 23.1.6 on Linux
+
+# .mise/conf.d/lint.toml (P), the only section allowed (D102); every version exact:
+[tools]   # hk (= the hk.pkl package version), jactionlint, zizmor, pinact, ghalint,
+          # shellcheck, shfmt, typos, rumdl, tombi, pkl, "aqua:owenlamont/ryl", jq,
+          # editorconfig-checker, betterleaks
 
 # .mise/conf.d/apt-toolchain-host.toml (P), the only section allowed (D75):
 [bootstrap.packages]
@@ -1634,14 +1690,13 @@ salt = 0                        # bumped only to republish a deleted release (D7
 
 | File | What and why |
 |---|---|
-| `hk.pkl` **(O)** | A thin local hook: `mise run ci:fast` and `mise run gate:policy` (D81). |
 | `renovate.json5` **(O)** | Daily (D31). Automerge follows §7. Tool bumps grouped (D61). Action SHAs are batched weekly. Custom regex managers cover `apt.toml` and `apt-toolchain-host.toml` (`deb` datasource, following dotfiles-legacy), `image/base.inputs.toml` (Ubuntu digest, mise version, packslip digest; D86), the `toolchains/*/pins.toml` refs and tarballs (one PR for every OS; D85), the `ubuntu:YY.MM` tag and the canary refs. No `postUpgradeTasks` (D75). |
 | `.mise/tasks/review/digest` **(O)** + `.github/workflows/digest.yml` **(O)** | The no-model daily digest (§9), moved from M5 to M1b with cut position 3 (D84). The cadence is a workflow input (D14). |
 | `.github/workflows/retention.yml` **(O)** | Daily: for each PR closed (merged or not) more than 1 day ago and not reopened, deletes its `pr-<n>-` GHCR versions (`DELETE /orgs/ray-manaloto/packages/container/<pkg>/versions/<id>`, `packages: write`) and its caches (`gh cache delete --ref refs/pull/<n>/merge`, `actions: write`). PR builder artifacts expire on their own (`retention-days: 7`). Never deletes anything `main`'s history references. Test: a dry-run mode lists what it would delete, checked against a fixture PR (D79). |
 | `.github/rulesets/toolchain-tags.json` **(O)** | The tag ruleset that blocks deleting or moving toolchain tags; applied with immutable releases by `repo:rulesets` (D59, D77). |
 | `.jouet/project.toml` **(O)** | Written by the `jouet-init` skill once `mise run ci` exists. It maps full, focused and affected checks to `ci`, `ci:fast` and the preset for the files that changed (D41). |
 | `.jouet/rules/gate-guard.toml` **(O)** | Denies agent edits that add a coverage-exclusion marker (regex `(GCOVR\|LCOV\|GCOV)_EXCL` in `new_string`, `content` and `edits`, for `src/**` and `tests/**`) or remove a required sanitizer flag from `CMakePresets.json` or `cmake/presets/*.json` (D88). Test: `.jouet/rules/tests/` with one denied and one allowed edit for each rule. Trusted with `jouet trust` only after a reviewed PR (D64). Based on the owner's setup agent's validated example. |
-| `.claude/skills/*`, `.agents/skills/*`, `.mcp.json`, `fnox.toml`, `.claude/settings.json` | Project skills (copied from dotfiles, with links), codebase-memory and Context7, secret references as placeholders only, and jouet's hooks. No plugin entries until the owner approves each one (D41). |
+| `.claude/skills/*`, `.agents/skills/*`, `.mcp.json`, `fnox.toml`, `.claude/settings.json` | Project skills (copied from dotfiles, with links); the per-machine links mise makes to tool skills (`.agents/skills/.mise-skills.json`, `.agents/skills/hk-*` and, until project skills land, the `.claude/skills` link) stay git-ignored (D102), codebase-memory and Context7, secret references as placeholders only, and jouet's hooks. No plugin entries until the owner approves each one (D41). |
 | `.mise/tasks/linux/run` | Pushes the branch, dispatches `ci.yml` on hosted runners as the agent App, and follows the run with `gh run watch` (D48, D71). |
 
 ### M2: amd64 and the PC runner
@@ -1700,4 +1755,4 @@ salt = 0                        # bumped only to republish a deleted release (D7
 
 --------------------------------------------------------------------------------
 
-*Drafted with EGM*
+Drafted with EGM.

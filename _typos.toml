@@ -1,0 +1,10 @@
+# typos (spell check) for hk.pkl.
+[default]
+# Commit and digest hashes are not words.
+extend-ignore-re = ["\\b[0-9a-f]{7,64}\\b"]
+
+[default.extend-words]
+# Kept verbatim in a quoted owner message in the decisions log.
+aleady = "aleady"
+# A build directory name in research notes.
+ba = "ba"

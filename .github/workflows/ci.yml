@@ -1,5 +1,6 @@
-# Stub from setup step 3. Each job carries the final required-check name
-# (D93) and passes at once; M1a replaces this file with the real gate.
+# The required checks (D93). `lint` runs the hk gate (D102); the others are
+# stubs from setup step 3 that pass at once until M1a replaces them. Each job's
+# name is its required-check name in .github/rulesets/main.json.
 name: ci
 
 on:
@@ -9,32 +10,69 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  # The same checks as the pre-commit hook: `mise run check` runs every hk step
+  # on every file, with the tools pinned in .mise/conf.d/lint.toml.
+  lint:
+    name: lint
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.8
+          install_args: --locked
+      - name: Run the hk gate
+        env:
+          # pinact and the online zizmor audits call the GitHub API; a token
+          # avoids the anonymous rate limit.
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise run check --online
+
   pins-validate:
+    name: pins-validate
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - run: echo "stub until M1a"
 
   artifact-check:
+    name: artifact-check
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - run: echo "stub until M1a"
 
   resolve:
+    name: resolve
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - run: echo "stub until M1a"
 
   gate-linux-arm64:
+    name: gate-linux-arm64
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - run: echo "stub until M1a; the real job runs on arm64"
 
   must-fail:
+    name: must-fail
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

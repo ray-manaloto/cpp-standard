@@ -72,7 +72,10 @@ listener=$!
 
 for _ in $(seq 1 10); do
   lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && break
-  kill -0 "$listener" 2>/dev/null || { echo "agent-app-create: listener failed to start" >&2; exit 1; }
+  kill -0 "$listener" 2>/dev/null || {
+    echo "agent-app-create: listener failed to start" >&2
+    exit 1
+  }
   read -r -t 1 </dev/zero || true
 done
 

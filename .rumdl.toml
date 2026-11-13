@@ -1,0 +1,12 @@
+# rumdl (Markdown lint) for hk.pkl. Line length is not checked: tables and
+# links run long and prose wrapping is not a correctness issue. The EGM
+# review records (reports, brief, draft, research notes) are kept as
+# they were written; the decisions log is linted.
+[global]
+disable = ["MD013"]
+exclude = [
+  "docs/designs/level-1/*_report.md",
+  "docs/designs/level-1/concepts_brief.md",
+  "docs/designs/level-1/design_draft.md",
+  "docs/designs/level-1/research/**",
+]

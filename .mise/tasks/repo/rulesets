@@ -20,7 +20,7 @@ file="$root/.github/rulesets/main.json"
 ci_file="$root/.github/workflows/ci.yml"
 
 # The ci.yml job names that are the required checks (D93).
-required_checks='["artifact-check","gate-linux-arm64","must-fail","pins-validate","resolve"]'
+required_checks='["artifact-check","gate-linux-arm64","lint","must-fail","pins-validate","resolve"]'
 
 # The ruleset body for this phase.
 desired() {
