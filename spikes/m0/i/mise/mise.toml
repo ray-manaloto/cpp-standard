@@ -1,2 +1,9 @@
 # M0 (i) spike config (environment-standard.md section 10). Deleted after M0.
 min_version = "2026.11.8"
+
+[settings]
+# A fixed cutoff instead of the default 24h age: mise lock passes it to
+# uv lock --exclude-newer, so the lock no longer depends on when it was
+# generated (M0 (i) finding). It must be later than every pinned release;
+# bump it with the pins.
+minimum_release_age = "2026-11-13T00:00:00Z"

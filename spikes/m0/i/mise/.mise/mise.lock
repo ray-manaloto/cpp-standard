@@ -6,7 +6,7 @@ lockfile_version = 4
 version = "23.1.5"
 backend = "pipx:clang-format"
 specifiers = ["23.1.5"]
-uv = { path = "locks/pipx-clang-format/23.1.5", digest = "sha256:8c4706a24fd4664fa0c1cddcc4360cafed701059b50ae7441842a96b40f06faa" }
+uv = { path = "locks/pipx-clang-format/23.1.5", digest = "sha256:43246e554fec10dbf022ce41ca14e5119972ceefa3ac03a481ba325210862c9c" }
 
 [[tools.python]]
 version = "3.15.2"
