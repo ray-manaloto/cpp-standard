@@ -1404,7 +1404,7 @@ Each names the section it relates to.
 | The Mac LLVM tarball may not work with the VM's SDK | unproven | M0 (d) | Its libc++ and compiler-rt are checked before M3 | D38 |
 | macOS regressions reach `main` for up to a day | accepted | post-merge macOS run is red | One shared pins file per toolchain, so a bump that breaks only macOS merges; the owner fixes or reverts it. The failed run is the signal, and the digest lists it once it exists | D46, D50, D62, D85 |
 | A new toolchain hash waits hours for the builder | limit | `artifact:check` pending | The 3-hour timeout names the missing tag and the builder run | D49, D61 |
-| A hosted p2996 build with compiler-rt runs out of disk or time | unproven | M0 (h) | `/mnt` after freeing toolsets; only needed runtimes; a larger hosted runner for arm64 from `main` | D67 |
+| A hosted p2996 build with compiler-rt runs out of disk or time | unproven | M0 (h) | `/mnt` after freeing toolsets (a container job only moves to `/mnt`); only needed runtimes; a larger hosted runner for arm64 from `main` | D67 |
 | The fence depends on the runner hook and image being intact | accepted | M2 entry-gate negative tests; images rebuilt only from `main` | Read-only root-owned hook; worker killed on refusal; images built from attested tools tags | D58 |
 | The hook can't call the API (no token) | limit | actions/runner#2813 | It checks event, ref, workflow and repository only, which is enough for the fence | D58 |
 | Agent-edited workflows run before review | accepted | a same-repo PR changes `.github/**` | They can't reach the PC or Mac (D58) or produce anything `main` trusts (D59). What remains: `pr-` artifacts and caches, hosted minutes, and deleting a release, which a `salt` bump recovers | D54, D60, D72 |

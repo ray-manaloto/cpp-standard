@@ -64,7 +64,11 @@ jobs:
           df -h / /mnt
       - name: Pack the toolchain for (j)
         if: success()
-        run: tar -C "$WORK_ROOT/m0h" --zstd -cf "$WORK_ROOT/m0h/p2996-linux-arm64.tar.zst" p2996
+        # Free the build and source trees first, so a build that only just fit
+        # does not fail here.
+        run: |
+          rm -rf "$WORK_ROOT/m0h/work/build" "$WORK_ROOT/m0h/work/src"
+          tar -C "$WORK_ROOT/m0h" --zstd -cf "$WORK_ROOT/m0h/p2996-linux-arm64.tar.zst" p2996
       - if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -79,4 +83,6 @@ jobs:
           path: |
             ${{ env.WORK_ROOT }}/m0h/work/*.log
             ${{ env.WORK_ROOT }}/m0h/work/m0h-result.txt
+            ${{ env.WORK_ROOT }}/m0h/work/peak
+            ${{ env.WORK_ROOT }}/m0h/work/build/runtimes/runtimes-bins/CMakeFiles/CMakeConfigureLog.yaml
           retention-days: 7
