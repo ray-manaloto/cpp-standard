@@ -18,8 +18,6 @@ item="cpp-standard-agent-app"
 repo="ray-manaloto/cpp-standard"
 api="https://api.github.com"
 operation="${usage_operation:-print}"
-cache="${TMPDIR:-/tmp}/cpp-standard-agent-token.json"
-
 case "$operation" in
   store | erase) exit 0 ;;
   get)
@@ -40,6 +38,21 @@ case "$operation" in
     ;;
 esac
 
+# A private per-user directory: when TMPDIR is unset (a launchd job, for
+# example) the shared /tmp is used. One stat call, which does not follow
+# symlinks, reads the owner, mode and type together, so a symlink or a
+# directory another user created first is refused, and the entry cannot be
+# swapped between checks. Once it is a real directory owned by this user,
+# the sticky bit on /tmp stops anyone else from replacing it. Another user
+# can still create the path first; the task then refuses to run.
+cache_dir="${TMPDIR:-/tmp}/cpp-standard-agent-$(id -u)"
+[[ -e "$cache_dir" || -L "$cache_dir" ]] || mkdir -m 700 "$cache_dir"
+if [[ "$(stat -f '%u %Lp %HT' "$cache_dir")" != "$(id -u) 700 Directory" ]]; then
+  echo "agent:token: $cache_dir is not a private directory owned by $(id -un)" >&2
+  exit 1
+fi
+cache="$cache_dir/token.json"
+
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 
 mint() {
@@ -52,7 +65,7 @@ mint() {
   fi
   now="$(date +%s)"
   header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
-  payload="$(jq -cn --arg iss "$client_id" --argjson now "$now" \
+  payload="$(jq -jcn --arg iss "$client_id" --argjson now "$now" \
     '{iat: ($now - 60), exp: ($now + 540), iss: $iss}' | b64url)"
   unsigned="$header.$payload"
   signature="$(printf '%s' "$unsigned" |
