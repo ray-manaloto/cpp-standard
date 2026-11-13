@@ -1,0 +1,69 @@
+# M0 (f) spike (environment-standard.md section 10, D53): a test Renovate
+# run must open a PR for a pin in a .mise/conf.d/ fragment. Renovate's
+# mise manager matches only .config/mise/conf.d/*.toml by default, so the
+# config adds .mise/conf.d/. It reads only spikes/m0/f/ and opens one PR on
+# a spike-m0f/ branch, which is closed after the result is recorded.
+# A PR opened with GITHUB_TOKEN triggers no ci.yml run, so it shows no
+# checks and cannot merge, which suits a throwaway PR.
+# Dispatch only. Not a required check. Deleted after M0.
+name: spike-m0-f
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  renovate:
+    name: renovate
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: write  # push the update branch
+      pull-requests: write  # open the PR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Record the start time
+        run: echo "STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$GITHUB_ENV"
+      - uses: renovatebot/github-action@266fef21329c44765ad42f9dea1f01f5d2d91084  # v46.3.13
+        with:
+          token: ${{ github.token }}
+          # Renovate 44.239.1 by digest (the multi-arch index): this container
+          # gets the write token. The action uses an image value that contains
+          # ':' as given (src/docker.ts at 266fef2), so nothing is appended.
+          renovate-image: ghcr.io/renovatebot/renovate:44.239.1@sha256:7dba1a3b916a2cf302ba0df458ddcc8fcbac3c92d0fe9882ac13ba0363de656b
+          configurationFile: spikes/m0/f/config.js
+        env:
+          LOG_LEVEL: debug
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+      # The pass line: exactly one spike-m0f/ PR, opened by this run, that
+      # changes the conf.d fixture. Renovate exits 0 when it finds nothing.
+      - name: Check that Renovate opened the conf.d PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          prs="$(gh pr list -R "$REPO" --state open --json number,headRefName,createdAt \
+            --jq "[.[] | select((.headRefName | startswith(\"spike-m0f/\")) and .createdAt >= \"$STARTED\")]")"
+          echo "$prs"
+          if [[ "$(jq length <<<"$prs")" -ne 1 ]]; then
+            echo "::error::M0 (f) FAIL: expected one new spike-m0f/ PR"
+            exit 1
+          fi
+          n="$(jq '.[0].number' <<<"$prs")"
+          files="$(gh pr view "$n" -R "$REPO" --json files --jq '.files[].path')"
+          if ! grep -qx 'spikes/m0/f/.mise/conf.d/old.toml' <<<"$files"; then
+            echo "::error::M0 (f) FAIL: PR #$n does not change the conf.d fixture"
+            exit 1
+          fi
+          echo "M0 (f) PASS: Renovate opened PR #$n for a .mise/conf.d/ pin"
