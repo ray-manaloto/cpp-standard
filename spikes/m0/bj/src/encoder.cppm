@@ -6,10 +6,19 @@
 module;
 #include <cstdint>
 #include <string_view>
-#if M0_REQUIRE_REFLECTION && !__cpp_impl_reflection
+// GCC 16 defines __cpp_impl_reflection; clang-p2996 does not, and reports
+// reflection through __has_feature(reflection) instead.
+#if defined(__cpp_impl_reflection)
+#define M0_HAS_REFLECTION 1
+#elif defined(__has_feature)
+#if __has_feature(reflection)
+#define M0_HAS_REFLECTION 1
+#endif
+#endif
+#if M0_REQUIRE_REFLECTION && !M0_HAS_REFLECTION
 #error "M0_REQUIRE_REFLECTION is set but the compiler has no reflection"
 #endif
-#if __cpp_impl_reflection
+#if M0_HAS_REFLECTION
 #include <meta>
 #endif
 export module encoder;
@@ -52,7 +61,7 @@ struct heartbeat {
 // Run-time code from reflection on p2996; plain code elsewhere, so every
 // compiler runs the same test.
 int field_sum(const heartbeat& h) {
-#if __cpp_impl_reflection
+#if M0_HAS_REFLECTION
   constexpr auto ctx = std::meta::access_context::unchecked();
   return h.[:std::meta::nonstatic_data_members_of(^^heartbeat, ctx)[0]:] +
          h.[:std::meta::nonstatic_data_members_of(^^heartbeat, ctx)[1]:];
