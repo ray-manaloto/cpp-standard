@@ -99,9 +99,10 @@ verify() {
     done
   fi
 
-  # No workflow is disabled.
+  # No workflow is disabled. A workflow whose file was removed has the state
+  # "deleted" and is not counted.
   local disabled
-  disabled="$(gh api "repos/$repo/actions/workflows" --jq '[.workflows[] | select(.state != "active") | .path] | join(", ")')"
+  disabled="$(gh api "repos/$repo/actions/workflows" --jq '[.workflows[] | select(.state | startswith("disabled")) | .path] | join(", ")')"
   [[ -z "$disabled" ]] || fail "disabled workflows: $disabled"
 
   if ((failures > 0)); then
