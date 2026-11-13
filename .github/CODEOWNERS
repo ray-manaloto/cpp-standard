@@ -24,3 +24,4 @@
 /.mise/tasks/perf/*
 /.mise/tasks/review/cap
 /.mise/tasks/vcpkg/bootstrap
+# Step 6 test: an App change to an owned path must wait for owner review.
