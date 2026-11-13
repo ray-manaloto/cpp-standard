@@ -24,3 +24,4 @@
 /.mise/tasks/perf/*
 /.mise/tasks/review/cap
 /.mise/tasks/vcpkg/bootstrap
+# step 6 gate test 1794591190
