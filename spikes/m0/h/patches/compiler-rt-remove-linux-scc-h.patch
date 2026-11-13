@@ -1,0 +1,45 @@
+Upstream llvm/llvm-project commit 3dc4fd6dd41100f051a63642f449b16324389c96,
+"[compiler-rt][sanitizer] Remove linux/scc.h (#194116)", 2026-04-25.
+Linux removed include/uapi/linux/scc.h, so compiler-rt cannot build against
+Ubuntu 26.10's kernel headers. clang-p2996 562409c7 predates the fix.
+Only the diff is kept; build.sh applies it with git apply.
+
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
+index 39e157d278948..3ea9002f5f19e 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
+@@ -152,16 +152,15 @@ typedef struct user_fpregs elf_fpregset_t;
+ #if defined(__mips64)
+ # include <sys/procfs.h>
+ #endif
+-#include <sys/user.h>
+-#include <linux/if_eql.h>
+-#include <linux/if_plip.h>
+-#include <linux/lp.h>
+-#include <linux/mroute.h>
+-#include <linux/mroute6.h>
+-#include <linux/scc.h>
+-#include <linux/serial.h>
+-#include <sys/msg.h>
+-#include <sys/ipc.h>
++#      include <linux/if_eql.h>
++#      include <linux/if_plip.h>
++#      include <linux/lp.h>
++#      include <linux/mroute.h>
++#      include <linux/mroute6.h>
++#      include <linux/serial.h>
++#      include <sys/ipc.h>
++#      include <sys/msg.h>
++#      include <sys/user.h>
+ #endif  // SANITIZER_ANDROID
+ 
+ #include <link.h>
+@@ -537,8 +536,6 @@ unsigned struct_ElfW_Phdr_sz = sizeof(Elf_Phdr);
+   unsigned struct_kbsentry_sz = sizeof(struct kbsentry);
+   unsigned struct_mtconfiginfo_sz = sizeof(struct mtconfiginfo);
+   unsigned struct_nr_parms_struct_sz = sizeof(struct nr_parms_struct);
+-  unsigned struct_scc_modem_sz = sizeof(struct scc_modem);
+-  unsigned struct_scc_stat_sz = sizeof(struct scc_stat);
+   unsigned struct_serial_multiport_struct_sz
+       = sizeof(struct serial_multiport_struct);
+   unsigned struct_serial_struct_sz = sizeof(struct serial_struct);
