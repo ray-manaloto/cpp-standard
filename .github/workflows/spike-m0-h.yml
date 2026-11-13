@@ -1,0 +1,82 @@
+# M0 (h) and (c) spike (environment-standard.md section 10, D32, D67): a cold
+# clang-p2996 build with compiler-rt, recording peak disk and wall time, then
+# reflection, ASan, UBSan and coverage smoke tests. The build runs inside the
+# ubuntu:26.10 container (the base image's Ubuntu) on the ubuntu-26.04-arm
+# hosted runner, the newest arm64 runner GitHub offers. It runs on pull
+# requests that change spikes/m0/h/ and on dispatch. It is not a required
+# check. Deleted after M0.
+name: spike-m0-h
+
+on:
+  pull_request:
+    paths:
+      - spikes/m0/h/**
+      - .github/workflows/spike-m0-h.yml
+  workflow_dispatch:
+    inputs:
+      work_root:
+        description: "Where to build: /build (the container's root disk, the primary case) or /mnt (the runner's second disk, the first fallback)"
+        default: /build
+        type: choice
+        options: [/build, /mnt]
+
+permissions: {}
+
+jobs:
+  p2996:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    container:
+      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+      volumes:
+        - /mnt:/mnt
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      WORK_ROOT: ${{ inputs.work_root || '/build' }}
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update -q
+          apt-get install -qy --no-install-recommends \
+            ca-certificates git cmake ninja-build clang lld python3 zlib1g-dev zstd
+          . /etc/os-release; echo "$PRETTY_NAME"
+          clang --version | head -1; cmake --version | head -1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Disk and CPU before
+        run: |
+          nproc; head -3 /proc/meminfo; df -h / /mnt /__w
+          # / is an overlay, so compare /mnt with /__w, a bind mount of the host root disk.
+          if [ "$(stat -c %d /__w)" = "$(stat -c %d /mnt)" ]; then echo "::warning::/mnt is on the host root disk; the /mnt run measures the same disk"; fi
+      - name: Prepare the work directory
+        run: mkdir -p "$WORK_ROOT/m0h"
+      - name: Cold build with compiler-rt (M0 (h))
+        run: spikes/m0/h/build.sh "$WORK_ROOT/m0h/work" "$WORK_ROOT/m0h/p2996"
+      - name: Smoke tests (M0 (c))
+        run: spikes/m0/h/smoke.sh "$WORK_ROOT/m0h/p2996" "$RUNNER_TEMP/smoke"
+      - name: Result
+        if: always()
+        run: |
+          { echo '## M0 (h) result'; echo '```'; cat "$WORK_ROOT/m0h/work/m0h-result.txt" 2>/dev/null || echo "no result"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          df -h / /mnt
+      - name: Pack the toolchain for (j)
+        if: success()
+        run: tar -C "$WORK_ROOT/m0h" --zstd -cf "$WORK_ROOT/m0h/p2996-linux-arm64.tar.zst" p2996
+      - if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: p2996-linux-arm64
+          path: ${{ env.WORK_ROOT }}/m0h/p2996-linux-arm64.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: m0h-logs
+          path: |
+            ${{ env.WORK_ROOT }}/m0h/work/*.log
+            ${{ env.WORK_ROOT }}/m0h/work/m0h-result.txt
+          retention-days: 7

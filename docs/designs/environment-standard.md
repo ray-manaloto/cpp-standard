@@ -1089,11 +1089,13 @@ and (j).
   spike branch, and GCC ASan on macOS with `detect_leaks=0`.
 - **(f)** Whether mise bootstrap and Renovate read `.mise/conf.d/`.
 - **(g)** clang-format on `^^` and `[: :]`.
-- **(h)** A cold p2996 build with compiler-rt on `ubuntu-26.04-arm`,
-  recording peak disk and wall time (D67). Fallbacks, in order: build under
-  `/mnt` after freeing preinstalled toolsets; build only the needed runtimes;
-  build arm64 p2996 from `main` on a larger hosted runner. It is on the
-  critical path.
+- **(h)** A cold p2996 build with compiler-rt in the `ubuntu:26.10`
+  container (the base image's Ubuntu) on the `ubuntu-26.04-arm` runner, the
+  newest arm64 runner GitHub offers, recording peak disk and wall time (D67).
+  Fallbacks, in order: build under `/mnt` after freeing preinstalled toolsets
+  (a container job cannot free the host's toolsets, so it only moves to
+  `/mnt`); build only the needed runtimes; build arm64 p2996 from `main` on a
+  larger hosted runner. It is on the critical path.
 - **(i)** The packslip and cache leg (D72, D75, D83):
   - it runs after setup steps 3-6, so a minimal `builder.yml` on `main` can
     sign, and a test PR can go through the merge queue;
