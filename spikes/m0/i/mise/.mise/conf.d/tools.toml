@@ -1,0 +1,5 @@
+# M0 (i) spike: a Python tool, to check that the lock regenerates the same
+# on the Mac host and in the container (jdx/mise#15657, D99).
+[tools]
+python = "3.15.2"
+"pipx:clang-format" = "23.1.5"
