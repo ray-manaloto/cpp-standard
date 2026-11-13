@@ -1,0 +1,26 @@
+# First version, from setup step 6 (environment-standard.md section 6, D51,
+# D64, D76, D100). The owner must approve any change to these paths.
+# M1a PR 6 replaces this file with the complete version.
+# A later line with no owner removes ownership from the paths it matches.
+
+/.github/                         @ray-manaloto/owner
+/renovate.json5                   @ray-manaloto/owner
+/mise.toml                        @ray-manaloto/owner
+/.mise/tasks/                     @ray-manaloto/owner
+/fixtures/                        @ray-manaloto/owner
+/cmake/capabilities.lock.json     @ray-manaloto/owner
+/gate-policy.toml                 @ray-manaloto/owner
+/hk.pkl                           @ray-manaloto/owner
+/.jouet/                          @ray-manaloto/owner
+/toolchains/*/build.sh            @ray-manaloto/owner
+/toolchains/*/macos/              @ray-manaloto/owner
+/image/*.Dockerfile               @ray-manaloto/owner
+/runner/                          @ray-manaloto/owner
+/pins-allowlist.toml              @ray-manaloto/owner
+
+# Tasks agents may edit (section 6).
+/.mise/tasks/linux/run
+/.mise/tasks/doctor
+/.mise/tasks/perf/*
+/.mise/tasks/review/cap
+/.mise/tasks/vcpkg/bootstrap
