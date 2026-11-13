@@ -1,0 +1,162 @@
+# M0 (b) and (j) spike (environment-standard.md section 10, D88): gcov-mode
+# coverage of a C++ named module, built with --coverage. Each job needs 100%
+# line coverage through gcovr with no exclusions, and the uncovered-line
+# fixture must fail. Three jobs, the three compilers of (j):
+# - gcc: GCC 16 with gcov-16; this is also (b). PRs and dispatch.
+# - clang: clang 23 from apt.llvm.org resolute-23 with llvm-cov-23 and
+#   libc++. PRs and dispatch.
+# - p2996: the toolchain an M0 (h) run packed (its own clang, linker
+#   driver, clang-scan-deps, libc++ and llvm-cov). Dispatch only, with the
+#   spike-m0-h run id.
+# Runs in the ubuntu:26.10 container on ubuntu-26.04-arm. Not a required
+# check. Deleted after M0.
+name: spike-m0-bj
+
+on:
+  pull_request:
+    paths:
+      - spikes/m0/bj/**
+      - .github/workflows/spike-m0-bj.yml
+  workflow_dispatch:
+    inputs:
+      p2996_run_id:
+        description: The spike-m0-h run whose p2996-linux-arm64 artifact to test
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gcc:
+    name: gcc
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    container:
+      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install GCC 16, CMake, Ninja and gcovr
+        run: |
+          apt-get update -q
+          apt-get install -qy --no-install-recommends g++-16 cmake ninja-build gcovr
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Coverage on GCC 16 (M0 (b), (j))
+        # Twice: a plain module test for (b), then with -freflection, where the
+        # module must build its reflection code, for (j).
+        run: |
+          OUT="$GITHUB_WORKSPACE/m0bj-out/plain" spikes/m0/bj/run.sh g++-16 gcov-16
+          OUT="$GITHUB_WORKSPACE/m0bj-out/reflection" REFLECTION_FLAG=-freflection \
+            spikes/m0/bj/run.sh g++-16 gcov-16
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: m0bj-gcc
+          path: |
+            m0bj-out/**/*.txt
+            m0bj-out/**/*.cmake.log
+          if-no-files-found: warn  # always-run: an early failure leaves no report
+          retention-days: 7
+
+  clang:
+    name: clang
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    container:
+      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install clang 23 from apt.llvm.org, CMake, Ninja and gcovr
+        # libclang-rt-23-dev holds libclang_rt.profile.a, which --coverage
+        # links; without it the link fails.
+        run: |
+          apt-get update -q
+          apt-get install -qy --no-install-recommends ca-certificates curl gpg cmake ninja-build gcovr
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /etc/apt/keyrings/llvm.gpg
+          # Refuse a keyring that is not exactly the published apt.llvm.org key.
+          gpg --show-keys --with-fingerprint /etc/apt/keyrings/llvm.gpg | grep -qF '6084 F3CF 814B 57C1 CF12  EFD5 15CF 4D18 AF4F 7421'
+          test "$(gpg --show-keys --with-colons /etc/apt/keyrings/llvm.gpg | grep -c '^pub:')" -eq 1
+          echo 'deb [signed-by=/etc/apt/keyrings/llvm.gpg] https://apt.llvm.org/resolute/ llvm-toolchain-resolute-23 main' \
+            >/etc/apt/sources.list.d/llvm.list
+          apt-get update -q
+          apt-get install -qy --no-install-recommends \
+            clang-23 clang-tools-23 llvm-23 libc++-23-dev libc++abi-23-dev libclang-rt-23-dev
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Coverage on clang 23 (M0 (j))
+        run: |
+          OUT="$GITHUB_WORKSPACE/m0bj-out" CXXFLAGS=-stdlib=libc++ LDFLAGS=-stdlib=libc++ \
+            spikes/m0/bj/run.sh clang++-23 'llvm-cov-23 gcov'
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: m0bj-clang
+          path: |
+            m0bj-out/**/*.txt
+            m0bj-out/**/*.cmake.log
+          if-no-files-found: warn  # always-run: an early failure leaves no report
+          retention-days: 7
+
+  p2996:
+    name: p2996
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read  # download the artifact from the spike-m0-h run
+    container:
+      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install CMake, Ninja, gcovr and the runtime libraries
+        run: |
+          apt-get update -q
+          apt-get install -qy --no-install-recommends \
+            binutils cmake ninja-build gcovr zstd libc6-dev libgcc-16-dev
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: p2996-linux-arm64
+          path: p2996-dl
+          run-id: ${{ inputs.p2996_run_id }}
+          github-token: ${{ github.token }}
+      - name: Unpack the toolchain
+        run: |
+          tar -C "$GITHUB_WORKSPACE/p2996-dl" --zstd -xf "$GITHUB_WORKSPACE/p2996-dl/p2996-linux-arm64.tar.zst"
+          "$GITHUB_WORKSPACE/p2996-dl/p2996/bin/clang++" --version
+          ls "$GITHUB_WORKSPACE/p2996-dl/p2996/bin"
+      - name: Coverage on p2996 (M0 (j))
+        run: |
+          tc="$GITHUB_WORKSPACE/p2996-dl/p2996"
+          triple="$("$tc/bin/clang++" -print-target-triple)"
+          OUT="$GITHUB_WORKSPACE/m0bj-out" REFLECTION_FLAG=-freflection-latest CXXFLAGS=-stdlib=libc++ LDFLAGS="-stdlib=libc++ -Wl,-rpath,$tc/lib/$triple" \
+            spikes/m0/bj/run.sh "$tc/bin/clang++" "$tc/bin/llvm-cov gcov"
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: m0bj-p2996
+          path: |
+            m0bj-out/**/*.txt
+            m0bj-out/**/*.cmake.log
+          if-no-files-found: warn  # always-run: an early failure leaves no report
+          retention-days: 7
