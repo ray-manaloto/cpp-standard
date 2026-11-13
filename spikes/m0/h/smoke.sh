@@ -9,7 +9,7 @@ cxx="$prefix/bin/clang++"
 triple="$("$cxx" -print-target-triple)"
 rt="-Wl,-rpath,$prefix/lib/$triple"
 mkdir -p "$dir"
-cat > "$dir/refl.cpp" <<'CPP'
+cat >"$dir/refl.cpp" <<'CPP'
 #include <meta>
 #include <print>
 struct point { int x; int y; };
@@ -19,20 +19,27 @@ int main() {
   std::println("members: {}", n);
 }
 CPP
-cat > "$dir/bug.cpp" <<'CPP'
+cat >"$dir/bug.cpp" <<'CPP'
 #include <cstdlib>
 int main(int argc, char**) { int* p = new int[1]; int v = p[argc]; delete[] p; return v; }
 CPP
-cat > "$dir/ub.cpp" <<'CPP'
+cat >"$dir/ub.cpp" <<'CPP'
 #include <climits>
 int main(int argc, char**) { int x = INT_MAX; x += argc; return x == 0; }
 CPP
-cat > "$dir/cov.cpp" <<'CPP'
+cat >"$dir/cov.cpp" <<'CPP'
 int f(int a) { if (a > 0) return 1; return 2; }
 int main() { return f(1) - 1; }
 CPP
 ok=0
-check() { if "$@"; then echo "M0 (c) PASS: $label"; else echo "::error::M0 (c) FAIL: $label"; ok=1; fi; }
+check() {
+  if "$@"; then
+    echo "M0 (c) PASS: $label"
+  else
+    echo "::error::M0 (c) FAIL: $label"
+    ok=1
+  fi
+}
 
 label="reflection with -freflection-latest and libc++"
 check bash -c "'$cxx' -std=c++26 -freflection-latest -stdlib=libc++ $rt '$dir/refl.cpp' -o '$dir/refl' && '$dir/refl' | grep -qx 'members: 2'"

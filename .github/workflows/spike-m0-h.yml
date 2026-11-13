@@ -22,8 +22,18 @@ on:
 
 permissions: {}
 
+# One run per PR or ref; a newer push to the PR cancels the older build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   p2996:
+    name: p2996
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 300
     permissions:
@@ -43,7 +53,7 @@ jobs:
             ca-certificates git cmake ninja-build clang lld python3 zlib1g-dev zstd
           . /etc/os-release; echo "$PRETTY_NAME"
           clang --version | head -1; cmake --version | head -1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Disk and CPU before
@@ -58,26 +68,26 @@ jobs:
       - name: Smoke tests (M0 (c))
         run: spikes/m0/h/smoke.sh "$WORK_ROOT/m0h/p2996" "$RUNNER_TEMP/smoke"
       - name: Result
-        if: always()
+        if: ${{ always() }}
         run: |
           { echo '## M0 (h) result'; echo '```'; cat "$WORK_ROOT/m0h/work/m0h-result.txt" 2>/dev/null || echo "no result"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           df -h / /mnt
       - name: Pack the toolchain for (j)
-        if: success()
+        if: ${{ success() }}
         # Free the build and source trees first, so a build that only just fit
         # does not fail here.
         run: |
           rm -rf "$WORK_ROOT/m0h/work/build" "$WORK_ROOT/m0h/work/src"
           tar -C "$WORK_ROOT/m0h" --zstd -cf "$WORK_ROOT/m0h/p2996-linux-arm64.tar.zst" p2996
-      - if: success()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - if: ${{ success() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: p2996-linux-arm64
           path: ${{ env.WORK_ROOT }}/m0h/p2996-linux-arm64.tar.zst
           if-no-files-found: error
           retention-days: 7
-      - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: m0h-logs
           path: |
@@ -85,4 +95,5 @@ jobs:
             ${{ env.WORK_ROOT }}/m0h/work/m0h-result.txt
             ${{ env.WORK_ROOT }}/m0h/work/peak
             ${{ env.WORK_ROOT }}/m0h/work/build/runtimes/runtimes-bins/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn  # always-run: an early failure leaves no logs
           retention-days: 7

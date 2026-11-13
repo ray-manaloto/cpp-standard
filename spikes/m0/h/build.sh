@@ -8,11 +8,14 @@
 set -euo pipefail
 
 work="$1" prefix="$2"
-commit="562409c7942690d59ea470762515f88f24b16e23"   # bloomberg/clang-p2996, branch p2996, 2026-11-03
+commit="562409c7942690d59ea470762515f88f24b16e23" # bloomberg/clang-p2996, branch p2996, 2026-11-03
 case "$(uname -m)" in
   aarch64) target=AArch64 ;;
   x86_64) target=X86 ;;
-  *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+  *)
+    echo "unsupported arch $(uname -m)" >&2
+    exit 1
+    ;;
 esac
 log="$work/m0h.log"
 mkdir -p "$work" "$prefix"
@@ -20,21 +23,32 @@ fs_used() { df --output=used -B1M "$work" | tail -1 | tr -d ' '; }
 
 # Peak disk: sample the file system that holds the work dir every 15 s.
 start_used="$(fs_used)"
-echo 0 > "$work/peak"
-( peak=0
+echo 0 >"$work/peak"
+(
+  peak=0
   while :; do
-    u="$(fs_used)"; (( u > peak )) && peak=$u && echo "$peak" > "$work/peak.tmp" && mv "$work/peak.tmp" "$work/peak"
+    u="$(fs_used)"
+    ((u > peak)) && peak=$u && echo "$peak" >"$work/peak.tmp" && mv "$work/peak.tmp" "$work/peak"
     sleep 15
-  done ) >/dev/null 2>&1 &
+  done
+) >/dev/null 2>&1 &
 sampler=$!
 trap 'kill "$sampler" 2>/dev/null || true' EXIT
 
-phase() { echo "$(date +%s) $1" >> "$log"; echo "::notice::M0 (h) phase $1 at $(date -u +%H:%M:%S)"; }
+phase() {
+  echo "$(date +%s) $1" >>"$log"
+  echo "::notice::M0 (h) phase $1 at $(date -u +%H:%M:%S)"
+}
 
 phase start
 git init -q "$work/src"
 git -C "$work/src" fetch -q --depth 1 https://github.com/bloomberg/clang-p2996 "$commit"
 git -C "$work/src" checkout -q FETCH_HEAD
+# Upstream fixes the pinned commit lacks; see each patch's header.
+for p in "$(dirname "$0")"/patches/*.patch; do
+  git -C "$work/src" apply "$(cd "$(dirname "$p")" && pwd)/$(basename "$p")"
+  echo "applied $(basename "$p")"
+done
 phase fetched
 
 cmake -G Ninja -S "$work/src/llvm" -B "$work/build" \
@@ -53,26 +67,34 @@ cmake -G Ninja -S "$work/src/llvm" -B "$work/build" \
   -DCOMPILER_RT_BUILD_XRAY=OFF -DCOMPILER_RT_BUILD_ORC=OFF \
   -DCLANG_DEFAULT_CXX_STDLIB=libc++ \
   -DLLVM_FORCE_VC_REPOSITORY=https://github.com/bloomberg/clang-p2996 \
-  > "$work/cmake.log" 2>&1 || { tail -50 "$work/cmake.log"; exit 1; }
+  >"$work/cmake.log" 2>&1 || {
+  tail -50 "$work/cmake.log"
+  exit 1
+}
 phase configured
-ninja -C "$work/build" install > "$work/ninja.log" 2>&1 || { tail -50 "$work/ninja.log"; exit 1; }
+ninja -C "$work/build" install >"$work/ninja.log" 2>&1 || {
+  tail -50 "$work/ninja.log"
+  exit 1
+}
 phase installed
 
 kill "$sampler" 2>/dev/null || true
 # One last sample: the end of the install, with the build tree and the
 # prefix both present, can fall between two samples.
-peak="$(cat "$work/peak")"; peak="${peak:-0}"
-u="$(fs_used)"; (( u > peak )) && peak=$u
+peak="$(cat "$work/peak")"
+peak="${peak:-0}"
+u="$(fs_used)"
+((u > peak)) && peak=$u
 build_mb="$(du -sm "$work/build" | cut -f1)"
 prefix_mb="$(du -sm "$prefix" | cut -f1)"
 s() { awk -v p="$1" '$2 == p { print $1 }' "$log"; }
 {
   echo "commit=$commit"
   echo "arch=$(uname -m) cpus=$(nproc) work=$work"
-  echo "fetch_s=$(( $(s fetched) - $(s start) ))"
-  echo "configure_s=$(( $(s configured) - $(s fetched) ))"
-  echo "build_install_s=$(( $(s installed) - $(s configured) ))"
-  echo "total_s=$(( $(s installed) - $(s start) ))"
+  echo "fetch_s=$(($(s fetched) - $(s start)))"
+  echo "configure_s=$(($(s configured) - $(s fetched)))"
+  echo "build_install_s=$(($(s installed) - $(s configured)))"
+  echo "total_s=$(($(s installed) - $(s start)))"
   echo "fs_used_start_mb=$start_used fs_used_peak_mb=$peak"
   echo "build_tree_mb=$build_mb install_prefix_mb=$prefix_mb"
 } | tee "$work/m0h-result.txt"

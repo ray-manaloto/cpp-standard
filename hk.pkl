@@ -10,8 +10,9 @@ import "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Builtin
 
 min_hk_version = "2.12.0"
 
-// Locks and the lock sidecars mise generates are not hand-written.
-exclude = List("**/*.lock", "**/.mise/locks/**")
+// Locks and the lock sidecars mise generates are not hand-written, and
+// vendored upstream patches must stay byte-exact for git apply.
+exclude = List("**/*.lock", "**/.mise/locks/**", "**/*.patch")
 
 local shellFiles = List(new FileSelector { glob = List("**/*.sh", "**/*.bash", ".mise/tasks/**") })
 
