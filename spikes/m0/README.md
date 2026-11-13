@@ -13,7 +13,7 @@ is deleted after M0; this file is kept.
 | A cache saved on the PR ref is not readable from the merge-group ref | PASS | [run 43483507903](https://github.com/ray-manaloto/cpp-standard/actions/runs/43483507903), job `mq-fetch` (PR #9) |
 | The PR run's artifact downloads in the merge group by `run-id` | PASS | same run, job `mq-fetch` |
 | `mise bootstrap packages status --missing` fails before bootstrap and exits 0 after it | PASS | every `mise-checks` job, for example run 43483507903 |
-| Regenerating the lock on the Mac host and in an `ubuntu:26.04` container, both mise 2026.11.8, gives identical files | FAIL | same run, job `mise-checks` |
+| Regenerating the lock on the Mac host and in an `ubuntu:26.04` container, both mise 2026.11.8, gives identical files | FAIL with the default `minimum_release_age`; PASS with a fixed cutoff date | FAIL: run 43483507903, job `mise-checks`; PASS: the `mise-checks` job of the PR that set `minimum_release_age = "2026-11-13T00:00:00Z"` |
 | The test release and its tag are deleted | PASS | `gh release delete --cleanup-tag`, 2026-11-13 |
 
 Findings for the M0-Linux exit review on 2026-11-16:
@@ -25,7 +25,9 @@ Findings for the M0-Linux exit review on 2026-11-16:
   --exclude-newer` (mise v2026.11.8 `src/backend/pipx/lock.rs:715`,
   `settings.toml:2333`). Options: a fixed cutoff date or `0s` in the
   settings (a reproducible lock, but no 24h hold-back on new releases), or
-  compare the locks with that line ignored.
+  compare the locks with that line ignored. The spike now uses a fixed
+  date, later than every pinned release, and the lock regenerates
+  identically; the date has to move forward with the pins.
 - **uv must be a pinned tool.** Without uv on PATH, `mise lock` warns "uv
   >= 0.12.10 is unavailable" and silently leaves out the PyPI sidecars and
   the `uv` line in `mise.lock`. `.mise/conf.d/tools.toml` must pin uv.
