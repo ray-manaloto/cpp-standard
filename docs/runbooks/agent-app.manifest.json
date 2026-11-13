@@ -1,0 +1,19 @@
+{
+  "name": "cpp-standard-agents",
+  "url": "https://github.com/ray-manaloto/cpp-standard",
+  "description": "Agents push, open pull requests and dispatch workflows on ray-manaloto/cpp-standard as this App. Its key stays on the owner's Mac host.",
+  "public": false,
+  "hook_attributes": {
+    "url": "https://github.com/ray-manaloto/cpp-standard",
+    "active": false
+  },
+  "redirect_url": "http://127.0.0.1:8765/",
+  "request_oauth_on_install": false,
+  "default_events": [],
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "workflows": "write",
+    "actions": "write"
+  }
+}
