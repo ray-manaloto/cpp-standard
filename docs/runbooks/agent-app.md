@@ -94,9 +94,22 @@ Done when:
 
 - the first command prints `minted`;
 - the second prints exactly `["ray-manaloto/cpp-standard"]`;
-- a one-off App PR that touches `.github/CODEOWNERS` shows
-  `mergeStateStatus` `BLOCKED` with `reviewDecision` `REVIEW_REQUIRED`. Close
-  it without approving and delete its branch.
+- a one-off App PR that touches `.github/CODEOWNERS`, with every check
+  green, shows `mergeStateStatus` `BLOCKED`, and adding it to the merge queue
+  as the App fails with a message that contains "Waiting on code owner review
+  from ray-manaloto/owner":
+
+  ```sh
+  GH_TOKEN="$(mise run -q agent:token)" gh api graphql -f query="mutation {
+    enqueuePullRequest(input: {pullRequestId: \"$(gh pr view <number> --json id -q .id)\"}) {
+      mergeQueueEntry { state } } }"
+  ```
+
+- as a control, a matching App PR that touches only a file under `docs/`
+  shows `mergeStateStatus` `CLEAN` with the same checks; it is not queued.
+
+Close both without approving and delete their branches. GitHub reported
+`reviewDecision` as `null` for the blocked PR, so it is not a usable check.
 
 ## Undo
 
