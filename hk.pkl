@@ -1,0 +1,105 @@
+// The commit gate (D102, docs/designs/level-1/decisions-log.md). hk runs these steps on
+// pre-commit (commit-msg runs typos on the message), `mise run check` runs them on every file, and
+// the required `lint` job in ci.yml runs the same task, so CI refuses what a
+// local hook refuses. The package version matches hk in .mise/conf.d/lint.toml
+// and the global pin. Step options follow risu729/hk-config: strict exits,
+// pedantic audits, pinact before ghalint and zizmor.
+amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.pkl"
+
+import "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Builtins.pkl"
+
+min_hk_version = "2.12.0"
+
+// Locks and the lock sidecars mise generates are not hand-written.
+exclude = List("**/*.lock", "**/.mise/locks/**")
+
+local shellFiles = List(new FileSelector { glob = List("**/*.sh", "**/*.bash", ".mise/tasks/**") })
+
+local gateSteps = new Mapping<String, Step> {
+  // GitHub Actions: correctness, then pins, then policy and security.
+  ["jactionlint"] = (Builtins.jactionlint) {
+    check = "jactionlint --profile pedantic --strict-exit --format gcc {{ files }}"
+  }
+  ["pinact"] = Builtins.pinact
+  ["ghalint"] = (Builtins.ghalint_workflow) { depends = List("pinact") }
+  ["ghalint-action"] = (Builtins.ghalint_action) { depends = List("pinact") }
+  ["zizmor"] = (Builtins.zizmor) {
+    depends = List("pinact")
+    // --offline: zizmor would go online whenever a token is set, so the hook
+    // would depend on the shell. The online audits run in zizmor-online.
+    check = "zizmor --offline --no-progress --pedantic {{ files }}"
+    fix = "zizmor --offline --no-progress --pedantic --fix {{ files }}"
+  }
+  // The audits that need the GitHub API (impostor-commit, ref-confusion,
+  // known-vulnerable-actions, ...). Only in the `online` profile:
+  // `mise run check --online`, which the CI lint job runs with a token.
+  ["zizmor-online"] = (Builtins.zizmor) {
+    depends = List("pinact")
+    profiles = List("online")
+    check = "zizmor --no-progress --pedantic {{ files }}"
+    fix = null
+  }
+
+  // Shell, including the file tasks under .mise/tasks/.
+  // No --simplify: any printer flag makes shfmt ignore .editorconfig.
+  ["shfmt"] = (Builtins.shfmt) { match_any = shellFiles }
+  ["shellcheck"] = (Builtins.shellcheck) {
+    match_any = shellFiles
+    check = "shellcheck --external-sources --format=gcc {{ files }}"
+    diagnostic_format = "gcc"
+  }
+
+  // Config and docs.
+  ["mise"] = (Builtins.mise) {
+    glob = List("mise.toml", ".mise/conf.d/*.toml", "spikes/**/mise.toml")
+  }
+  ["mise-tasks"] {
+    glob = List("mise.toml", ".mise/tasks/**")
+    check = "mise task validate"
+  }
+  ["hk-validate"] {
+    glob = List("hk.pkl")
+    check = "hk validate"
+  }
+  ["pkl"] = Builtins.pkl
+  ["pkl-format"] = Builtins.pkl_format
+  ["tombi"] = (Builtins.tombi) { check = "tombi lint --error-on-warnings {{ files }}" }
+  ["tombi-format"] = Builtins.tombi_format
+  ["rumdl"] = Builtins.rumdl
+  ["typos"] = Builtins.typos
+  ["ryl"] = Builtins.ryl
+  ["ryl-format"] = Builtins.ryl_format
+  ["jq"] = Builtins.jq
+  ["editorconfig-checker"] = Builtins.editorconfig_checker
+  ["betterleaks"] = Builtins.betterleaks
+
+  // Hygiene.
+  ["newlines"] = Builtins.newlines
+  ["trailing-whitespace"] = Builtins.trailing_whitespace
+  ["mixed-line-ending"] = Builtins.mixed_line_ending
+  ["byte-order-marker"] = Builtins.byte_order_marker
+  ["fix-smart-quotes"] = Builtins.fix_smart_quotes
+  ["check-merge-conflict"] = Builtins.check_merge_conflict
+  ["check-case-conflict"] = Builtins.check_case_conflict
+  ["check-symlinks"] = Builtins.check_symlinks
+  ["destroyed-symlinks"] = Builtins.destroyed_symlinks
+  ["forbid-submodules"] = Builtins.forbid_submodules
+  ["check-executables-have-shebangs"] = Builtins.check_executables_have_shebangs
+  ["check-shebang-scripts-are-executable"] = Builtins.check_shebang_scripts_are_executable
+  ["detect-private-key"] = Builtins.detect_private_key
+  ["check-added-large-files"] = Builtins.check_added_large_files
+}
+
+// Top-level steps give hk its implicit check, fix and pre-commit hooks
+// (pre-commit fixes and stages the selected files, stashing unstaged changes).
+steps = gateSteps
+
+hooks {
+  ["commit-msg"] {
+    steps {
+      ["typos-msg"] {
+        check = "typos {{ commit_msg_file }}"
+      }
+    }
+  }
+}

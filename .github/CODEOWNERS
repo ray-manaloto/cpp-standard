@@ -12,6 +12,10 @@
 /cmake/capabilities.lock.json     @ray-manaloto/owner
 /gate-policy.toml                 @ray-manaloto/owner
 /hk.pkl                           @ray-manaloto/owner
+/.editorconfig                    @ray-manaloto/owner
+/.rumdl.toml                      @ray-manaloto/owner
+/.ryl.toml                        @ray-manaloto/owner
+/_typos.toml                      @ray-manaloto/owner
 /.jouet/                          @ray-manaloto/owner
 /toolchains/*/build.sh            @ray-manaloto/owner
 /toolchains/*/macos/              @ray-manaloto/owner

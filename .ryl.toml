@@ -1,0 +1,28 @@
+# ryl (Rust re-implementation of yamllint) for hk.pkl. Every rule is on
+# except those idiomatic GitHub Actions YAML breaks (no document markers,
+# bare trigger keys like `pull_request:`, `run: |` without a chomping
+# indicator, the `on:` key read as a truthy value, long run: lines) and the
+# style-only key-ordering and quoted-strings rules.
+indent-width = 2
+
+[lint.rules]
+anchors = "enable"
+block-scalar-chomping = "disable"
+comments = "enable"
+comments-indentation = "enable"
+document-end = "disable"
+document-start = "disable"
+empty-values = "disable"
+float-values = "enable"
+key-duplicates = "enable"
+key-ordering = "disable"
+line-length = "disable"
+merge-keys = "enable"
+new-line-at-end-of-file = "enable"
+new-lines = "enable"
+octal-values = "enable"
+quoted-strings = "disable"
+tags = "enable"
+trailing-spaces = "enable"
+truthy = "disable"
+unicode-line-breaks = "enable"

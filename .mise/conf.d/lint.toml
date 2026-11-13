@@ -1,0 +1,19 @@
+# Lint and hook tools for hk.pkl. hk matches the global pin; hk.pkl amends
+# the hk package of the same version.
+[tools]
+hk = "2.12.0"
+pkl = "0.33.0"
+jactionlint = "2.6.0"
+zizmor = "1.32.0"
+pinact = "5.0.2"
+ghalint = "1.6.0"
+shellcheck = "0.11.0"
+shfmt = "3.14.1"
+typos = "1.52.2"
+rumdl = "0.3.4"
+tombi = "1.11.2"
+# Rust re-implementation of yamllint and its formatter (hk ryl, ryl_format).
+"aqua:owenlamont/ryl" = "0.29.0"
+jq = "1.8.2"
+editorconfig-checker = "4.0.2"
+betterleaks = "1.10.1"

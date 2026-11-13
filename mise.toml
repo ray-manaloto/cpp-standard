@@ -1,0 +1,17 @@
+# Bootstrap project config (environment-standard.md section 3, D13). It holds
+# settings only: tool pins live in .mise/conf.d/*.toml fragments and every
+# task is its own file under .mise/tasks/ (D93), so parallel changes rarely
+# touch the same file.
+min_version = "2026.11.8"
+
+[settings]
+# A fixed cutoff instead of the default 24h age, so `mise lock` gives the
+# same lock whenever it runs (M0 (i) finding). It must be later than every
+# pinned release; bump it with the pins.
+minimum_release_age = "2026-11-13T00:00:00Z"
+lockfile = true
+
+[hooks]
+# Install the hk git hooks (run through mise, so they use the pinned tools)
+# whenever the pinned tools are installed. CI runs `mise run check` instead.
+postinstall = '[ -n "${CI:-}" ] || hk install --mise'

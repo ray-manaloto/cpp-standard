@@ -4,3 +4,9 @@
 dist/
 # Local devcontainer settings; never committed.
 .devcontainer/.env
+
+# Per-machine links that mise makes to tool skills (D102). M1b commits
+# project skills under .agents/skills/ and replaces the .claude/skills line.
+.agents/skills/.mise-skills.json
+.agents/skills/hk-*
+/.claude/skills

@@ -13,7 +13,7 @@ is deleted after M0; this file is kept.
 | A cache saved on the PR ref is not readable from the merge-group ref | PASS | [run 43483507903](https://github.com/ray-manaloto/cpp-standard/actions/runs/43483507903), job `mq-fetch` (PR #9) |
 | The PR run's artifact downloads in the merge group by `run-id` | PASS | same run, job `mq-fetch` |
 | `mise bootstrap packages status --missing` fails before bootstrap and exits 0 after it | PASS | every `mise-checks` job, for example run 43483507903 |
-| Regenerating the lock on the Mac host and in an `ubuntu:26.04` container, both mise 2026.11.8, gives identical files | FAIL with the default `minimum_release_age`; PASS with a fixed cutoff date | FAIL: run 43483507903, job `mise-checks`; PASS: [run 43484976602](https://github.com/ray-manaloto/cpp-standard/actions/runs/43484976602), job `mise-checks` (PR #12) |
+| Regenerating the lock on the Mac host and in an `ubuntu:26.04` container (the job now runs `ubuntu:26.10`), both mise 2026.11.8, gives identical files | FAIL with the default `minimum_release_age`; PASS with a fixed cutoff date | FAIL: run 43483507903, job `mise-checks`; PASS: [run 43484976602](https://github.com/ray-manaloto/cpp-standard/actions/runs/43484976602), job `mise-checks` (PR #12) |
 | The test release and its tag are deleted | PASS | `gh release delete --cleanup-tag`, 2026-11-13 |
 
 Findings for the M0-Linux exit review on 2026-11-16:

@@ -1,13 +1,4 @@
 {
-  "name": "main",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": {
-    "ref_name": {
-      "include": ["~DEFAULT_BRANCH"],
-      "exclude": []
-    }
-  },
   "bypass_actors": [
     {
       "actor_id": 1,
@@ -15,36 +6,70 @@
       "bypass_mode": "pull_request"
     }
   ],
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ]
+    }
+  },
+  "enforcement": "active",
+  "name": "main",
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
     {
-      "type": "pull_request",
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
       "parameters": {
-        "allowed_merge_methods": ["squash"],
+        "allowed_merge_methods": [
+          "squash"
+        ],
         "dismiss_stale_reviews_on_push": true,
         "require_code_owner_review": false,
         "require_last_push_approval": false,
         "required_approving_review_count": 0,
         "required_review_thread_resolution": false
-      }
+      },
+      "type": "pull_request"
     },
     {
-      "type": "required_status_checks",
       "parameters": {
         "do_not_enforce_on_create": false,
-        "strict_required_status_checks_policy": false,
         "required_status_checks": [
-          { "context": "artifact-check", "integration_id": 15368 },
-          { "context": "gate-linux-arm64", "integration_id": 15368 },
-          { "context": "must-fail", "integration_id": 15368 },
-          { "context": "pins-validate", "integration_id": 15368 },
-          { "context": "resolve", "integration_id": 15368 }
-        ]
-      }
+          {
+            "context": "artifact-check",
+            "integration_id": 15368
+          },
+          {
+            "context": "gate-linux-arm64",
+            "integration_id": 15368
+          },
+          {
+            "context": "lint",
+            "integration_id": 15368
+          },
+          {
+            "context": "must-fail",
+            "integration_id": 15368
+          },
+          {
+            "context": "pins-validate",
+            "integration_id": 15368
+          },
+          {
+            "context": "resolve",
+            "integration_id": 15368
+          }
+        ],
+        "strict_required_status_checks_policy": false
+      },
+      "type": "required_status_checks"
     },
     {
-      "type": "merge_queue",
       "parameters": {
         "check_response_timeout_minutes": 60,
         "grouping_strategy": "ALLGREEN",
@@ -53,7 +78,9 @@
         "merge_method": "SQUASH",
         "min_entries_to_merge": 1,
         "min_entries_to_merge_wait_minutes": 5
-      }
+      },
+      "type": "merge_queue"
     }
-  ]
+  ],
+  "target": "branch"
 }
