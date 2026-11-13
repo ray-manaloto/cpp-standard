@@ -1,4 +1,4 @@
-// Self-hosted Renovate settings for the M0 (f) run. It only looks at the
+// Renovate settings for the M0 (f) run (see README.md). It only looks at the
 // spike fixture and opens at most one PR, on a spike branch prefix. The
 // mise entry is the one setting a repository's Renovate config needs:
 // the mise manager matches only .config/mise/conf.d/*.toml by default

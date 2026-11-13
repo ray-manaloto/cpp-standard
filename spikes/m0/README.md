@@ -36,3 +36,30 @@ Findings for the M0-Linux exit review on 2026-11-16:
   `ci.yml` job names required from setup step 7.
 - The branch refusal was shown with `packslip verify`, which runs the same
   identity check as `packslip install`.
+
+## (f) mise bootstrap and Renovate read `.mise/conf.d/` (2026-11-13)
+
+| Check | Result | Evidence |
+|---|---|---|
+| A test Renovate run (44.239.1, mise manager, `mise.managerFilePatterns` adding `.mise/conf.d/*.toml`) opens a PR for a `conf.d` pin | PASS | [PR #17](https://github.com/ray-manaloto/cpp-standard/pull/17): `spikes/m0/f/.mise/conf.d/old.toml`, node 20.0.0 to 26.13.1; extraction found 1 file, 1 dependency |
+| Control: the same configuration without the pattern, extract-only dry run (`RENOVATE_DRY_RUN=extract`) | finds nothing | its stats line: `"managers": {}, "total": {"fileCount": 0, "depCount": 0}` (local log, not kept) |
+| apt.llvm.org `llvm-toolchain-resolute-23` (key fingerprint 6084 F3CF 814B 57C1 CF12 EFD5 15CF 4D18 AF4F 7421) installs `clang-23`, `clang-tools-23`, `llvm-23`, `libc++-23-dev`, `libc++abi-23-dev`, `libclang-rt-23-dev` on `ubuntu:26.10` | local PASS (container, 2026-11-13; clang 23.1.6); CI run pending | to be linked: the `clang` job of `spike-m0-bj.yml` (PR not yet merged) |
+| Exact `apt-toolchain-host.toml` versions on `ubuntu:26.10` (`apt-cache policy`, 2026-11-13) | recorded | `binutils` 2.47-6ubuntu1, `make` 4.4.1-3 |
+| `mise config ls` loads every fragment exactly as the schema writes it | open | the schema's fragments do not exist until M1a |
+| `mise bootstrap packages status --missing` exits 0 in the built base | open | shown in a plain `ubuntu:26.10` container in (i); the base image comes in M1a |
+
+Findings for the M0-Linux exit review on 2026-11-16:
+
+- **Renovate skips `.mise/conf.d/` by default.** Its mise manager matches
+  only `.config/mise/conf.d/*.toml` (renovatebot/renovate
+  `lib/modules/manager/mise/config-files.ts`). M1b's Renovate config needs
+  `mise.managerFilePatterns: ['/(^|/)\\.mise/conf\\.d/[^/]+\\.toml$/']`.
+- **The run was not an Actions job, by design.** The repository's
+  workflow permissions API reports
+  `"can_approve_pull_request_reviews":false` (2026-11-13), so
+  `GITHUB_TOKEN` cannot open PRs, as §6 requires ("GITHUB_TOKEN never
+  opens PRs"). The file plan has no Renovate workflow, so the daily
+  Renovate is expected to run outside Actions; its identity and token are
+  not settled in the design. Open point for M1b.
+- Two legs of the pass line need the built base, which M1a builds after
+  M0; how to judge them is an exit-review decision.
