@@ -1,7 +1,13 @@
 # cpp-standard: the C++ environment and project standard (Level 1)
 
 - **Author:** ray-manaloto
-- **Status:** EGM review complete (Stage 9 re-audit fixes applied)
+- **Status:** EGM review complete through D98. D99-D107 and the text
+  they changed await their Goldfish review: D101 (glossary, §1, §6, §7,
+  §10 critical path, Alternatives Considered, risks, setup, M1a, file
+  plan), D107 (the fence wording, §3's Linux-run line, the Action SHA
+  line, §7's after-merge look and base switch, the §9 digest list, the
+  risk rows) and D103-D105 (§3, M0 pass lines, hash inputs, owned roots,
+  file plan).
 - **Date:** 2026-11-13
 
 --------------------------------------------------------------------------------
@@ -78,7 +84,7 @@ owner confirmed three such differences:
 | Term | Meaning |
 |---|---|
 | **First-party code** | Everything under `src/` written for this repository. This is the code the 100% coverage rule measures. It does not include fixtures or third-party code. |
-| **Owned roots** | The paths the owner must review through CODEOWNERS (§6, D51, D76), for example workflows, every mise task except a named list, the build scripts and the gate policy. |
+| **Owned roots** | The paths CODEOWNERS assigns to the owner (§6, D51, D76), for example workflows, every mise task except a named list, the build scripts and the gate policy. Since D101 this is documentation, not a merge gate: code-owner review is off, no PR needs a GitHub approval, and the required checks are the gate. |
 | **Pins** | Files that hold only versions, URLs, hashes or sizes. Renovate and agents may change them, and `pins:validate` checks their content (§3). |
 | **Capability lock** | `cmake/capabilities.lock.json`: what each compiler can do in each environment (D42). Never called just "the lock". `.mise/mise.lock` is always named in full. |
 | **Inputs hash** | The 16-hex value computed from an artifact's input files and `.mise/mise.lock` slices (§2). |
@@ -89,7 +95,7 @@ owner confirmed three such differences:
 | **Toolchain pins** | `toolchains/<name>/pins.toml`, one file per toolchain shared by every OS: version or commit, source URL and sha256, `salt` and `host_tools`. Each OS adds its own host inputs to the hash (D85). |
 | **Fetch rule** | How `toolchain:fetch` gets a toolchain in any job: `main`'s signed release for the hash, else the PR run's artifact (merge groups) or cache (PRs), else a rebuild (D83). |
 | **Leaf bump** | An update to an input that only the tools image or a single tool depends on, such as a new cmake. It is the opposite of a compiler or base-image change. |
-| **The fence** | Self-hosted runners run only reviewed `main` code. Agent code runs only in the dev VM and on hosted runners (§6, D48, D58, D70). |
+| **The fence** | Self-hosted runners run only `main` code; since D101 "reviewed" means the agent commit review plus the required checks for agent code, and the required checks alone for Renovate code, not a human review (D107, proposed). Agent code runs only in the dev VM and on hosted runners (§6, D48, D58, D70). |
 | **ut** | Boost.ext ut (`bext-ut`), the header-only C++ unit-test framework. |
 | **Prior repositories** | a private prototype ("the prototype"), glaze-build-setup, cpp-core and the cpp-utilities catalogue each had their own build-preset setup. symphony-cpp built hash-tagged toolchains. dotfiles is the owner's current machine setup; dotfiles-legacy is its older version. cpp-core is a separate project, developed by agents on low-cost models. |
 
@@ -405,13 +411,14 @@ Checks for each compiler and kind of project:
 The configure-time probes (D39) fill in the actual values for each
 environment. The committed capability lock (D42) is the expected state. A
 probe result that differs from the capability lock fails tier 1. A legitimate
-change is accepted by regenerating the capability lock in the same PR, and the
-owner reviews it.
+change is accepted by regenerating the capability lock in the same PR; the
+diff shows the change, and the required checks are the gate (D101). A
+Renovate PR that changes the capability lock still waits for the owner,
+because Renovate does not merge it (D56).
 
-**macOS entries (D78).** The capability lock is an owned root, so a PR that
-changes it already needs the owner's approval. The agent runs `caps:update`
-for macOS in the dev VM, which is macOS on the same Mac, and adds the macOS
-entries to the same PR. The owner reviews that diff. No PR code runs on the
+**macOS entries (D78).** The agent runs `caps:update` for macOS in the dev
+VM, which is macOS on the same Mac, and adds the macOS entries to the same
+PR as the Linux change. No PR code runs on the
 owner's Mac runner. On `main`, a macOS mismatch turns the post-merge macOS
 run red and shows in the digest.
 
@@ -430,7 +437,7 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    | tools image | the base tag, `image/tools.Dockerfile`, `.mise/conf.d/tools.toml`, the linux-`<arch>` slice of `.mise/mise.lock`, and the `.mise/locks/**` sidecars the slice names (D68, D74, D90) |
    | runner image (PC qcow2) | the tools tag, `runner/pc/**`, `runner/hook/job-started.sh` and the pinned actions/runner version (D90) |
    | Mac golden image | `vm/inputs.toml` (Tart base digest and sizes), `image/base.inputs.toml` (the same mise pin), `.mise/conf.d/tools.toml`, the macos-arm64 slice of `.mise/mise.lock`, `.mise/tasks/vm/golden`, `runner/hook/job-started.sh` and the actions/runner version (D68, D74, D86, D90) |
-   | toolchain, Linux | the shared `toolchains/<name>/pins.toml`, `toolchains/<name>/build.sh`, `.mise/conf.d/apt-toolchain-host.toml`, `.mise/conf.d/apt-sources.toml`, and the slice `.mise/mise.lock#linux-<arch>:<host_tools>` (D75, D85, D90) |
+   | toolchain, Linux | the shared `toolchains/<name>/pins.toml`, `toolchains/<name>/build.sh`, the Linux patches under `toolchains/<name>/linux/` (D105), `.mise/conf.d/apt-toolchain-host.toml`, `.mise/conf.d/apt-sources.toml`, and the slice `.mise/mise.lock#linux-<arch>:<host_tools>` (D75, D85, D90) |
    | toolchain, macOS | the shared `toolchains/<name>/pins.toml`, `toolchains/<name>/build.sh`, the Mac recipe patches under `toolchains/<name>/macos/`, `vm/inputs.toml`, and the slice `.mise/mise.lock#macos-arm64:<host_tools>` (D85) |
 
    - **One shared pins file per toolchain (D85).** `toolchains/<name>/pins.toml`
@@ -639,7 +646,8 @@ with mode 644. Five pins fragments live in `.mise/conf.d/`, which mise loads
   file.
 - **`apt.toml`**, `[bootstrap.packages]` only, all with `os = ["linux"]`:
   - from apt.llvm.org: `clang-23`, `libc++-23-dev`, `llvm-23` (it ships
-    `llvm-cov-23`) and the rest;
+    `llvm-cov-23`), `libclang-rt-23-dev` (it ships the profile runtime
+    `--coverage` links, D105) and the rest;
   - from the Ubuntu archive: valgrind, bison, flex, m4 and texinfo.
 
 `pins:validate` (D51) is a required hosted check. It makes sure:
@@ -695,7 +703,7 @@ argument, so no `.git` directory is needed in a build.
 
 **Linux runs from inside the VM** (D48, D71). `mise run linux:run` pushes the
 branch, dispatches `ci.yml` for it on hosted runners as the agent App, and
-follows the run with `gh run watch`. Unreviewed code never reaches the PC this
+follows the run with `gh run watch`. Code not yet on `main` never reaches the PC this
 way. The owner's own interactive Linux work uses the devcontainer on the PC,
 opened from the Mac host terminal (D70).
 
@@ -837,8 +845,11 @@ flowchart TB
   pub --> rel[releases + GHCR]
 ```
 
-- **The fence.** Self-hosted runners run only reviewed `main` code. Agent
-  code runs only in the dev VM and on hosted runners.
+- **The fence.** Self-hosted runners run only `main` code. Since D101 no
+  human reviews it: agent code has passed the agent commit review and the
+  required checks, and Renovate code only the required checks (D107,
+  proposed). Agent code runs only in the dev VM and on
+  hosted runners.
 - **Branches and PRs do run before `main`.** Every push runs the full Linux
   gate on hosted runners. Agents run the macOS gate, and `caps:update`, in
   their dev VM. The Mac runner never runs a PR's code; the post-merge macOS
@@ -880,8 +891,12 @@ flowchart TB
   deployment branch policy allows only `main`. One job in
   `repo-verify.yml` uses it, on `schedule` and `workflow_dispatch` from
   `main` only (D92). The same PAT serves
-  every future C++ project, so a leak exposes them all; code-owner review
-  on `.github/**` is the guard.
+  every future C++ project, so a leak exposes them all. Since D101 no human
+  review guards `.github/**`; the guards are the required checks, the
+  agent rules' reviewer approval on every commit, and the job's
+  `main`-only environment. An agent PR that changes `repo-verify.yml`
+  merges on those checks, and the agent App can then dispatch it from
+  `main` with the PAT; D107 (proposed) records this as an accepted risk.
 - **Job permissions (D60, D94).** Every workflow sets `permissions: {}` at
   the top and grants per job:
 
@@ -917,7 +932,12 @@ flowchart TB
     (D65).
   - PC SSH and Docker access exist only on the Mac host. The tailnet ACL lets
     only the Mac host's tag reach the PC's SSH (D70).
-- **Owned roots (D51, D64, D76)** need the owner's review through CODEOWNERS:
+- **Owned roots (D51, D64, D76)** are the paths CODEOWNERS assigns to the
+  owner. Since D101 CODEOWNERS is documentation: code-owner review is off,
+  no PR needs a GitHub approval, and the required checks are the gate.
+  Renovate PRs with a major compiler bump or a capability lock change
+  still wait for the owner, because Renovate does not merge them (D56).
+  The list:
   - `.github/**` (including CODEOWNERS);
   - `renovate.json5`;
   - `mise.toml`;
@@ -928,20 +948,23 @@ flowchart TB
   - `cmake/capabilities.lock.json`;
   - `gate-policy.toml`, `hk.pkl` and its settings files (`.editorconfig`,
     `.rumdl.toml`, `.ryl.toml`, `_typos.toml`, D102), and `.jouet/**`;
-  - `toolchains/*/build.sh` and the Mac recipe patches `toolchains/*/macos/**`;
+  - `toolchains/*/build.sh`, the Mac recipe patches `toolchains/*/macos/**`
+    and the Linux patches `toolchains/*/linux/**`;
   - `image/*.Dockerfile` and `runner/**`;
   - `pins-allowlist.toml`.
 
-  Everything else (`src/`, `tests/`, presets, probes, docs and the pins)
-  merges without owner review once the checks pass. The guards are the
-  capability lock, the gate policy, the fixtures and `pins:validate`.
+  Every PR, owned root or not, merges once the required checks pass,
+  apart from the Renovate PRs above. The
+  guards are the capability lock, the gate policy, the fixtures,
+  `pins:validate`, and for agent PRs the agent rules' reviewer approval
+  on each commit; Renovate PRs pass the checks only.
 - **Identities (D40, D52, D71).**
   - Agents push, open PRs and dispatch workflows as the agent App. It has
     contents, pull_requests, workflows and actions write, on cpp-standard
     only.
   - gha-outrunner registers runners with the runner PAT.
   - GITHUB_TOKEN never opens PRs.
-- **The repository settings are checked daily (D53, D60, D63, D100).** `mise run
+- **The repository settings are checked daily (D53, D60, D63, D100, D101).** `mise run
   repo:rulesets --verify` fails if:
   - `main` turns code-owner review back on (D101), stops dismissing stale
     approvals, or starts requiring approval of the most recent reviewable
@@ -974,21 +997,28 @@ flowchart TB
     macOS builds after merge.
   - The daily tools PR touches only `tools.toml` and `.mise/mise.lock`, both
     pins (D74).
-  - Action SHAs live in `.github/**`, so they are owner-reviewed and
-    batched weekly.
-- **Merge rule (D50, D56).** This is the one statement of it.
-  - **A Renovate PR merges without owner review when** the gate is green in
-    its own image, the capability lock is unchanged, and the fixtures pass.
+  - Action SHAs live in `.github/**` and are batched weekly; since D101
+    the batch merges on the checks (D107, proposed).
+- **Merge rule (D50, D56, D101).** This is the one statement of it.
+  - **A Renovate PR merges when** the gate is green in its own image, the
+    capability lock is unchanged, and the fixtures pass; no PR needs a
+    GitHub approval, since code-owner review is off (D101).
     The owner confirmed this covers LLVM minor bumps, p2996 commits, GCC
     tarball and patch changes, and Ubuntu `g++-16` updates (D56). Compiler
     changes that no probe detects, such as codegen or new diagnostics, are
     guarded only by `-Werror` and the tests.
-  - **The owner reviews:** major compiler bumps, capability lock changes,
-    and owned roots. There are no Mac-only pins (D85): a macOS-only breakage
-    shows as a red post-merge macOS build, which the owner fixes or reverts.
+  - **The owner reviews major compiler bumps and capability lock changes
+    (D56):** Renovate does not merge them itself, so they wait for the
+    owner to merge them; this is a Renovate rule, not a GitHub review.
+  - **The owner looks at owned-root changes after merge (D101; D107, proposed):**
+    in the merged PR diffs and git history, and from M1b in
+    `review:digest`.
+    There are no Mac-only pins (D85): a macOS-only breakage shows as a red
+    post-merge macOS build, which the owner fixes or reverts.
 - **Base upgrades (D36, D47).** In Level 1 this is a written process only:
   - build a new Ubuntu or Tart base next to the current one;
-  - the owner approves the switch;
+  - the owner merges the switch PR; Renovate does not merge it (D107,
+    proposed);
   - the old base is kept 30 days.
 
 ### 8. Performance metrics (D35, D46)
@@ -1022,6 +1052,7 @@ This table is the standard. In Level 1 only the first row has a task:
   - merged commits;
   - red runs;
   - Renovate PRs waiting for the owner;
+  - merged PRs that touch owned roots (D107, proposed);
   - capability lock changes;
   - the repository settings check;
   - tier-2 reports;
@@ -1038,7 +1069,7 @@ This table is the standard. In Level 1 only the first row has a task:
 3. the owned encoder module;
 4. tier-1 `mise run ci` for those presets, with the capability lock, the gate
    policy and the fixtures;
-5. the merge queue, CODEOWNERS, the repository settings check and
+5. the merge queue, CODEOWNERS (documentation, D101), the repository settings check and
    `pins:validate`;
 6. the M1a trust work, and nothing more (D77): `main`-only publishing,
    packslip signing with `toolchain:fetch`, image attestations with
@@ -1147,7 +1178,7 @@ cut-order item early.
 | p2996 | Built by the hash-keyed builder on every platform, with daily checks. | D30, D32, D49 |
 | Renovate | Daily; it merges without review on green with an unchanged capability lock. | D31, D50, D61 |
 | Performance | The metrics table is the standard; only instruction counts are in Level 1. | D35, D46 |
-| Ubuntu upgrades | Side by side, with the owner approving the switch; a written process in Level 1. | D36, D47 |
+| Ubuntu upgrades | Side by side, with the owner merging the switch PR; a written process in Level 1. | D36, D47, D107 |
 | Probe results | Compared against a committed capability lock. | D42 |
 | Artifact trust | The packslip CLI (`toolchain:fetch`) for toolchains, attestations (`image:verify`) for images, `main`-only publishing; one fetch rule: `main`'s release, else the PR run's artifact or cache, else a rebuild. | D59, D60, D72, D83 |
 | Runner VMs | gha-outrunner, one VM per job, on the PC and the Mac. | D65 |
@@ -1247,7 +1278,11 @@ Each names the section it relates to.
 - **Automerge everything green, or review everything** (§7). Rejected by
   author (D34, D50).
   - Automerging capability lock changes or major compiler bumps lets a
-    weakened check merge unseen.
+    weakened check merge unseen. D101 leaves this rule as it is: Renovate
+    PRs that change the capability lock or bump a major compiler version
+    still wait for the owner (D56). Agent PRs that change the lock do
+    merge on the checks, which accepts this risk for them (D107,
+    proposed).
   - Reviewing every PR brings back the churn.
 - **An in-place or manual Ubuntu base bump** (§7). Rejected by author
   (D36). An in-place bump that goes red blocks every image update, and a
@@ -1340,7 +1375,7 @@ Each names the section it relates to.
   (D74). One fewer file, but the daily tools PR would then need the owner.
 - **`mac-probe.yml`, owner-approved PR runs on the real Mac** (§6).
   Rejected by author (D78). It catches host-only differences before merge,
-  but adds a fence exception for a file the owner already reviews; the dev
+  but adds a fence exception for a file the owner reviewed before D101; the dev
   VM's `caps:update` and the post-merge run cover it.
 - **The Ubuntu digest in the owned Dockerfile** (§3). Rejected by author
   (D69). It would need an owner review almost daily.
@@ -1407,16 +1442,19 @@ Each names the section it relates to.
 | A hosted p2996 build with compiler-rt runs out of disk or time | unproven | M0 (h) | `/mnt` after freeing toolsets (a container job only moves to `/mnt`); only needed runtimes; a larger hosted runner for arm64 from `main` | D67 |
 | The fence depends on the runner hook and image being intact | accepted | M2 entry-gate negative tests; images rebuilt only from `main` | Read-only root-owned hook; worker killed on refusal; images built from attested tools tags | D58 |
 | The hook can't call the API (no token) | limit | actions/runner#2813 | It checks event, ref, workflow and repository only, which is enough for the fence | D58 |
-| Agent-edited workflows run before review | accepted | a same-repo PR changes `.github/**` | They can't reach the PC or Mac (D58) or produce anything `main` trusts (D59). What remains: `pr-` artifacts and caches, hosted minutes, and deleting a release, which a `salt` bump recovers | D54, D60, D72 |
-| Agents can dispatch `main`'s workflows and cancel or disable workflows | accepted | `actions: write` on the agent App | Dispatched runs execute reviewed `main` code; the daily settings check fails on a disabled workflow | D60, D71 |
+| Agent-edited workflows run before merge | accepted | a same-repo PR changes `.github/**` | Before merge they can't reach the PC or Mac (D58) or produce anything `main` trusts (D59); after merge (D101) they are `main` code, covered by the self-hosted workflow, `RULESETS_PAT` and `builder.yml` rows. What remains before merge: `pr-` artifacts and caches, hosted minutes, and deleting a release, which a `salt` bump recovers | D54, D60, D72 |
+| An agent PR changes `repo-verify.yml`, and a dispatch from `main` runs it with `RULESETS_PAT` | proposed (D107) | a merged PR changes the job that holds the `audit` environment | The PAT has Administration write and serves every future C++ project. The guards are the required checks, the agent commit review and the `main`-only environment; the owner sees the change in the merged PR diff and git history | D92, D101, D107 |
+| An agent PR changes an allowlisted self-hosted workflow, and its code runs on the PC and Mac | proposed (D107) | a PR changes `post-merge.yml` or another workflow that self-hosted runners run | It merges on the required checks with no human review (D101). The owner sees it in the merged PR diff and git history, and from M1b in `review:digest`; `builder.yml` is the signing case of this risk | D48, D53, D101, D107 |
+| An agent PR weakens a probe and regenerates the capability lock to match | proposed (D107) | a PR changes `cmake/probes.cmake` and `cmake/capabilities.lock.json` together | Tier 1 passes, because it only compares the lock with the probes. The lock diff shows the lost capability; the owner sees it in the merged PR diff and git history, and from M1b in `review:digest` | D42, D101, D107 |
+| Agents can dispatch `main`'s workflows and cancel or disable workflows | accepted | `actions: write` on the agent App | Dispatched runs execute merged `main` code; the daily settings check fails on a disabled workflow | D60, D71 |
 | packslip rejects `+hash` versions, or `--identity` doesn't pin the ref | unproven | M0 (i) packslip leg | Toolchains go on GHCR with attestations, and `toolchain:fetch` runs the same check as `image:verify` | D72 |
 | A PR job's toolchain cache is evicted | limit | `actions/cache` miss | The one fetch rule: `main`'s release for the hash, else the PR run's artifact (merge groups) or cache (PRs), else a rebuild (61-76 minutes or more). A miss never fails a job. M0 (h) records the toolchain sizes against the 10 GB quota; M0 (i) confirms the cache scoping | D72, D83 |
-| The dev VM's CPU features differ from the Mac host's | accepted | `caps:update` in the VM gives a different capability lock than the post-merge run | The owner reviews capability lock changes; the post-merge run on the Mac runner is the backstop | D78 |
+| The dev VM's CPU features differ from the Mac host's | accepted | `caps:update` in the VM gives a different capability lock than the post-merge run | The capability lock diff is in the PR, and the post-merge run on the Mac runner is the backstop (D101: no approval gate) | D78, D101 |
 | The PC runner and its stack cost more than they return before 2026-11-27 | scale | M2 entry gate slips | The PC runner is cut before Mac GCC; amd64 keeps running on hosted runners | D77 |
-| The packslip and attestation trust rests on GitHub's OIDC identity for `builder.yml` on `main` | accepted | — | `main` is protected by the ruleset and the merge queue; `builder.yml` is an owned root | D59 |
+| The packslip and attestation trust rests on GitHub's OIDC identity for `builder.yml` on `main` | accepted | — | `main` is protected by the ruleset, the required checks and the merge queue. Accepted risk (D101): an agent PR that changes `builder.yml` merges once the checks pass, with no human review | D59, D101 |
 | The runner PAT's Administration write can also change rulesets | accepted | the PAT leaks from a host | Fine-grained, cpp-standard only, short expiry, never in a VM; the daily settings check; an org-level fine-grained "Self-hosted runners" permission, if GitHub offers it, would narrow it | D65 |
 | gha-outrunner is young (v1.2.0, 7 stars), and its libvirt runner runs as root inside the VM | dependency | M2 entry gate | Vendor or fork it if it stalls; root inside a one-job VM is contained by the VM; incuse and runscaler are the fallbacks | D65 |
-| VM boot adds 25-60 seconds per self-hosted job | limit | — | Only reviewed `main` jobs use self-hosted runners | D65 |
+| VM boot adds 25-60 seconds per self-hosted job | limit | — | Only `main` jobs use self-hosted runners | D65 |
 | jouet's edit-time rules can be bypassed | accepted | an agent edits jouet's config, or uses a harness without hooks | The gate's policy check is the enforcement; `/etc/jouet/rules` is an optional later owner step | D64 |
 | Undetected compiler changes merge without review | accepted | codegen or new diagnostics with an unchanged capability lock | `-Werror` and the tests | D56 |
 | Merge-queue input combinations stall the queue | limit | two input-changing PRs queued together | The builder runs on `merge_group`; tool bumps are grouped | D61 |
@@ -1473,17 +1511,17 @@ history. So nothing unscrubbed is ever pushed.
    setting (§6). Done when `gh api repos/{repo}` shows `"visibility":
    "public"` and the approval policy reads `all_external_contributors`.
 5. **The `main` ruleset with the merge queue, without required checks**:
-   `mise run repo:rulesets --phase bootstrap`. The ruleset holds code-owner
-   review, dismiss stale approvals, no bypass actors other than the owner,
+   `mise run repo:rulesets --phase bootstrap`. The ruleset held code-owner
+   review until D101 turned it off at step 7; it holds dismiss stale approvals, no bypass actors other than the owner,
    no force-push, and the merge queue. It does not require approval of the
    most recent reviewable push (D100). Done when `repo:rulesets --verify
    --phase bootstrap` passes; that phase skips the required-check list and
    the M1b settings.
 6. **The agent App** (D40, D52, D71), through GitHub's App-manifest flow
    (`docs/runbooks/agent-app.md`).
-   - **First, CODEOWNERS (D100).** Code-owner review protects nothing until
-     `.github/CODEOWNERS` exists, so the App never exists on a `main`
-     without it. A PR from the owner's login adds the first version (the
+   - **First, CODEOWNERS (D100).** Code-owner review, on until D101, protected
+     nothing until `.github/CODEOWNERS` existed, so the App was created only
+     after `main` held it. A PR from the owner's login adds the first version (the
      §6 owned roots). GitHub does not let an author approve their own PR,
      so the owner confirms its exact text outside GitHub's review, and it
      merges through the queue with no GitHub review. It is in place when
@@ -1500,11 +1538,13 @@ history. So nothing unscrubbed is ever pushed.
 
    Done when `agent:token` mints a token, `gh api
    /installation/repositories` with it lists only cpp-standard, and a
-   one-off App PR that touches `.github/CODEOWNERS` shows
-   `mergeStateStatus` `BLOCKED` until the owner approves; that PR is then
-   closed.
+   one-off App PR that touches `.github/CODEOWNERS` showed
+   `mergeStateStatus` `BLOCKED` (the queue refused it: waiting on code
+   owner review), and it was closed without approval. Since D101 such a PR merges once the checks pass.
 7. **M0 (i)**, with a test PR that changes a toolchain input and goes through
-   the merge queue, then deletes its test release and tag. Done when the M0
+   the merge queue, then deletes its test release and tag. This step also
+   turned code-owner review off and made the `ci.yml` job names required
+   (D101). Done when the M0
    README line for (i) passes.
 8. **The design PR.** Push the squashed `design/level-1` and merge it
    through the queue. Done when `main` contains `docs/designs/`.
@@ -1513,9 +1553,11 @@ history. So nothing unscrubbed is ever pushed.
    from Doppler with `gh secret set --env audit`. `repo-verify.yml` arrives
    in M1a PR 6; until then this step only creates the environment. Done
    when `gh api repos/{repo}/environments/audit` shows the branch policy.
-10. **Required checks**, after M1a PR 6 merges: `main.json` gains the
-    required job names (D93), `repo:rulesets --phase m1a` applies it. Done
-    when `repo-verify.yml`, run by `workflow_dispatch`, passes `--verify
+10. **Required checks.** D101 moved them to setup step 7: `main.json`
+    requires the `ci.yml` job names (D93) and `repo:rulesets --phase m1a`
+    applied it then, with stub jobs (and the real `lint` job, D102) that M1a
+    replaces. What is left for this step, after M1a PR 6 merges: done when
+    `repo-verify.yml`, run by `workflow_dispatch`, passes `--verify
     --phase m1a`.
 
 **Tart on the Mac** runs in parallel with steps 1-10, because M0-Mac (a)
@@ -1539,8 +1581,10 @@ runs on hosted runners.
 - (c) p2996 builds compiler-rt, and an ASan and a `--coverage` test run;
 - (f) first, `mise config ls` loads `mise.toml` and every `.mise/conf.d/*.toml` exactly as written in the schema below, with no parse error; then `mise bootstrap packages status --missing` exits 0 in the built base,
   and a test Renovate run opens a PR for a `conf.d` pin; fallback: move the
-  fragments into `mise.toml` `include =` files;
-- (g) clang-format keeps `^^T` and `[: e :]` unchanged; fallback: `// clang-format off` around splices, recorded in `docs/standard/build.md`;
+  fragments into `mise.toml` `include =` files (the first two legs pass on
+  the spike evidence and M1a re-checks them; Renovate needs one
+  `managerFilePatterns` entry, D104);
+- (g) clang-format keeps `^^T` and `[: e :]` unchanged; fallback: `// clang-format off` around splices, recorded in `docs/standard/build.md` (taken, D103);
 - (h) a cold p2996 build fits the runner's free disk with at least
   10 GB spare and finishes inside 6 hours (the job limit); else the
   fallbacks in §10, in order;
@@ -1562,10 +1606,9 @@ only when its check holds:
    green on GCC and clang;
 5. `src/fix/encoder.cppm` and its tests: 100% coverage on GCC, and on p2996
    unless M0 (j) took its fallback (then p2996 coverage is report-only);
-6. the full `ci.yml`, the complete CODEOWNERS (replacing the step 6
-   version), the full `repo:rulesets`, `agent:token`
-   tests, `repo-verify.yml` and the App-PR test: setup step 10 passes and
-   the App PR stays blocked.
+6. the full `ci.yml`, the complete CODEOWNERS as documentation (replacing
+   the step 6 version, D101), the full `repo:rulesets`, `agent:token` tests
+   and `repo-verify.yml`: setup step 10 passes.
 
 M1a is done when every PR above has merged and a `main` run of `ci.yml` is
 green on all M1a presets: `gcc16`, `p2996`, `clang23`, each with
@@ -1598,6 +1641,7 @@ is green, or cut at its §10 cut date.
 | `toolchains/p2996/build.sh` **(O)** | The build steps from `docs/designs/level-1/research/p2996-linux.md`, plus compiler-rt, libcxx, libcxxabi, libunwind and the `llvm-cov` and `llvm-profdata` tools (D88). All CMake arguments live here. The macOS branch comes from dotfiles (D30), with a link. The smoke test runs a P2996 `members_of` program with ASan and coverage. |
 | `toolchains/p2996/pins.toml` **(P)** | Shared by Linux and macOS (D85): the commit (`562409c7`), source URL and sha256, `salt`, and `host_tools = ["cmake", "ninja"]`. Renovate bumps the commit in one PR for every OS (D32). |
 | `toolchains/p2996/macos/**` **(O)** | The macOS patches from dotfiles (D30), with a link; a macOS hash input. |
+| `toolchains/p2996/linux/**` **(O)** | The Linux patches: the `linux/scc.h` removal (llvm/llvm-project 3dc4fd6) from `spikes/m0/h/patches/`, until p2996 rebases past it (D105); a Linux hash input. |
 | `image/base.Dockerfile`, `image/tools.Dockerfile` **(O)** | The two layers (§3). `FROM ubuntu@sha256:<digest>` and `FROM base@sha256:<digest>`, both from build arguments, never a tag. The builder job frees disk first and probes GHCR for the tag, treating any probe error other than "not found" as a failure; both steps come from dotfiles-legacy `dotfiles/.github/workflows/build-publish.yml` (the probe at lines 205-216, and `jlumbroso/free-disk-space` pinned by SHA at line 221), with a link (D90). |
 | `.devcontainer/devcontainer.json`, `.devcontainer/compose.yaml` | `initializeCommand` runs `mise run image:verify tools --env-file .devcontainer/.env`, which writes the verified `CPPSTD_TOOLS_IMAGE=ghcr.io/ray-manaloto/cpp-standard/tools@sha256:<digest>`; `dockerComposeFile` reads `image: ${CPPSTD_TOOLS_IMAGE}` from that `.env`, so the pulled image is the one verified (a devcontainer `image` can't take a computed value). `postCreateCommand` runs `toolchain:fetch` and `doctor`. Runs as the non-root user and mounts an sccache volume (D93). |
 | `CMakeLists.txt` | Requires CMake 4.5, includes `cmake/probes.cmake`, and adds `src/`, `tests/` and `fixtures/must-fail/` (the fixtures only when `CPPSTD_MUST_FAIL=ON`). |
@@ -1622,10 +1666,9 @@ is green, or cut at its §10 cut date.
 | `.editorconfig`, `.rumdl.toml`, `.ryl.toml`, `_typos.toml` **(O)** | Settings for the hk steps: shfmt indents, Markdown rules, YAML rules and spell-check exceptions (D102). |
 | `.github/workflows/builder.yml` **(O)** | Runs on a schedule, on dispatch, on PRs that change an input, and on `merge_group` (D61). PR and merge-queue hashes build on hosted runners; `main` hashes build in PC runner VMs or on hosted arm64, and macOS hashes in Mac runner VMs. A final hosted job publishes (§2, D59). |
 | `.github/workflows/post-merge.yml` **(O)** | Runs on push to `main`. It uses hosted runners until M2, then the PC for heavy Linux jobs. |
-| `.github/CODEOWNERS` **(O)** | The owner on every (O) path, including `.mise/tasks/**` with the agent-editable list from §6 excluded (D51, D64, D76). First version in setup step 6, before the agent App exists (D100). |
+| `.github/CODEOWNERS` **(O)** | The owner on every (O) path, including `.mise/tasks/**` with the agent-editable list from §6 excluded (D51, D64, D76). First version in setup step 6, before the agent App exists (D100). Documentation only since D101: code-owner review is off. |
 | `.github/rulesets/main.json` **(O)** + `.mise/tasks/repo/rulesets` **(O)** | The rulesets as files. `repo:rulesets --phase bootstrap\|m1a\|m1b` applies them through `gh api`; `--verify --phase <p>` checks the §6 list for that phase: `bootstrap` skips required checks and M1b settings, `m1a` adds the required checks, `m1b` adds immutable releases and the tag ruleset. First version in setup step 3 (D53, D60, D63, D97). |
 | `.github/workflows/repo-verify.yml` **(O)** | Runs `repo:rulesets --verify --phase <current>` daily and on `workflow_dispatch`, in the `audit` environment with `RULESETS_PAT` (D92). |
-| `tests/repo/app_pr_blocked.md` + `.mise/tasks/repo/test-app-pr` **(O)** | The M1a test: as the agent App, open a PR that touches `.github/CODEOWNERS`, and check with `gh pr view --json mergeStateStatus` that it stays blocked until the owner approves; then close it. |
 | `docs/standard/compilers.md`, `build.md`, `checks.md` | The §1 tables and roles. Presets, probes, the capability lock, triplets and sccache. Tiers, coverage, the gate policy and fixtures. |
 | `docs/runbooks/agent-app.md` | The App-manifest steps, and the token path into the dev VM. |
 | `.mise/tasks/agent/token` **(O)** | M1a: a git and gh credential helper on the Mac host. It reads the App key from the Keychain item `cpp-standard-agent-app`, signs a 9-minute JWT with `openssl` (RS256), finds the installation with `GET /repos/ray-manaloto/cpp-standard/installation`, and mints a one-hour installation token, cached until 5 minutes before expiry. Agents run `gh` through `GH_TOKEN=$(mise run agent:token)`; git uses it as `credential.helper`. The key is never printed. Test: `tests/agent_token/` checks the token's repository list and that the key never reaches stdout. Fallback: the owner's own `gh` login (D71, D80, D84). The launchd job and Tart shared directory come in M3 with `vm/dev`. |
@@ -1667,8 +1710,8 @@ fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 # .mise/conf.d/apt-toolchain-host.toml (P), the only section allowed (D75):
 [bootstrap.packages]
 "apt:g++-16" = { version = "16.2.0-3ubuntu1", os = ["linux"] }
-"apt:binutils" = { version = "<exact, verified in M0 (f)>", os = ["linux"] }
-"apt:make" = { version = "<exact, verified in M0 (f)>", os = ["linux"] }
+"apt:binutils" = { version = "2.47-6ubuntu1", os = ["linux"] }  # M0 (f), D105
+"apt:make" = { version = "4.4.1-3", os = ["linux"] }  # M0 (f), D105
 "apt:libc6-dev" = { version = "<exact>", os = ["linux"] }
 
 # .mise/conf.d/apt.toml (P), the only section allowed, same table form:
