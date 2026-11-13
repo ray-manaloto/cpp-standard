@@ -1,5 +1,6 @@
 # First version, from setup step 6 (environment-standard.md section 6, D51,
-# D64, D76, D100). The owner must approve any change to these paths.
+# D64, D76, D100). Since D101 the ruleset does not require code-owner
+# review, so this file records ownership but enforces nothing.
 # M1a PR 6 replaces this file with the complete version.
 # A later line with no owner removes ownership from the paths it matches.
 

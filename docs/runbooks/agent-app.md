@@ -94,8 +94,9 @@ Done when:
 
 - the first command prints `minted`;
 - the second prints exactly `["ray-manaloto/cpp-standard"]`;
-- a one-off App PR that touches `.github/CODEOWNERS`, with every check
-  green, shows `mergeStateStatus` `BLOCKED`, and adding it to the merge queue
+- (setup step 6 only, before D101 turned code-owner review off) a
+  one-off App PR that touches `.github/CODEOWNERS`, with every check
+  green, showed `mergeStateStatus` `BLOCKED`, and adding it to the merge queue
   as the App fails with a message that contains "Waiting on code owner review
   from ray-manaloto/owner":
 

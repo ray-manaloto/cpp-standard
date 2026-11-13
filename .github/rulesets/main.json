@@ -23,10 +23,24 @@
       "parameters": {
         "allowed_merge_methods": ["squash"],
         "dismiss_stale_reviews_on_push": true,
-        "require_code_owner_review": true,
+        "require_code_owner_review": false,
         "require_last_push_approval": false,
         "required_approving_review_count": 0,
         "required_review_thread_resolution": false
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [
+          { "context": "artifact-check", "integration_id": 15368 },
+          { "context": "gate-linux-arm64", "integration_id": 15368 },
+          { "context": "must-fail", "integration_id": 15368 },
+          { "context": "pins-validate", "integration_id": 15368 },
+          { "context": "resolve", "integration_id": 15368 }
+        ]
       }
     },
     {
