@@ -266,12 +266,24 @@ jobs:
           # The committed lock was generated from nothing on the Mac host with
           # mise 2026.11.8. Remove it, so mise resolves everything again.
           cp -a .mise "$RUNNER_TEMP/mac"
+          # mise lock needs uv on PATH for the PyPI sidecars; install the
+          # pinned uv from the committed lock first.
+          mise install uv
+          PATH="$(dirname "$(mise which uv)"):$PATH"
+          uv --version
           rm -rf .mise/mise.lock .mise/locks
           mise lock --platform macos-arm64,linux-x64,linux-arm64
           if diff -r "$RUNNER_TEMP/mac" .mise; then
             echo "M0 (i) PASS: the lock regenerates the same on the Mac and in the container"
           else
-            echo "::error::M0 (i) FAIL: the regenerated lock differs from the Mac's"
+            # uv.lock carries exclude-newer, a time set when it is written, and
+            # mise.lock carries the sidecar digest. Say whether they are all
+            # that differs, for the M0 exit review.
+            if diff -r -I '^exclude-newer = ' -I '^uv = { path = ' "$RUNNER_TEMP/mac" .mise >/dev/null; then
+              echo "::error::M0 (i) FAIL: the lock differs only in exclude-newer and the sidecar digest"
+            else
+              echo "::error::M0 (i) FAIL: the regenerated lock differs from the Mac's beyond exclude-newer"
+            fi
             exit 1
           fi
       - if: always()

@@ -3,7 +3,7 @@ revision = 5
 requires-python = ">=3.8"
 
 [options]
-exclude-newer = "2026-11-12T17:45:33.072533Z"
+exclude-newer = "2026-11-12T17:56:31.39486Z"
 
 [[package]]
 name = "clang-format"
