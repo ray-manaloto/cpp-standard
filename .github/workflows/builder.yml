@@ -1,7 +1,18 @@
-# Minimal builder from setup step 3: only the publish job, which has
-# nothing to publish yet. M0 (i) and M1a add the build and publish steps
-# (environment-standard.md section 2, D59, D98). Toolchain signatures name
-# this file at refs/heads/main, so its path must not change.
+# M0 (i) spike builder (environment-standard.md section 10, setup step 7).
+# It tests the packslip and cache leg with a toy toolchain built from
+# spikes/m0/i/input.txt. M1a replaces these jobs with the real builder
+# (section 2, D59, D98). Toolchain signatures name this file at
+# refs/heads/main, so its path must not change.
+#
+#   pull_request   build: uploads the artifact and saves the PR cache
+#   merge_group    build, mq-fetch: the PR cache must miss and the PR run's
+#                  artifact (by run id) must be readable
+#   dispatch main  build, publish: draft, upload, sign, publish, then
+#                  packslip install with the exact main identity
+#   dispatch other build, branch-sign: a bundle signed on a branch must be
+#                  refused for the main identity
+#   every event    mise-checks: bootstrap status and lock regeneration in
+#                  an Ubuntu container with the pinned mise
 name: builder
 
 on:
@@ -11,9 +22,274 @@ on:
 
 permissions: {}
 
+env:
+  PROJECT: m0i-linux-arm64
+  IDENTITY: https://github.com/ray-manaloto/cpp-standard/.github/workflows/builder.yml@refs/heads/main
+  ISSUER: https://token.actions.githubusercontent.com
+
 jobs:
-  publish:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - run: echo "nothing to publish until M0 (i)"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: tag
+        name: Compute the artifact tag
+        shell: bash
+        run: |
+          hash="$({ echo 'schema = 1'; cat spikes/m0/i/input.txt; } | sha256sum | cut -c1-16)"
+          echo "tag=$PROJECT-$hash" >> "$GITHUB_OUTPUT"
+      - name: Build the toy toolchain
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          mkdir -p stage/bin "dist/$TAG"
+          printf '#!/bin/sh\necho "%s"\n' "$TAG" > stage/bin/m0i
+          chmod 755 stage/bin/m0i
+          tar -C stage --zstd -cf "dist/$TAG/$TAG.tar.zst" bin
+          echo "${TAG##*-}" > "dist/$TAG/inputs-hash.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: toolchain-${{ steps.tag.outputs.tag }}
+          path: dist/${{ steps.tag.outputs.tag }}/
+          retention-days: 7
+      - if: github.event_name == 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist/${{ steps.tag.outputs.tag }}/
+          key: toolchain-${{ steps.tag.outputs.tag }}
+
+  mq-fetch:
+    if: github.event_name == 'merge_group'
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      pull-requests: read
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - id: pr
+        name: Find the PR, and check that its run saved the cache
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          n="$(sed -E 's#^gh-readonly-queue/[^/]+/pr-([0-9]+)-.*#\1#' <<<"$REF")"
+          [[ "$n" =~ ^[0-9]+$ ]] || { echo "::error::no PR number in $REF"; exit 1; }
+          echo "n=$n" >> "$GITHUB_OUTPUT"
+          # Without this, a miss below would prove nothing about ref scoping.
+          saved="$(gh api "repos/$GITHUB_REPOSITORY/actions/caches?key=toolchain-$TAG&ref=refs/pull/$n/merge" \
+            --jq '[.actions_caches[] | select(.key == "toolchain-'"$TAG"'")] | length')"
+          if [[ "$saved" -lt 1 ]]; then
+            echo "::error::the PR run saved no cache toolchain-$TAG on refs/pull/$n/merge"
+            exit 1
+          fi
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist/${{ needs.build.outputs.tag }}/
+          key: toolchain-${{ needs.build.outputs.tag }}
+          lookup-only: true
+      - name: Check that the PR cache is not readable here
+        env:
+          HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          if [[ "$HIT" == true ]]; then
+            echo "::error::M0 (i) FAIL: the PR cache is readable from the merge-group ref"
+            exit 1
+          fi
+          echo "M0 (i) PASS: the PR cache is not readable from the merge-group ref"
+      - id: run
+        name: Find the PR builder run
+        env:
+          N: ${{ steps.pr.outputs.n }}
+        run: |
+          head="$(gh pr view "$N" -R "$GITHUB_REPOSITORY" --json headRefOid -q .headRefOid)"
+          # The newest PR run for the head; the artifact download below shows
+          # whether its build job uploaded, whatever the other jobs did.
+          id="$(gh run list -R "$GITHUB_REPOSITORY" --workflow builder.yml --commit "$head" \
+            --event pull_request --json databaseId -q '.[0].databaseId')"
+          [[ -n "$id" ]] || { echo "::error::no PR builder run for $head"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: toolchain-${{ needs.build.outputs.tag }}
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+          path: staged/
+      - name: Check the PR run's artifact
+        run: |
+          test -s "staged/$TAG.tar.zst"
+          test "$(cat staged/inputs-hash.txt)" = "${TAG##*-}"
+          echo "M0 (i) PASS: the PR run's artifact is readable by run id"
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+      # run_attempt keeps a re-run from colliding with a failed attempt's draft.
+      VERSION: 0.0.1-r.${{ github.run_number }}.${{ github.run_attempt }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: toolchain-${{ needs.build.outputs.tag }}
+          path: dist/
+      - id: names
+        run: echo "release=$PROJECT-v$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Create a draft release and upload the files
+        env:
+          RELEASE: ${{ steps.names.outputs.release }}
+        run: |
+          gh release create "$RELEASE" -R "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "$TAG" --notes "M0 (i) test release. It is deleted before M1b."
+          gh release upload "$RELEASE" -R "$GITHUB_REPOSITORY" "dist/$TAG.tar.zst" dist/inputs-hash.txt
+      - uses: jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564 # v1.11.4
+        with:
+          project: github.com/ray-manaloto/cpp-standard/${{ env.PROJECT }}
+          version: ${{ env.VERSION }}
+          tag: ${{ steps.names.outputs.release }}
+          artifacts: dist/${{ needs.build.outputs.tag }}.tar.zst
+          bin: m0i=bin/m0i
+          attest: "false"
+      - name: Publish the release
+        env:
+          RELEASE: ${{ steps.names.outputs.release }}
+        run: gh release edit "$RELEASE" -R "$GITHUB_REPOSITORY" --draft=false
+      - name: Install it with the exact main identity
+        run: |
+          packslip install "github.com/ray-manaloto/cpp-standard/$PROJECT" --version "$VERSION" \
+            --identity "$IDENTITY" --issuer "$ISSUER" \
+            --install-dir "$RUNNER_TEMP/m0i" --bin-dir "$RUNNER_TEMP/m0i-bin"
+          test "$("$RUNNER_TEMP/m0i-bin/m0i")" = "$TAG"
+          echo "M0 (i) PASS: packslip install with the main identity"
+
+  # The one exception to "only publish holds id-token: write" (section 2):
+  # the refusal test needs a real branch signature. It has no write scope and
+  # uploads nothing. verify stands in for install, which runs the same
+  # identity check on the bundle.
+  branch-sign:
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: toolchain-${{ needs.build.outputs.tag }}
+          path: dist/
+      - id: sign
+        uses: jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564 # v1.11.4
+        with:
+          project: github.com/ray-manaloto/cpp-standard/${{ env.PROJECT }}
+          version: 0.0.1-b.${{ github.run_number }}.${{ github.run_attempt }}
+          tag: ${{ env.PROJECT }}-v0.0.1-b.${{ github.run_number }}.${{ github.run_attempt }}
+          artifacts: dist/${{ needs.build.outputs.tag }}.tar.zst
+          bin: m0i=bin/m0i
+          attest: "false"
+          upload: "false"
+      - name: Check that the main identity refuses a branch signature
+        env:
+          BUNDLE: ${{ steps.sign.outputs.bundle }}
+          BRANCH_IDENTITY: https://github.com/ray-manaloto/cpp-standard/.github/workflows/builder.yml@${{ github.ref }}
+        run: |
+          # Control: the bundle verifies for the identity that signed it.
+          packslip verify "$BUNDLE" --identity "$BRANCH_IDENTITY" --issuer "$ISSUER" -a "dist/$TAG.tar.zst"
+          if packslip verify "$BUNDLE" --identity "$IDENTITY" --issuer "$ISSUER" -a "dist/$TAG.tar.zst"; then
+            echo "::error::M0 (i) FAIL: a branch signature passed the main identity"
+            exit 1
+          fi
+          echo "M0 (i) PASS: a branch signature is refused for the main identity"
+
+  mise-checks:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    container: ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96
+    env:
+      MISE_VERSION: 2026.11.8
+      MISE_SHA256: b36da3c4892380325d44dee3678ba618de191254d8a4aed8011ee66b28a6cbd7
+    steps:
+      - name: Install mise (pinned version and digest)
+        run: |
+          apt-get update -q && apt-get install -qy --no-install-recommends ca-certificates curl
+          curl -fsSLo /tmp/mise.tar.gz \
+            "https://github.com/jdx/mise/releases/download/v$MISE_VERSION/mise-v$MISE_VERSION-linux-arm64.tar.gz"
+          echo "$MISE_SHA256  /tmp/mise.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/mise.tar.gz -C /usr/local --strip-components=1 mise/bin/mise
+          mise --version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bootstrap packages, then status --missing must exit 0
+        working-directory: spikes/m0/i/mise
+        shell: bash
+        run: |
+          MISE_CEILING_PATHS="$(dirname "$PWD")"
+          export MISE_CEILING_PATHS MISE_TRUSTED_CONFIG_PATHS="$PWD"
+          # Control: make is not in the image, so before bootstrap the status
+          # check must report it missing. Otherwise mise did not read apt.toml.
+          if command -v make || mise bootstrap packages status --missing; then
+            echo "::error::M0 (i) FAIL: make is present, or status --missing passed before bootstrap"
+            exit 1
+          fi
+          mise bootstrap --skip tools --yes
+          mise bootstrap packages status --missing
+          command -v make
+          echo "M0 (i) PASS: mise bootstrap packages status --missing exits 0"
+      - name: Regenerate the lock and compare it with the Mac's
+        working-directory: spikes/m0/i/mise
+        shell: bash
+        run: |
+          MISE_CEILING_PATHS="$(dirname "$PWD")"
+          export MISE_CEILING_PATHS MISE_TRUSTED_CONFIG_PATHS="$PWD"
+          # The committed lock was generated from nothing on the Mac host with
+          # mise 2026.11.8. Remove it, so mise resolves everything again.
+          cp -a .mise "$RUNNER_TEMP/mac"
+          # mise lock needs uv on PATH for the PyPI sidecars; install the
+          # pinned uv from the committed lock first.
+          mise install uv
+          PATH="$(dirname "$(mise which uv)"):$PATH"
+          uv --version
+          rm -rf .mise/mise.lock .mise/locks
+          mise lock --platform macos-arm64,linux-x64,linux-arm64
+          if diff -r "$RUNNER_TEMP/mac" .mise; then
+            echo "M0 (i) PASS: the lock regenerates the same on the Mac and in the container"
+          else
+            # uv.lock carries exclude-newer, a time set when it is written, and
+            # mise.lock carries the sidecar digest. Say whether they are all
+            # that differs, for the M0 exit review.
+            if diff -r -I '^exclude-newer = ' -I '^uv = { path = ' "$RUNNER_TEMP/mac" .mise >/dev/null; then
+              echo "::error::M0 (i) FAIL: the lock differs only in exclude-newer and the sidecar digest"
+            else
+              echo "::error::M0 (i) FAIL: the regenerated lock differs from the Mac's beyond exclude-newer"
+            fi
+            exit 1
+          fi
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: m0i-container-lock
+          path: spikes/m0/i/mise/.mise/
+          include-hidden-files: true
+          retention-days: 7
