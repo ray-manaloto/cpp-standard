@@ -6,9 +6,7 @@ dist/
 .devcontainer/.env
 
 # Per-machine links that mise makes to tool skills (D102). Project skills
-# live under .agents/skills/; .claude/skills/ holds only committed links to
-# them, so Claude Code finds them as slash commands.
+# live under .agents/skills/; .claude/skills/ holds committed links to them,
+# so Claude Code finds them as slash commands.
 .agents/skills/.mise-skills.json
 .agents/skills/hk-*
-/.claude/skills/*
-!/.claude/skills/egm-check
