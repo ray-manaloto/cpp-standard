@@ -50,7 +50,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
 | p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
-| In-tree code-signed debugserver | FAIL (DB5): the p2996 build forces `LLDB_USE_SYSTEM_DEBUGSERVER=ON`, and this Mac has no `lldb_codesign` certificate | lldb-p2996 uses Xcode's debugserver, which works |
+| In-tree code-signed debugserver | FAIL (DB5): the p2996 build sets `LLDB_USE_SYSTEM_DEBUGSERVER=ON`, and this Mac has no `lldb_codesign` certificate | lldb-p2996 uses Xcode's debugserver, which works |
 | p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
 | Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode disabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
@@ -454,7 +454,7 @@ codesign -dvv "$DS" 2>&1 | grep -E 'Authority|Signature'
 
 Expected: a path inside `$P2996`, `Authority=lldb_codesign`, and
 `stop reason = breakpoint 1.1`. Today: FAIL on the first two. There is no
-debugserver under `$P2996` because the p2996 build forces
+debugserver under `$P2996` because the p2996 build sets
 `LLDB_USE_SYSTEM_DEBUGSERVER=ON` (its `CMakeCache.txt` has
 `LLDB_USE_SYSTEM_DEBUGSERVER:BOOL=ON`). Building one signed with
 `lldb_codesign` also needs that certificate, which this Mac does not have (step 2 finds
@@ -476,12 +476,13 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    prints the certificate.
 3. Configure p2996 with `-DLLDB_USE_SYSTEM_DEBUGSERVER=OFF` and
    `-DLLDB_CODESIGN_IDENTITY=lldb_codesign`, and stop the build before
-   configure if step 2 finds no certificate. Without the certificate, CMake
-   only warns and signs debugserver ad hoc
-   (`lldb/tools/debugserver/source/CMakeLists.txt`,
-   `get_debugserver_codesign_identity`, whose warning says this "will cause
-   failures in the test suite"). Whether an ad-hoc debugserver can attach
-   here is untested.
+   configure if step 2 finds no certificate. CMake does not stop on its
+   own (`lldb/tools/debugserver/source/CMakeLists.txt`,
+   `get_debugserver_codesign_identity`): with `LLDB_CODESIGN_IDENTITY` set
+   and the certificate missing, it only warns and keeps that identity, so
+   the build reaches the signing step without a certificate; with neither,
+   it signs debugserver ad hoc, and whether that can attach here is
+   untested.
 4. Rebuild and install; run the DB5 probe.
 5. If the certificate cannot be made (no admin), keep
    `LLDB_USE_SYSTEM_DEBUGSERVER=ON`: lldb-p2996 then uses Xcode's
