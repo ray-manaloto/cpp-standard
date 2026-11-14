@@ -55,15 +55,15 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | XRay | FAIL (T7): the runtime is present but the probe wrote no log | not yet resolved |
 | Developer mode, Xcode first launch | FAIL (A3, A6) | `sudo DevToolsSecurity -enable`; `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
 | p2996 coverage | PASS with the matching tools | use `llvm-cov-p2996 gcov`, never another LLVM's |
-| `g++` / `gcc` on `PATH` | Apple clang through a mise shim | call `g++-16` by name |
-| `ccache` on `PATH` | broken mise shim | use sccache (D9); ccache does not cache C++20 modules |
+| `g++` / `gcc` on `PATH` | Apple clang: `gcc` is `/usr/bin/gcc`, and `g++` is a mise shim with no active version, which falls through to `/usr/bin/g++` | call `g++-16` by name |
+| `ccache` on `PATH` | mise shim with no version set; it exits with an error | use sccache (D9); ccache does not cache C++20 modules |
 | Tart | not installed | V checks wait for the install |
 
 ## The end state
 
 | Component | Source | Built from source? | Why |
 |---|---|---|---|
-| Xcode 27.2 + Command Line Tools 27.2 | Apple | no | The macOS SDK, Apple `ld`, Apple `lldb` and `debugserver`, and Instruments (`xctrace`, `leaks`, `heap`, CPU Counters). The full Xcode is needed for the profiling tools (D136). |
+| Xcode 27.2 + Command Line Tools 27.2 | Apple | no | The macOS SDK, Apple `ld`, Apple `lldb` and `debugserver`, and Instruments (`xctrace`, CPU Counters). The full Xcode is needed for the profiling tools (D136). (`leaks`, `heap`, `vmmap` and `malloc_history` also ship with macOS in `/usr/bin`.) |
 | LLVM / clang 23 + libc++ | the LLVM release tarball `LLVM-<ver>-macOS-ARM64.tar.xz` via mise `github:llvm/llvm-project` | no | The daily compiler. It replaces Homebrew LLVM (D38). The tarball has libc++ with `libc++.modules.json`, every macOS sanitizer runtime, clangd, clang-tidy, lldb, llvm-mca and `ld64.lld`. It has no config file, so we add one (C2). |
 | GCC 16.2.0 + libstdc++ | `gcc-16.2.0.tar.xz` + Iain Sandoe's Darwin patch, with Homebrew's `gcc.rb` as the template | **yes** | No package gives an exact, checksummed GCC for macOS 27 (D33). The build sets the sysroot to the current SDK. |
 | clang-p2996 + libc++ | `bloomberg/clang-p2996` at a pinned commit | **yes** | No prebuilt binary exists. It is the reflection reference compiler (D30). |
@@ -110,8 +110,8 @@ upstream docs. List these as Linux-only; do not report them as missing.
 major. Probe: `sw_vers -productVersion`. Expected: `27.2` or a later 27.x.
 PASS if the major is 27.
 
-**A2. Full Xcode selected.** Why: Instruments, `xctrace`, `leaks`, `heap` and
-the signed `debugserver` come only with Xcode (D136). Probe:
+**A2. Full Xcode selected.** Why: Instruments, `xctrace` and the signed
+`debugserver` come only with Xcode (D136). Probe:
 
 ```sh
 xcode-select -p; xcodebuild -version
@@ -163,7 +163,8 @@ g++ --version 2>&1 | head -1; ccache --version 2>&1 | head -1
 ```
 
 PASS if `g++` is GCC 16 (or absent) and `ccache` is absent or works. Today:
-FAIL (`g++` is Apple clang; `ccache` is an unset mise shim).
+FAIL (`g++` is a mise shim with no active version that falls through to
+Apple clang; `ccache` is a mise shim with no version set, so it errors).
 
 **B3. sccache is the launcher.** Why: ccache does not cache C++20 modules
 (D9). Probe: `sccache --show-stats | head -3`. PASS if it prints statistics.
@@ -528,6 +529,8 @@ it reports errors, because clangd then parses as C++17 without reflection.
 
 **T1. clang-tidy and clang-format.** Use `$LLVM23` builds for projects
 without reflection and the `-p2996` builds for reflection projects (P7).
+On reflection code clang-tidy only reports: the tier-1 gate runs it on
+plain-clang targets only (D19).
 
 **T2. Clang Static Analyzer.** Probe: `"$P2996/bin/scan-build-p2996" --help | head -1`.
 PASS if it prints usage.
@@ -542,7 +545,8 @@ LLVM 23 (Homebrew's `include-what-you-use` is one today).
 PASS if all three print `-ok` (verified).
 
 **T5. Apple memory tools.** Probe: `for t in leaks heap vmmap malloc_history; do xcrun -f $t; done`.
-PASS if all four resolve inside Xcode. Use: `leaks --atExit -- ./prog`.
+PASS if all four resolve (Xcode's copies; macOS also ships them in
+`/usr/bin`). Use: `leaks --atExit -- ./prog`.
 
 **T6. cppcheck, ClangBuildAnalyzer, clang-uml, mrdocs.** Tier-2 tools (D19).
 Probe: `command -v cppcheck ClangBuildAnalyzer clang-uml mrdocs`. Today:
