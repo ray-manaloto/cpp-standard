@@ -46,11 +46,11 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | clang 23.1.5 (Homebrew): `import std` through CMake | FAIL (C4) | `-DCMAKE_CXX_STDLIB_MODULES_JSON=/opt/homebrew/opt/llvm/lib/c++/libc++.modules.json` |
 | clang 23: reflection | no (upstream clang has no P2996) | use p2996 or GCC |
 | GCC 16.2.0: `-g` with `-fsanitize=address` or `undefined` | FAIL (G6): the link runs Homebrew LLVM's `dsymutil`, which dies with SIGILL | put `/usr/bin` before `/opt/homebrew/opt/llvm/bin` for GCC builds, or build without `-g` |
-| `lldb-p2996`, `lldb-dap-p2996` | FAIL: start and run Python after the DB3 fix, but crash loading any program (DB5) | debug with Apple `lldb` (`xcrun lldb`) |
+| `lldb-p2996`, `lldb-dap-p2996` | FAIL: both start after the DB3 fix; `lldb-p2996` crashes loading any program (DB5 blocker); `lldb-dap-p2996` loading a program is untested | debug with Apple `lldb` (`xcrun lldb`) |
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
 | p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
-| In-tree code-signed debugserver | FAIL (DB5): the build used the system one, and lldb-p2996 crashes before it attaches (DB5 blocker) | `LLDB_DEBUGSERVER_PATH` set to Xcode's debugserver |
+| In-tree code-signed debugserver | FAIL (DB5): the build used the system one, and lldb-p2996 crashes before it attaches (DB5 blocker) | debug with Apple `lldb` (`xcrun lldb`); `LLDB_DEBUGSERVER_PATH` set to Xcode's debugserver helps only once lldb-p2996 loads programs |
 | p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
 | Developer mode, Xcode first launch | FAIL (A3, A6) | `sudo DevToolsSecurity -enable`; `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
@@ -365,13 +365,16 @@ both.
 **DB2. LLVM 23 lldb.** Probe: `"$LLVM23/bin/lldb" --version`. Expected:
 `lldb version 23.x`. The tarball lldb is built without Python, so `script`
 fails: expected, not a FAIL. Its `debugserver` is ad-hoc signed; if attach
-fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (DB5 probe). LLVM 23 has the
-32-bit offset bug described under the DB5 blocker, and also both
-llvm/llvm-project #202773 and #203055 (in `release/23.x`), so its lldb should load programs
-without crashing but may read wrong symbols for system libraries. Probe:
-`"$LLVM23/bin/lldb" -b -o 'target create /bin/ls'; echo $?`, expect exit 0;
-exit 0 does not rule out the wrong-symbol reads. Not yet run: the LLVM 23
-tarball is not installed on this Mac today.
+fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (DB5 probe).
+
+LLVM 23 has the 32-bit offset bug described under the DB5 blocker, and also
+llvm/llvm-project #202773 and #203055 (both in `release/23.x`), so its lldb
+should load programs without crashing but may read wrong symbols for system
+libraries. Load probe:
+`"$LLVM23/bin/lldb" -b -o 'target create /bin/ls'; echo $?`. PASS if it
+prints `Current executable set to '/bin/ls'` and exits 0; FAIL on any other
+exit code. A PASS does not rule out the wrong-symbol reads. Not yet run: the
+LLVM 23 tarball is not installed on this Mac today.
 
 **DB3. lldb-p2996 starts and runs Python.** Probe:
 
@@ -470,8 +473,12 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
 **DB5 blocker: lldb-p2996 crashes loading any program on macOS 27.** Report
 it on the DB5 line until it passes. Probe:
 `"$P2996/bin/lldb-p2996" -b -o 'target create /bin/ls'; echo $?`. Expected:
-exit 0. Today: exit 132, and the crash report shows `ParseTrieEntries`
-recursing until the stack runs out. Apple `lldb` loads the same program.
+exit 0. Today: exit 132 (128 + signal 4, `SIGILL`). The crash report in
+`~/Library/Logs/DiagnosticReports/` says `EXC_BAD_ACCESS`
+(`KERN_PROTECTION_FAILURE`), "Thread stack size exceeded due to excessive
+recursion", with `ParseTrieEntries` calling itself, and names the signal as
+`SIGILL`; so the exit code is this stack overflow, not a separate fault.
+Apple `lldb` loads the same program.
 
 Why: lldb reads each system library's symbol table, string table and export
 trie out of the dyld shared cache it has mapped. It adds the distance from
@@ -486,8 +493,8 @@ recurses until it crashes. Verified on this Mac:
   trie is well formed: 1,140 exports, depth 12, no node reached twice.
 - Of the 15 libraries `/bin/ls` loads, loaded one at a time, every library
   whose symbol table parse crashes lldb has a wrapping offset, and none
-  without one crashes it. `libcopyfile` wraps without crashing,
-  so lldb reads the wrong symbols for it silently.
+  without one crashes it. `libcopyfile` wraps without crashing, so lldb
+  reads the wrong symbols for it silently.
 
 Upstream `main` has the same code. llvm/llvm-project #202773 and #203055
 reject a cyclic trie, which stops the crash, but lldb still reads the wrong
@@ -497,8 +504,7 @@ move of the trie parser into `MachOTrie.cpp`.
 Fix (untested until a p2996 build carries it): patch `ObjectFileMachO.cpp`
 to keep the adjusted offsets in 64-bit variables instead of the 32-bit load
 command fields. Until a build with that patch passes the probe above, debug
-with Apple `lldb`. After a rebuild, run the
-probe above, then the DB5 probe.
+with Apple `lldb`. After a rebuild, run the probe above, then the DB5 probe.
 
 ## L. Library features (headers)
 
