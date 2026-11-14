@@ -1,0 +1,9 @@
+{
+  "body": "This is a PR intended to implement support for C++20 modules. The relevant issue is #1252.\r\n\r\nI've submitted this early as a draft PR in case there is important feedback that might influence how this should be designed.\r\n\r\nImplemented:\r\n\r\n- [x] basic compiler abstraction; related: https://github.com/ccache/ccache/issues/956\r\n- [x] unified compiler terminal output processing (reduces 3 possible passes into one)\r\n- [x] parse module options for `clang`, `gcc`, and `cl`\r\n- [x] parse [p1689r5](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2022/p1689r5.html) ddi files\r\n- [x] parse GCC [enhanced depfiles](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1602r0.pdf) when `-fmodules` is used without `-fdeps-format`\r\n- [x] parse MSVC [/scanDependencies](https://learn.microsoft.com/en-us/cpp/build/reference/scandependencies?view=msvc-170) output\r\n- [x] parse MSVC [/sourceDependencies](https://learn.microsoft.com/en-us/cpp/build/reference/sourcedependencies?view=msvc-170) output\r\n- [x] use p1689 and related data to determine dependencies and infer some settings\r\n- [x] use p1689 and related data to update result key (alongside depfile)\r\n- [x] serialize/deserialize DDI and BMI files\r\n\r\nRemaining:\r\n\r\n- [ ] implement driver for `clang-scan-deps`\r\n- [ ] implement alternate heuristics for clang and MSVC (not all compilers expose the same p1689 data)\r\n\r\nThis is currently enough to get GCC to be able to cache and restore module artifacts for some simple compilations.\r\n\r\nSome additional work remains to enable support for Clang and MSVC. ",
+  "createdAt": "2024-10-11T15:16:17Z",
+  "isDraft": true,
+  "state": "OPEN",
+  "title": "Implement support for C++20 modules",
+  "updatedAt": "2026-02-18T02:19:54Z",
+  "url": "https://github.com/ccache/ccache/pull/1523"
+}
