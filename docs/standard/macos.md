@@ -52,7 +52,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
 | In-tree code-signed debugserver | FAIL (DB5): the build used the system one | `LLDB_DEBUGSERVER_PATH` set to Xcode's debugserver |
 | p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
-| XRay | FAIL (T7): the runtime is present but the probe wrote no log | not yet resolved |
+| XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
 | Developer mode, Xcode first launch | FAIL (A3, A6) | `sudo DevToolsSecurity -enable`; `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
 | p2996 coverage | PASS with the matching tools | use `llvm-cov-p2996 gcov`, never another LLVM's |
 | `g++` / `gcc` on `PATH` | Apple clang: `gcc` is `/usr/bin/gcc`, and `g++` is a mise shim with no active version, which falls through to `/usr/bin/g++` | call `g++-16` by name |
@@ -80,7 +80,7 @@ official macOS release script:
 | Setting | Value | Why |
 |---|---|---|
 | `LLVM_ENABLE_PROJECTS` | `clang;clang-tools-extra;lld;lldb;mlir;polly` | Everything a C++ developer uses. Polly (loop optimiser) and MLIR are kept on request. **flang, BOLT and LLVM libc are dropped**: flang is not C++; BOLT reads only ELF (`bolt/README.md:12`), so it cannot optimise a Mach-O binary; LLVM's macOS release leaves out flang and BOLT. |
-| `LLVM_ENABLE_RUNTIMES` | `libunwind;libcxxabi;libcxx;compiler-rt` | libc++ with `import std`, and the sanitizer, profile, fuzzer and XRay runtimes. (`openmp` is optional; `offload` does not build on Apple.) |
+| `LLVM_ENABLE_RUNTIMES` | `libunwind;libcxxabi;libcxx;compiler-rt` | libc++ with `import std`, and the sanitizer, profile and fuzzer runtimes (the XRay runtime is built too, but does not work on Darwin, T7). (`openmp` is optional; `offload` does not build on Apple.) |
 | `LLVM_ENABLE_ASSERTIONS` | `ON` | The reflection frontend is experimental; an assertion reports a compiler bug instead of producing wrong code. Fixed at build time. |
 | `LIBCXX_HARDENING_MODE` | `extensive` | The default for every project. A project can change it (H1). No ABI effect (`libcxx/docs/Hardening.rst:40`). |
 | `LLVM_INSTALL_UTILS` | `ON` | Installs FileCheck, `not`, `count`, `yaml2obj` for lit-style tests and for reducing compiler bugs. |
@@ -102,7 +102,8 @@ upstream docs. List these as Linux-only; do not report them as missing.
 | gdb | no arm64 Darwin target | lldb |
 | GCC TSan and LSan | disabled for aarch64 Darwin by the Darwin patch | TSan from p2996 or clang 23 |
 | `<stacktrace>` with GCC | libbacktrace does not read Mach-O | guard with `__cpp_lib_stacktrace` (L2) |
-| uftrace, bpftrace | Linux tracing | `dtrace` (needs SIP changes), XRay (T7) |
+| uftrace, bpftrace | Linux tracing | `dtrace` (needs SIP changes); `xctrace` Time Profiler |
+| XRay (function tracing) | the Darwin runtime is a stub: the driver links its archives without `-force_load`, so the linker drops them; the Apple build skips the AArch64 patching code (`XRAY_SOURCE_ARCHS` says `aarch64`, Apple says `arm64`); and `xray_init.cpp` leaves the instrumentation map empty on Apple. llvm/llvm-project PR #196848 (open) fixes all three (T7) | `xctrace` Time Profiler |
 
 ## A. Apple base
 
@@ -559,8 +560,11 @@ none installed; FAIL only once D19 moves them to tier 1.
 XRAY_OPTIONS="patch_premain=true xray_mode=xray-basic" ./px; ls xray-log.*
 ```
 
-PASS if it writes an `xray-log.*` file. Today: FAIL, the program runs but no
-log is written; the runtimes are present (C5). Not yet diagnosed.
+Report N/A on macOS: the program runs but writes no log, with p2996 and
+with clang 23 alike, because the Darwin XRay runtime does not work (see
+"What macOS cannot have"). Use the `xctrace` Time Profiler instead (R1).
+When llvm/llvm-project PR #196848 lands in a compiler we use, this check
+becomes PASS if it writes an `xray-log.*` file.
 
 ## R. Profiling and metrics
 
