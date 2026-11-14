@@ -1609,7 +1609,7 @@ history. So nothing unscrubbed is ever pushed.
 needs it. Installing Tart is the owner's setup agent's prerequisite, because
 it is the only session that installs software on the owner's machines; it
 is not part of this plan. This plan's part: the implementing agent pulls
-`macos-golden-gate-vanilla:27.2` by digest. The owner is needed only if
+`macos-golden-gate-xcode:27.2` by digest (D136). The owner is needed only if
 macOS shows a permission prompt. Done when `tart list` shows the digest.
 
 Runner setup comes later: the PC in M2, the Mac in M3. Until M2, every job
