@@ -1,77 +1,221 @@
-# Stage 5 re-audit: Zoom Out after the D42-D47 fixes
+# Stage 5 re-audit: Zoom Out after the D108-D113 fixes
 
-* **Target:** `docs/designs/environment-standard.md` (916 lines, after the Stage 5 fixes)
-* **Date:** 2026-11-13
-* **Reviewers:** `egm-zoom-out` and `egm-inventive-catalyst`, in new fresh contexts, with the first report (`zoom_out_report.md`) as input
-* **Zoom-out verdict:** changes requested. 1 Blocker, 6 Major, 10 Nit.
-* **Catalyst verdict:** 9 Major, 6 Nit (advisory).
-* **Re-audit cap:** reached. This was the one Stage 5 re-audit allowed. Further fixes are checked by Stages 6-9, not by another Stage 5 run.
+The earlier re-audit (916-line design, D42-D47) is in git history at a5452af.
 
-## Status of the first report's items
+**Target:** `docs/designs/environment-standard.md` (1813 lines, after the
+D108-D113 edits)
 
-| Status | Items |
-|---|---|
-| **Closed** | A1 (capability lock), A4, A8, A9, A11, A12, A14-A20, A22, A23 |
-| **Partly closed** | A3 (one pins file feeds both layers), A5 (App key must be in Actions; digest write-back), A6 (builder runs PR code), A7 (M1 still mixes critical and non-critical work), A10 (new clone-and-run endpoint), A21 (`secret:set` is still a dotfiles task) |
-| **Closed as written, but replaced by a new problem** | A2 (trust split by file name → R1), A13 (vcpkg cache → R7) |
+**Reviewers:** `egm-zoom-out` and `egm-inventive-catalyst`, each with the
+previous `zoom_out_report.md` and the same GoldfishContext as Stage 5. This is
+Stage 5's one allowed re-audit.
 
-## New findings, merged and deduplicated
+**Verdict:** no Blockers.
 
-| # | Severity | Finding | Raised by | Lines |
-|---|---|---|---|---|
-| R1 | 🔴 Blocker | **The pins files can run code, and unreviewed PR code still reaches self-hosted hardware.** `pins.toml` is a mise conf.d fragment, so it can add `[tasks]`, `[env]`, `[hooks]` or apt sources. `inputs.toml` holds configure and CMake arguments, and its tarball URLs are not checked. `mise.lock` holds download URLs. The trusted builder reads `inputs.toml` from open PR branches and builds them on the PC and the Mac, with no owner approval. The publish job then pushes the result to GHCR. Renovate pins-only PRs also reach the PC under path routing, which contradicts CUJ 4. | ZO B1, IC M2 | 352-378, 398-409, 534-544, 806-813 |
-| R2 | 🟡 Major | **A pins PR tests the old compiler.** `ci.yml` runs in the image named in `digests.toml`, so a PR that changes apt or toolchain pins is gated on the old binary. The real compiler change arrives later in a separate digest PR, which is classed as a leaf and merges itself unseen. That digest PR is also a bot write-back, the pattern D43 removed. | IC M1, ZO M2 | 216-229, 411-424, 813, 832 |
-| R3 | 🟡 Major | **A3 is back one layer down.** One `pins.toml` holds both the apt pins (base) and the tool pins (tools), so a leaf bump touches a base input. Also, an owner-gated LLVM minor bump still blocks every other base change once the old pin disappears. | ZO M1, IC M8 | 401-419, 568-572 |
-| R4 | 🟡 Major | **There is a build cycle on day one.** The tools image bakes in p2996, but the p2996 builder runs in the tools image. Every daily p2996 bump would also rebuild the tools image and the golden VM. | ZO M3 | 416-429 |
-| R5 | 🟡 Major | **The fence costs more than it protects before 2026-11-27.** The critical path is arm64, which runs on hosted runners, and the PC is x64. GitHub Environments can't require approval "only when owner paths change". The owner would approve each agent PR twice. The D43 reason for keeping self-hosted runners (p2996 build time) applies only to the builder. | ZO M4, IC M5 | 127-130, 517-544, 731-733, 831 |
-| R6 | 🟡 Major | **The merge rule promises checks that don't run.** Leaf PRs merge themselves "when the fixtures pass", but the fixtures don't run on leaf PRs. Mac-only pins can merge themselves although the macOS gate runs only after merge. | ZO M5, IC M6, IC N4 | 223-226, 505-506, 568-572, 856 |
-| R7 | 🟡 Major | **Credentials and identity.** `image.yml` acting as the App needs the App key in Actions. An App with only contents and pull_requests write can't push workflow files, so the agents can't write the M1 workflows. A vcpkg GHCR cache would put `packages: write` in PR jobs. The "OCI/NuGet" backend isn't backed by research (GitHub's NuGet feed isn't GHCR), and the only dependency, ut, is header-only. `triplets:gen` is a generator, which goes against D8. | IC M3, ZO M6 | 465-468, 549-553, 761-770, 820-821, 832 |
-| R8 | 🟡 Major | **`linux:run` adds an unfenced way to run code on the PC.** It is a clone-and-run endpoint reachable over the private network. The Mac runner also has no network policy. | IC M4, ZO N10 | 436-440, 880-882 |
-| R9 | 🟡 Major | **Golden image publishing.** Pushing a 30-50 GB Tart image to GHCR needs a write token on the Mac, or a hosted runner with more than its 14 GB of disk. Its only consumer is the Mac itself. | IC M7, ZO N5 | 427-430, 876 |
-| R10 | 🟡 Major | **The cut order depends on itself, and M1 is misplaced.** Cut 5 (Mac runner) comes before cut 6 (Mac p2996), but Mac p2996 is built on the Mac runner. M1 is still about 45 files, including non-critical ones (agent tooling, triplets, cache), and its workflows use runners that M3 sets up. | ZO M7, IC M9 | 608-637, 792-843, 882 |
-| R11 | 🟢 Nit | The toolchain tree hash includes the README and smoke test, so editing the README rebuilds Mac GCC. One p2996 recipe for every OS means a glibc change also rebuilds macOS. | IC N1 | 369-372 |
-| R12 | 🟢 Nit | The declared host compiler, binutils, glibc and SDK values are neither updated nor checked against the builder's actual environment. | IC N2 | 360-363 |
-| R13 | 🟢 Nit | A PR waiting on the builder is never woken up when the artifact appears. | IC N3 | 384-386 |
-| R14 | 🟢 Nit | The encoder may have no working coverage tool: M0 (b) and M0 (c) are both unproven, with no fallback. clang-format's handling of `^^` and `[: :]` is unverified. | IC N5, N6 | 92-101, 482-483 |
-| R15 | 🟢 Nit | Whether mise reads `[bootstrap.packages]` from conf.d, and whether Renovate's mise manager finds the file there, is untested. | ZO N2 | 398-399 |
-| R16 | 🟢 Nit | Some files are marked both O and P, which path-based CODEOWNERS can't express. `toolchain:fetch` inside `docker build` needs `.git`. | ZO N3, N4 | 820, 889, 802 |
-| R17 | 🟢 Nit | The GHCR cleanup workflow and the automated Q4 promotion are YAGNI. | ZO N6, N7 | 176, 777, 910 |
-| R18 | 🟢 Nit | `caps:update` would need every environment orchestrated from one machine. It can merge the per-environment CI artifacts instead. | ZO N8 | 819 |
-| R19 | 🟢 Nit | The Q1 scrub must also cover this design file (personal identifiers and internal tooling names). | ZO N9 | 167, 711, 782 |
-| R20 | 🟢 Nit | Smaller fixes. Weak point 2 says Mac GCC is "last but one", which is wrong. The D46/D45 citation is swapped. `vm/inputs.toml` versus the D36 process. The task lists don't match. G5 still names dotfiles' `secret:set` while saying dotfiles is not a dependency. | ZO N1, N10, A21 | 110, 266, 366, 392, 875 |
+- The zoom-out reviewer requests changes.
+  - Of the 11 earlier Z findings: 4 are resolved, 2 are deferred to Stage 7,
+    and 5 are partly resolved.
+  - It raises 5 new Majors and 4 new Nits.
+- The catalyst calls C1 mostly resolved, C2 partly resolved, C3 resolved from
+  M2, C4 resolved for M1a, C5 deferred and C6 resolved.
+  - It raises 3 new Majors and 6 new Nits.
+- Both reviewers make the same main point. D108-D111 settle the right
+  questions, but in several places the rest of the document has not caught
+  up, so a gate or a deferral is declared without being made real.
 
-## The common root, as both reviewers put it
+## Status of the Stage 5 findings
 
-The fixes split trust **by file path and by runner**. But trust actually depends
-on two other things: **whether a file's content can run code**, and **which
-token a job holds**. Both reviewers propose the same correction:
+| Finding | Status | What is left |
+|---|---|---|
+| Z1 / C1 trust model | partly resolved | No step turns the gate on at M2 (R4). The gate covers files but not the code they run with privileged tokens (R1). |
+| Z2 settings check forbids gate | resolved | None. |
+| Z3 two stores | owner kept Releases (D111) | The Alternatives entry does not name jdx-first as the reason. |
+| Z4 M1a trust load | partly resolved | M0 (i) and the M1a file plan still specify the deferred features (R2). |
+| Z5 detail | deferred to Stage 7 (D113) | The design does not say so. §2 step 4 grew. |
+| Z6 history | partly resolved | Setup step 6's CODEOWNERS sub-step, and "Since D101" / "D107, proposed" wording at lines 94, 862-865, 1016-1017, 1029 and 1398. |
+| Z7 triplets | resolved | None. |
+| Z8 probes | deferred to Stage 7 | None. |
+| Z9 agent count | partly resolved | CUJ 5 and CUJ 6 still depend on `review:cap` (M5). |
+| Z10, Z11 | resolved | None. |
+| C2 negative control | partly resolved | Fixtures, `expected.toml` and `gate-policy.toml` can still be weakened together (R6). |
+| C3 race | resolved from M2 | The trigger list is split across sections. Before M2, each bump builds twice (R9). |
+| C4 admin PAT | resolved for M1a | The M2 runner PAT can add a bypass actor that the check skips (R5). |
+| C5, C6 macOS | deferred to Q5 | Two rows still promise a last-good fallback (R10). |
 
-1. **Run unreviewed code only on hosted runners.** Every PR and `merge_group`
-   job is hosted, which is free for a public repo.
-   - Self-hosted runners run only the trusted builder, which builds from
-     `main` (or from a PR the owner has approved).
-   - This drops the path-conditional Environment.
-   - The PC runner can leave Level 1.
-2. **Use one hash-keyed builder for images and toolchains alike.**
-   - The image tag is a hash of the image inputs. PR CI works the tag out and
-     waits for the artifact.
-   - `digests.toml`, the digest PRs and their write-back go away.
-   - Toolchains are fetched per job, not baked into images.
-   - The apt pins get their own file, which is the base layer's only pins
-     input.
-3. **Keep write credentials only in an Environment restricted to `main`.** PR
-   workflows run with read-only permissions. The vcpkg binary cache is dropped
-   from Level 1.
-4. **Check pins content, not just paths.** A hosted check validates that each
-   pins file contains only allowed sections and tool names, and only
-   allowlisted URL hosts. All flags move into `build.sh`.
+## Residual findings (merged from both reviewers)
 
-## What held up (both reviewers)
+### R1. Major: trust roots gate files, not the code those files run with privileged tokens
 
-* The capability lock (A1 is closed).
-* A build job with no token, followed by a hosted publish job that holds the token.
-* Tags derived from the git tree hash, with no lock file.
-* The Linux-first critical path, with a cut order and an M0 exit review.
-* clang-format pinned once through `pipx:`.
-* `perf:instructions` as the only perf task in Level 1.
-* A canary that starts with glaze only.
+Zoom-out N1 and catalyst N4 raise this.
+
+- **The problem in `builder.yml`:**
+  - The `main` publish job in `builder.yml` holds `id-token: write`.
+  - It runs `mise run artifact:names`. That task, and `mise.toml`, are
+    owned roots, not trust roots.
+  - So an agent PR can change the task. After merge, the changed task runs
+    with `builder.yml@main`'s signing identity.
+- **The same problem in D110:** `cmake/capability-removals.toml` is gated,
+  but its checker, `.mise/tasks/gate/policy`, is not.
+- **Fix (zoom-out):**
+  - The job that holds `id-token: write` runs no repository code: no
+    `mise run`, and its names are computed inline. This is C1's small
+    `publish.yml`.
+  - For D110, either gate `gate/policy` too, or take the removals file off
+    the list and call it a record.
+- **Fix (catalyst N4):** keep `builder.yml` thin, with a data-driven matrix,
+  so that edits to trust roots stay rare in M2 and M3.
+
+### R2. Major: D111's deferral is not carried through
+
+Zoom-out N2 raises this.
+
+- M0 (i) still tests a signed release, `packslip install --identity`,
+  branch-signed refusal and the merge-group `run-id` leg. M0-Linux ends on
+  2026-11-16 and blocks M1a.
+- The M1a file-plan rows `toolchain/fetch` and `artifact/names` still
+  specify packslip. So do the Settled "Artifact trust" row, CUJ 2 and risk
+  row 1470.
+- **Fix:**
+  - Cut M0 (i) to the M1a legs: an unsigned release found by its title,
+    cache scoping, `bootstrap packages status`, and lock parity.
+  - Move the packslip and `run-id` legs to the M2 entry gate.
+  - Mark the packslip parts of the M1a rows as M2.
+
+### R3. Major: unsigned M1a toolchains run on the owner's PC
+
+Zoom-out N3 and catalyst N1 raise this.
+
+- §3 puts the owner's devcontainer on the PC. So in M1a, any holder of
+  `contents: write` (the agent App included) can publish a toolchain that
+  runs on the owner's hardware, outside the D58 fence.
+- The risk row says only "hosted runners and the devcontainer".
+- **Fixes:**
+  - Attest the M1a toolchain tarball with `actions/attest-build-provenance`,
+    the same step images already use. `toolchain:fetch` then runs
+    `gh attestation verify` on it outside Actions.
+  - Or, outside Actions, `toolchain:fetch` rebuilds instead of accepting an
+    unsigned release.
+  - Or the owner does not use the PC devcontainer before M2.
+  - At a minimum, the risk row names the owner's PC.
+
+### R4. Major: no step turns on the D108 gate at M2
+
+Zoom-out N4 and catalyst N5 raise this.
+
+- **The gap:** nothing applies `repo:rulesets --phase m2`. The file-plan
+  row lists only `bootstrap|m1a|m1b`, and `repo-verify` never moves to
+  phase `m2`. So the gate never arrives, and nothing goes red.
+- **Fix:** add this to the M2 entry gate: "`repo:rulesets --phase m2`
+  applied, and `repo-verify` green at `m2`". Add `m2` to the phases the file
+  plan applies.
+- **Catalyst N5 addition:** before turning the gate on, the owner reviews
+  `git diff <bootstrap>..HEAD` for the trust-root paths once, because those
+  files went ungated until M2.
+
+### R5. Major: from M2, a runner PAT leak could add a bypass actor unseen
+
+Catalyst N2 raises this.
+
+- **The gap:** D109 assumes only the owner can add a bypass actor. But the
+  M2 runner PAT has Administration write, and it can edit rulesets.
+- **Fixes:**
+  - A host-run check reads the `main` ruleset with the agent App's token and
+    fails unless `current_user_can_bypass` is `never`. This field is
+    unverified for App tokens; prove it at the M2 entry gate.
+  - Or make D82 (a runner App with no Administration write) an M2 entry
+    condition.
+
+### R6. Major: the C2 hole remains through fixtures and the gate policy
+
+Catalyst N3 raises this.
+
+- **The gap:** one agent PR can do all three of these at once and stay
+  green:
+  - delete a marker fixture, or its `expected.toml` row;
+  - drop `GCOVR_EXCL` from `forbidden_markers`;
+  - add a marker.
+
+  It can also drop a `required_flags` item together with its fixture.
+- **Fix:** widen the ratchet into a general removals file. `gate:policy`
+  fails, unless the file has an entry, on any removal of:
+  - a lock capability;
+  - a fixture or an `expected.toml` row;
+  - a `required_flags` item;
+  - a `forbidden_markers` item.
+
+### R7. Major: from M2 the weekly Action SHA batch waits for the owner
+
+Zoom-out N5 and catalyst N6 raise this.
+
+- **The conflict:** the batch rewrites `uses:` lines in trust-root
+  workflows, so from M2 it needs code-owner review. §7 says it "merges on the
+  checks".
+- **Owner-written PRs:** GitHub does not let an author approve their own PR
+  (D100). So a trust-root PR that the owner writes cannot be approved, and
+  the agent App must write them.
+- **Fix:** state both rules, or move trust-root Action bumps into their own
+  Renovate group.
+
+### R8. Nit: setup step 6's CODEOWNERS sub-step no longer earns its place
+
+Zoom-out N6 raises this.
+
+- **Fix:** let M1a PR 6 add the trust-root CODEOWNERS, and drop the sub-step.
+
+### R9. Nit: triggers are still split, and each bump builds twice before M2
+
+Zoom-out N7 and catalyst N7 and N8 raise this.
+
+- **The gaps:**
+  - The `builder.yml` and `post-merge.yml` file-plan rows miss the `push`
+    trigger and the dispatch.
+  - D112's "push only when tags exist" rule is not in the design body.
+  - Before M2, both workflows cold-build p2996 for each bump.
+- **Fixes:**
+  - Keep one trigger list, in the file plan.
+  - Optionally, use the dispatch from M1a.
+
+### R10. Nit: two rows promise a last-good macOS fallback that Q5 left open
+
+Zoom-out N8 and catalyst N9 raise this.
+
+- **Rows:** risk row 1456, and the `toolchains/gcc-macos/README.md` row.
+- **Fix:** point both rows to Q5.
+- **Also (Z3 residual):** the Alternatives entry "GitHub attestations for
+  toolchains too" names jdx-first as the reason.
+
+### R11. Nit: CUJ 5 and CUJ 6 still depend on `review:cap`
+
+Zoom-out N9 raises this.
+
+- **Fix:** align both CUJs with G6: "once `review:cap` exists (M5)".
+
+## Areas both reviewers confirmed
+
+- The scope of D108.
+- D109 for M1a.
+- D113's three triplets.
+- The deferral to Q5.
+- `main` never reusing PR artifacts.
+- One VM per self-hosted job.
+- The cut order.
+
+## Owner decisions on the residuals (2026-11-13)
+
+The owner chose to fix the residuals and move to Stage 6 without a third
+Stage 5 audit:
+
+- R1: D114, a separate `publish.yml` that runs no repository code holds the
+  signing identity. `builder.yml` stays a trust root because it runs on the
+  PC runners.
+- R1/R6: D115, one `gate-removals.toml` ratchet, and the checker runs from
+  `main`'s copy.
+- R3: D116, toolchain tarballs are attested in M1a and verified outside
+  Actions.
+- R5: D117, the PC runner App replaces the PAT, as an M2 entry condition.
+- R7: D118, the weekly Action SHA batch waits for the owner from M2;
+  trust-root PRs come from the agent App or Renovate.
+- R2, R4, R9, R10, R11: applied. The M2 entry gate re-proves packslip for
+  `publish.yml`, applies `--phase m2` after a one-time owner diff review,
+  and keeps one trigger list in the file plan. The macOS rows point to Q5,
+  and CUJs 5 and 6 wait for `review:cap`.
+- R8 and the remaining Z6 history wording: left for Stage 7.

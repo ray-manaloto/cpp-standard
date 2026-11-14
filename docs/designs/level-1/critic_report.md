@@ -1,100 +1,408 @@
-# Stage 7: Critic Review
+# Stage 7: Critic Review, round 1 (re-review of D99-D121)
 
-* **Target:** `docs/designs/environment-standard.md`, FeatureRange lines 1-901
-* **Date:** 2026-11-13
-* **Reviewers:** `egm-design`, `egm-structural` and `egm-style`, run in parallel in fresh contexts. The design and structural reviewers used `feature-spec-standard.md`.
-* **Verdicts:**
-  - design: 2 Blocker, 10 Major, 7 Nit;
-  - structure: 6 Major, 10 Nit;
-  - style: 13 Major, 23 Nit.
-* Line numbers refer to the design before any Stage 7 fix.
+The earlier Stage 7 report is in git history at a5452af.
 
-## 🔴 Blockers (design)
+## Scope
 
-**K1. Any PR branch workflow can run on the owner's PC and Mac.**
-- D54 accepted that a same-repo PR runs its own workflow file before review, but only the GHCR-write side of that was considered. The same workflow file can also set `runs-on: [self-hosted, …]`.
-- A runner registered to this repo, or to the org's default group, accepts jobs from any workflow on any event. CODEOWNERS and the ruleset only govern merges.
-- So nothing enforces "the PC and Mac run only reviewed `main` code" (§6, G8, D48).
-- Restricting a runner group to selected workflows is probably not available on the Free plan; the reviewer marked this *verify*.
-- Agents working from a fork would not fix this either: fork PR workflows can also target self-hosted runners.
-- **Fix options:**
-  - **(a) A runner-side job-started hook** (`ACTIONS_RUNNER_HOOK_JOB_STARTED`). It aborts unless the event is push, schedule or dispatch on `refs/heads/main`, and the workflow is on an allowlist baked into the runner image.
-  - **(b) Register the self-hosted runners only to a separate repository that agents can't push to.** `main` triggers it with an explicit SHA.
-  - **Either way:** add an M1a negative test (an App PR adding a `runs-on: self-hosted` job must not run), and a new weak point.
+**Target:** `docs/designs/environment-standard.md`, FeatureRange lines
+1-1533.
 
-**K2. Tags named by hash, first writer wins, and PR publishing together let unreviewed builds become `main`'s artifacts.**
-- The tag covers only the input files. PR builds publish into the same namespace that `main` consumes, and "never overwrite" is enforced only by our own task (D54).
-- Future hashes are predictable (the next p2996 commit is public). So a branch workflow can pre-publish a poisoned artifact under a future tag, and the `main` builder then skips the build because the tag exists.
-- The sha256 annotation is written by the same publisher, so it proves nothing.
-- Every consumer runs these compilers, including the PC and the Mac. That is a second way past the fence.
-- The owner accepted D54 without seeing this consequence.
-- **Fix:**
-  - PR artifacts get their own namespace (`…-pr-<n>-<hash>`), which `main`, the runners and the VM never use.
-  - Only builder runs on `main` publish the tags `main` uses, and they never skip a tag that a non-`main` run created.
-  - **GitHub artifact attestations** are checked on every non-PR pull (`--signer-workflow …/builder.yml --source-ref refs/heads/main`).
-  - Optionally, push the `main` tags with a credential held only in the `main`-restricted Environment, so the Environment actually protects something (*verify* that GHCR accepts App tokens).
-  - Re-record D54 with its full consequences.
+**Reviewers:**
 
-## 🟡 Major
+| Reviewer | Standard |
+|---|---|
+| `egm-design` | feature-spec standard |
+| `egm-structural` | feature-spec standard |
+| `egm-style` | none |
 
-| # | Finding | From | Lines |
-|---|---|---|---|
-| K3 | **The merge queue builds input combinations that no builder ever built.** Two queued PRs that both touch inputs produce a merged commit with a new hash. `artifact:check` stays pending, so the queue stalls, and with daily Renovate this will happen routinely. Fix: run the builder on `merge_group` and post its status to the merge-group SHA. Or queue input-changing PRs one at a time and group all tools bumps into one daily PR. Give `artifact:check` a timeout. | design M1 | 256-261, 300-305, 473-495 |
-| K4 | **p2996 and GCC automerge (D56) contradicts the Mac gating.** The p2996 commit is also in `macos.inputs.toml`. Mac hashes build only after the owner approves, and `artifact:check` needs every tag. So every p2996 PR waits for the owner anyway. Fix: limit `artifact:check` to Linux tags, build Mac toolchains only after merge from `main`, and bump `macos.inputs.toml` in a separate PR that the owner reviews. | design M2 | 294-297, 480-481, 495, 702-710 |
-| K5 | **Owner approval is per PR, not per commit, and the trigger for the Mac job is undefined.** An agent can push new commits after the owner approves. A `pull_request_review` event would run the branch's own workflow file. Fix: start Mac PR jobs only through a `workflow_dispatch` defined on `main`, with an explicit SHA that must match the approved review's `commit_id`. Require the ruleset settings "dismiss stale approvals" and "require approval of the most recent push". Make `repo:rulesets --verify` check those settings, the merge queue and the list of required checks. | design M3 | 432-437, 480-481, 654-655, 685-687 |
-| K6 | **Agents can weaken the gate's own guards without review.** Presets, probes and `src/` merge without the owner. A PR can drop `-fsanitize=thread` from a preset, or add coverage-exclusion markers, without changing the capability lock. The fixtures don't run on such a PR, and "exclusions checked in review" names no reviewer. Fix: make presets and `probes.cmake` owned roots, or run `ci-must-fail` on every PR that touches `cmake/**`. Add a tier-1 check that compares exclusion markers against an owned allowlist. | design M4 | 593-596, 607-624, 677-679 |
-| K7 | **The PC runner as described can't run its jobs.** It is "unprivileged, with no Docker socket", but it must run `container:` jobs and build images. Fix: say how. Either the runner image is built from the tools tag and runs jobs without `container:`, or it uses rootless podman or sysbox, with the trade-off stated. | design M5 | 476-479, 639, 653-657 |
-| K8 | **Nothing updates `inputs.toml` when the base image changes the builder's environment.** An automerged glibc, binutils or `g++-16` bump breaks the next toolchain build on `main`. Fix: build Linux toolchains inside the base tag. Add `toolchain:declare --check` on PRs that change the base, or have Renovate update `inputs.toml` in the same PR through `postUpgradeTasks`. | design M6 | 449, 454-466 |
-| K9 | **A hosted p2996 build is on the critical path but unproven.** Hosted runners have about 14 GB of free disk. The 61-76 minute figure was measured without compiler-rt, and the arm64 figure is unverified. Fix: add M0 (h), a cold build with compiler-rt on `ubuntu-26.04-arm` that records peak disk and wall time, plus written fallbacks. | design M7 | 476-477, 753 |
-| K10 | **The Mac golden VM would rebuild daily, fill the disk and collide with the two-VM limit.** Its hash covers all of `tools.toml` and `mise.lock`. Each image is 35-50 GB, and nothing deletes old ones. Fix: hash only the macOS inputs, keep the last 2 images, build in the runner slot, and state the disk budget. | design M8 | 450, 539-547 |
-| K11 | **The Ubuntu digest and the mise version sit in an owned root, so they need daily owner reviews.** Fix: move them into `image/base.inputs.toml`, a pins file, and pass them as build arguments. | design M9 | 449, 530-533, 673-674 |
-| K12 | **The PC's Docker is reachable from the agent VM, which contradicts the fence.** `DOCKER_HOST=ssh://<linux-host>` is root on the PC. Line 214 also lets agents use "the PC devcontainer". Fix: PC SSH and Docker credentials exist only on the host, never in the agent VM. Reword the fence. | design M10 | 63, 174-175, 214, 549-553 |
-| K13 | **Agent App permissions and its key.** `linux:run` needs Actions write to dispatch a workflow, which the App doesn't have (*verify*). Agents that hold the App's private key could leak a credential that never expires and has `workflows: write`. Fix: either add Actions write, or have `linux:run` open a draft PR instead. Keep the key on the host behind a broker that hands only short-lived tokens to the VM. | design M11 | 82, 549-551, 659-661 |
-| K14 | **There is no Risks & Mitigations section,** which the standard requires. "Weak points" mixes unproven items with accepted risks. Scale limits are scattered or missing: Actions concurrency, cold-build minutes, Renovate PR volume, the two-VM limit and the 14 GB disk. Fix: add an H2 table with columns Risk / Kind / Trigger or check / Mitigation / Decision. | structure M1 | 335-373 |
-| K15 | **Some rejected alternatives give no trade-off.** These are the Ubuntu bump, Mac-first, the PC runner (only a quote), "every tool gating", host-native development, and "all three compilers everywhere". | structure M2, design N3 | 788-790, 817-823, 850, 890-898 |
-| K16 | **"Forking mise" cites a maintainer stance without a link, and gives the wrong reason.** The real reason is rebase cost: mise releases about daily and `bootstrap.rs` is about 7,000 lines. Fix: link CONTRIBUTING.md. | structure M3, design N3 | 819-820 |
-| K17 | **Four alternatives from the research are missing:** hosted macOS runners, the `vsavkov` p2996 image, conda clang through `conda:`, and Dependabot. | structure M4 | §1, §2, §7 |
-| K18 | **The inputs and D-numbers are not links.** The level-1 files sit one directory down, and "(research)" is vague. | structure M5 | 34-36, 350 |
-| K19 | **Content is repeated in several places:** the digest list, the D54 risk (4 places), the merge rule, the tier-1 list and the fence rule. Fix: keep one copy in the section that owns each topic and link to it from the others. | structure M6, style N11 | many |
-| K20 | **Terms are used with more than one meaning:** "lock", "gate", hash versus tag, and the names of the Mac VMs. | style M3-M6 | many |
-| K21 | **Overclaims and internal contradictions:** <br>- "Neither can break `main`" (CUJ 5). <br>- "The one exception" (there are two). <br>- "No Actions job holds a secret" and "holds no token" (GITHUB_TOKEN). <br>- "Merges through the merge queue", which implies owned roots don't. <br>- The Tart digest is described as both hashed and not hashed. <br>- "Runs cleanly" can't be measured. <br>- The G1 measure is hard to parse. | style M7-M13, design N5 | 122, 140, 305, 450-466, 482, 653-679 |
-| K22 | **The status line and decision range are stale, and milestone names are used before they are defined.** | style M1-M2, structure N1-N2 | 4, 52, 259, 331 |
+All three completed.
 
-## 🟢 Nits (grouped)
+**GoldfishContext:**
 
-- **Hashing details:**
-  - Use `git hash-object --no-filters`, or take blob ids from the commit.
-  - State how the hashes are combined, and the hash length.
-  - Say how the devcontainer gets its computed tag.
-- **Mac GCC:** the ASan cell should say "`detect_leaks=0`, pending M0 (e)".
-- **G1 reproducibility:** the Mac is local only and depends on the cirruslabs base image. Record this as an accepted limit.
-- **The `publish` Environment protects nothing** unless it is given a credential (ties to K2).
-- **Settled questions:** move them out of "Open Questions".
-- **Weak points:** they use terms before §1-§10 define them.
-- **Goals:** only G1 has a measure.
-- **Alternatives:**
-  - grouped by review stage, not by design area;
-  - "Rejected by author" repeated about 35 times;
-  - line 903 is "deferred", not rejected.
-- **Formatting:** mixed list markers; spelling mixes British and American English.
-- **CUJ 1:** contradicts §1 and §2 on the Mac LLVM source, and misses the p2996-only fallback.
-- **Agent sessions and cap:** defined inside a CUJ instead of §9. D41 agent tooling has no Technical Plan home.
-- **Missing references:** the third owner-confirmed difference has no D-number; ccache PR #1523 has no repo link; the 66,000-line figure has no citation.
-- **About 23 smaller wording items** from the style reviewer, for example "count" → "used as claims", "works out" → "computes", "Wake-up" → "Status", and pointing "the existing rulings" to its source.
+- the decisions log;
+- the brief;
+- the two saved sources.
 
-## What held up (all three reviewers)
+The earlier review reports were not included.
 
-* The Linux-first critical path, the cut order and the M0 exit review.
-* The capability lock as the automerge signal, with D56's residual risk stated.
-* The build job with no token, kept separate from the hosted publish job.
-* Toolchains kept out of images, and apt pins separated from tool pins.
-* Nearly every claim tied to a D-number.
+## Results
 
-## Author (Elephant) notes for the owner
+**Tally:** 1 Blocker, 37 Majors, about 50 Nits.
 
-* **K1 and K2 both come from D54, combined with self-hosted runners and tags named by hash.** You accepted D54 on the premise "only GHCR write, no secret exposed". The critic shows two further consequences:
-  - an agent's branch workflow can run on your PC and Mac;
-  - it can pre-publish a compiler that `main` later trusts.
-* **Moving agents to a fork, the option you rejected, would not fix K1.** Fork PR workflows can also target self-hosted runners.
-* The runner-side fixes (K1 a or b) and the separate PR tag namespace with attestations (K2) work whether or not D54 stands.
-* K3-K13 are concrete mechanism gaps. K14-K22 are document quality.
+The IDs are `<reviewer>-1-<n>`:
+
+- `des` is the design critic;
+- `str` is the structural critic;
+- `sty` is the style critic.
+
+Duplicates are merged under the first ID.
+
+## Blocker
+
+### des-1-1. Dispatch input can run non-`main` code on the self-hosted runners
+
+**Lines:** 504-506, 937-938, 1517.
+
+**The problem:** from M2, `post-merge.yml` and `mac-gate.yml` are dispatched
+"for that commit". That means a SHA input on `refs/heads/main`. The agent
+App can dispatch them with an unmerged PR head SHA. The D58 hook would accept
+the job, and unreviewed code would then run on the PC or the Mac.
+
+**Fix:** every self-hosted workflow does one of two things:
+
+- takes no ref or SHA input; or
+- refuses, before checkout, any SHA that is not an ancestor of `origin/main`.
+
+Add a negative test at the M2 entry gate, and a risk row.
+
+## Majors: trust and security
+
+### des-1-2. M1a toolchain trust inside Actions is weaker than stated
+
+**Lines:** 94, 515-521, 588-594, 1516.
+
+**The problem:**
+
+- The hosted fetch does no check.
+- A release titled with a future hash can be created ahead of time.
+- `gh attestation verify` binds a digest to a workflow, not to the artifact
+  tag.
+
+**Fix:**
+
+- Verify in Actions too.
+- Check that `inputs-hash.txt` equals the computed hash.
+- Refuse an ambiguous title.
+- Describe the M1a and M2 states separately.
+
+### des-1-7. The trust roots protect who signs, not what is signed
+
+**Lines:** 515-555, 982-983, 1522.
+
+**The problem:** `artifact:build` and `toolchains/*/build.sh` are owned roots,
+not trust roots. A merged agent change to them produces a toolchain signed as
+`main`.
+
+**Fix:** add a risk row, or make these files trust roots from M2.
+
+### des-1-8. The removals ratchet can be beaten in two PRs
+
+**Lines:** 829-832, 1007, 1515.
+
+**The problem:** the first PR weakens the checker, and `main`'s old copy
+passes it. The second PR then drops a capability.
+
+**Fix:** make `gate:policy` and the fixture runner trust roots from M2, or
+mark the risk as accepted.
+
+### str-1-outside. `ci.yml` itself comes from the PR
+
+**Lines:** 830-832, 989, 1515.
+
+**The problem:** "run `gate:policy` from `main`'s copy" is weak, because a PR
+can edit the step that fetches `main`'s copy.
+
+**Research:** a ruleset's "require workflows" rule needs GitHub Enterprise
+Cloud, at the org level, so it cannot pin `ci.yml` to `main`'s copy here.
+
+### des-1-9. Renovate's identity is open
+
+**Lines:** 923, 978, 1015, 1030-1050.
+
+**The problem:** a Renovate token stored as a repository secret would be
+readable by same-repo PR workflows.
+
+**Fix:** add an Open Question, or name the credential's home.
+
+### des-1-5. The runner PAT text contradicts D117
+
+**Lines:** 126-127, 198-200, 959-961, 1014, 1218, 1523.
+
+## Majors: correctness and evidence
+
+### des-1-3. The release lookup by title does not scale
+
+**Lines:** 498-501, 626-632, G1.
+
+**The problem:** `--limit 1000` returns newest first. After some hundreds of
+days, older releases fall out of the list, and the toolchain is silently
+rebuilt.
+
+**Fix:** use a deterministic lookup, and fail on an ambiguous match.
+
+### des-1-4. The ordering between the builder and `ci.yml` is not stated
+
+**Lines:** 502-514, 586, 621-625, 1509, 1519, 1528.
+
+**The problem:**
+
+- Gate jobs may miss the cache and each rebuild p2996.
+- In M1a, a merge group rebuilds for every input-changing PR.
+
+**Fix:**
+
+- Gate jobs wait for `artifact:check`.
+- Add a risk row for M1a merge-queue cost.
+
+### des-1-10. The sccache module claim has no source
+
+**Line:** 771.
+
+**Verified by the author:**
+
+- mozilla/sccache#2516 added partial clang module support, merged
+  2026-02-27.
+- mozilla/sccache#2650 is still open: with CMake 4.3 and later, the module
+  compiles pass flags in an `@modmap` response file, which is not
+  cacheable.
+- The fix, #2701, was closed without merging.
+- #2216 reported a wrong-cache bug.
+- The latest release is v0.19.0, from 2026-10-24.
+
+### des-1-11. The 100% coverage measure does not count consteval code
+
+**Lines:** 188-194, 792-795.
+
+**Fix:** state this as a limit, and optionally require a named
+`static_assert` per consteval function.
+
+## Majors: the M0 record
+
+### des-1-6 / sty-1-M1. M0 results are not reflected in §1, §10 or the risk rows
+
+**Lines:** 409-411, 595, 1165-1210, 1506, 1510, 1519.
+
+## Majors: wording that changed meaning
+
+### str-1-5 / sty-1-M11 / des-1-15. "Reviewed" and "unreviewed" are used in the pre-D101 sense
+
+**Lines:** 391, 867, 871, 1240, 1460.
+
+### sty-1-M12 / sty-1-M13. Toolchain trust terms contradict each other
+
+**Lines:** 515, 548, 552, 591, 1125, 1518.
+
+The text calls releases both "unsigned" and "attested", and says one item
+"can never become `main`'s release".
+
+### sty-1-M15 / des-1-14. "No PR needs approval" is stale for M2
+
+**Lines:** 984, 1004, 1051-1054, 1243.
+
+### sty-1-M16. The merge rule is restated
+
+**Lines:** 420, 986, 1345.
+
+### sty-1-M17 / des-1-19 / str-1-3. D106 and D107 are not in Open Questions
+
+**Lines:** 1062, 1245.
+
+These lines cite D107 without marking it "proposed".
+
+### sty-1-M18. The `tools.toml` reason is stale
+
+**Lines:** 660, 1046.
+
+### sty-1-M9. Summary claims
+
+**Lines:** 388-393.
+
+The summary says "built once" and that "only `main`'s builder publishes".
+
+### sty-1-M8 / str-1-7. Stale decision range
+
+**Line:** 355.
+
+The text cites "D26 to D82".
+
+### str-1-6 / sty-1-M10 / des-1-20. The overview diagram shows only the M2 state
+
+**Lines:** 362-386.
+
+The `OWN` node does not separate out the trust roots.
+
+### sty-1-M14. The fetch rule is written differently in several places
+
+**Lines:** 94, 304-306, 1247, 1519.
+
+## Majors: goals and claims
+
+### sty-1-M2. "Each claim cites its source" is not true
+
+**Lines:** 52-54.
+
+Uncited figures appear at lines 1524, 1525, 1529, 1292 and 259.
+
+### sty-1-M3. The 66,000-line figure is credited to the brief
+
+**Lines:** 144-146.
+
+The brief does not contain it.
+
+### sty-1-M4. G1's "newest" contradicts the release-age cutoff
+
+**Lines:** 161-165.
+
+### sty-1-M5. G5 states the M3 end state as fact
+
+**Lines:** 195-204.
+
+### sty-1-M6 / des-1-22. G3's "same result" is undefined across operating systems
+
+**Lines:** 184-186.
+
+### sty-1-M7. G8's capacity goal has no measure
+
+**Lines:** 219-222.
+
+### sty-1-M19. "One fixture per tier-1 check" is too broad
+
+**Lines:** 812-814.
+
+### sty-1-M20. Two rules for promoting a tool to tier 1
+
+**Lines:** 808 and 1307.
+
+### Other style calibration items
+
+- Line 56: "three differences".
+- Line 84: the owned and trust lists.
+- Line 1133: "primary signal for every risk row".
+- Line 1508: "up to a day".
+- Line 1292: "2,000 minutes".
+
+## Majors: structure
+
+### str-1-1. A Markdown list continues lazily
+
+**Lines:** 573-596.
+
+The security paragraph sits inside fetch item 4.
+
+### str-1-2. §2 step 4 and §6 have no subheadings
+
+**Lines:** 515-620, 863-1026.
+
+There are no anchors and no separate M1a and M2 blocks.
+
+### str-1-4. No alternatives are recorded for D101, D108 and D120
+
+**Lines:** 1250-1497.
+
+## Nits
+
+The nits are recorded in the round-1 reviewer outputs. The resolver groups
+them in `goldfish_review_report.md`. They cover:
+
+- **Glossary:** filing and duplicate definitions.
+- **CUJs:** inconsistent "Then" formatting.
+- **Document order:** unnumbered H3s, and the order of §10.
+- **M0:** missing (i) tags.
+- **Alternatives:** the preamble.
+- **Risks:** the "Kind" set, rows whose trigger is "—", and the
+  `builder.yml` row reference.
+- **Formatting:** line wrap, horizontal rules and research links.
+- **Pins:** `pins.toml` against `pins:validate` (des-1-12).
+- **Dispatch:** which job dispatches (des-1-13).
+- **Images:** the CUJ 2 rule for unattested images (des-1-17).
+- **Weak rejections:** des-1-18.
+- **LLVM:** the cross-release apt.llvm.org risk (des-1-21).
+- **Wording:** about 20 style items.
+
+## Round 2
+
+**Target:** lines 1-1658 after the round-1 edits. The same three reviewers,
+started fresh, read the same GoldfishContext and no earlier report.
+
+**Tally:** 4 Blockers, 41 Majors, 38 Nits. All four Blockers come from the
+design critic.
+
+### Blockers
+
+- **des-2-1.** The design claims that from M2 a merged agent PR "cannot
+  change what `publish.yml` signs" (§6 Trust roots). This is false. The
+  inputs are still owned roots:
+  - toolchain source URLs in `pins.toml`, which are allowlisted by host
+    only;
+  - `pins-allowlist.toml`;
+  - `tools.toml` and `mise.lock`;
+  - `mise.toml`;
+  - the tasks that `artifact:build` calls.
+- **des-2-2.** Neither the checks that protect the owner's hardware nor the
+  runner image are gated by a human, even from M2:
+  - the checks run in `toolchain:fetch` and `image:verify`;
+  - the image that carries the D58 hook is built by `vm:golden` and by the
+    PC image build.
+- **des-2-3.** A same-repo PR workflow can request write permissions:
+  - it can push any GHCR tag, not only `pr-` tags, and PR jobs pull without
+    verifying;
+  - it can post statuses and create releases;
+  - a new workflow file is not a trust root.
+- **des-2-4.** The fence text says agent code runs only in the dev VM and
+  on hosted runners. In M1a, and if M0 (a) fails, agents run on the Mac
+  host. That host holds the PC SSH access, the Docker context and the App
+  keys.
+
+### Majors and Nits
+
+The full lists are in the reviewers' outputs and are summarised in
+`goldfish_review_report.md`:
+
+- design: des-2-5 to des-2-18;
+- structural: str-2-1 to str-2-19;
+- style: sty-2-1 to sty-2-46.
+
+## Round 3
+
+**Target:** lines 1-1850 after the round-2 edits. The same three reviewers,
+started fresh.
+
+**Tally:** 0 Blockers, 37 Majors (design 9, structural 6, style 22), 43
+Nits.
+
+Design Majors:
+
+- **des-3-1:** "ancestor of `main`" admits old and reverted commits, and
+  `publish.yml` checks the run's `head_sha`, not the built SHA.
+- **des-3-2:** the code that enforces the D125 and D126 allowlists
+  (`pins:validate`, `artifact:tag`) is not a trust root.
+- **des-3-3:** attesting the archive and `inputs-hash.txt` separately does
+  not bind them together.
+- **des-3-4:** `workflow_dispatch` of `ci.yml` (`linux:run`) is outside the
+  hosted-job rules.
+- **des-3-5:** runner registration level. A repository-level App needs
+  Administration write, so registration must be at the org level.
+- **des-3-6:** `main`'s checker runs with the PR's `mise.toml`, which
+  nothing validates.
+- **des-3-7:** a merged gcovr report could hide lines that one compiler did
+  not cover.
+- **des-3-8:** who builds the runner images, and from which ref.
+- **des-3-9:** a draft release left by a failed publish breaks the lookup
+  outside Actions.
+
+The structural Majors cover:
+
+- the D124 range, which is stale;
+- the M1a PR named in the image risk row;
+- §10 and §6 headings that cannot be linked;
+- open items in Settled questions;
+- whether the repository is public or private.
+
+The style Majors are about calibration and contradictions.
+
+## Rounds 4 and 5
+
+- **Round 4:** 0 Blockers and 32 Majors (design 10, structural 6,
+  style 16). These were resolved as D132.
+- **Round 5, the cap:** 1 Blocker and 22 Majors (design 7, structural 3,
+  style 12).
+  - **The Blocker (des-5-1):** the host launchd job that builds runner
+    images loaded the merged `mise.toml` on the host.
+  - These were resolved as D133.
+
+## Loop result
+
+The loop ran all five rounds without reaching two clean rounds. Each round
+had Majors: style calibration, and new M2 trust edge cases that D129 routes
+to the M2 entry gate as named items. The number of design and structural
+Majors fell from round to round: 37, 41, 15, 16, then 10.

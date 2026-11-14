@@ -1,78 +1,369 @@
-# Stage 5: Initial Zoom Out report
+# Stage 5: Initial Zoom Out Review (re-review of D99-D107)
 
-* **Target:** `docs/designs/environment-standard.md` (795 lines; FeatureRange 1-629, DetailedRange 630-795)
-* **Date:** 2026-11-13
-* **Reviewers:** `egm-zoom-out` (zoom-out-standard) and `egm-inventive-catalyst`, run in parallel in fresh contexts
-* **GoldfishContext:** `level-1/decisions-log.md` and the reports in `level-1/research/`
-* **Zoom-out verdict:** changes requested. 1 Blocker, 6 Major, 9 Nit.
-* **Catalyst verdict:** 9 Major (two "close to Blocker"), 2 Nit. This persona can only give advisory ratings.
+The earlier Stage 5 report (795-line design) is in git history at a5452af.
 
-Line numbers refer to the design before any Stage 5 fix.
+**Target:** `docs/designs/environment-standard.md` (full file, 1804 lines,
+`main` at fae7325)
 
-## Merged action list (deduplicated)
+**Reviewers:** `egm-zoom-out` (Zoom-Out standard) and `egm-inventive-catalyst`,
+run in parallel.
 
-| # | Severity | Finding | Raised by | Design lines |
-|---|---|---|---|---|
-| A1 | 🔴 Blocker | **The must-fail fixtures can't catch a probe that turns a check off.** The fixtures skip on probe results (line 704), so when a probe goes off its fixture is skipped too. Nothing compares the probes against the §1 table, and leaf bumps (cmake, vcpkg) never run the fixtures. D39's accepted risk rests on a guard that doesn't work. | ZO B1, IC 1 | 259-262, 328-330, 465, 704, 747 |
-| A2 | 🟡 Major | **Leaf automerge and the CODEOWNERS fence claim the same files.** CODEOWNERS owns all of `mise.toml`, `.github/**` and `image/**`. So mise tool bumps, Action SHA bumps and image-digest PRs all need the owner, which is "review everything" in practice. | IC 2 | 486-488, 498-505, 709, 711-712 |
-| A3 | 🟡 Major | **Expiring apt.llvm.org pins plus owner-only compiler bumps.** Every image rebuild re-resolves apt. Once an LLVM pin expires while its PR waits for the owner, unrelated leaf PRs go red, so owner latency blocks automerge. | ZO M2, IC 3 | 77-79, 213-220, 375-393, 496-505 |
-| A4 | 🟡 Major | **Runner routing contradicts the toolchain build path.** Routing is by actor and Renovate goes to hosted runners. An owner's approval doesn't change the actor, so a macOS toolchain bump can never reach the Mac runner. Who triggers `merge_group` decides routing by accident, and the D32 cron depends on who last edited it. | ZO M3, IC 5 | 355-366, 476-493, 708-710 |
-| A5 | 🟡 Major | **Credentials and write-back.** No identity is named for CI writers (image-digest PRs, lock updates). PRs opened with GITHUB_TOKEN don't trigger checks. Self-hosted runners would need `packages: write`, which contradicts "no secrets". `toolchains/lock.toml` can drift out of step with `inputs.toml`, and the hash already makes it redundant. | ZO M3, ZO M4, IC 6 | 300-303, 339-366, 681-683, 689, 709 |
-| A6 | 🟡 Major | **The actor fence is checked at merge time, but code runs at PR time.** An agent-App PR that changes `.mise/tasks/ci` or a workflow runs on the PC or Mac before the owner sees it. The PC is on the owner's private network and also runs a privileged perf container. | IC 7 | 476-489, 708, 711-712, 776 |
-| A7 | 🟡 Major | **No critical path or cut order against the 2026-11-27 date.** M1 is about 45 files. Nothing says which items unblock glaze FIX, and there is no re-scope step after M0. | ZO M1 | 70-126, 535-544, 666-781 |
-| A8 | 🟡 Major | **Mac CI has a single slot, and Mac GCC costs the most.** The single Mac runner carries the gate, three-stage GCC bootstraps, p2996 builds and cold VM bootstraps. A Tart or SDK change rebuilds both macOS toolchains. Mac GCC adds little over Linux GCC (no TSan/LSan, ASan hangs with `detect_leaks=1`). | ZO M6, IC 8 | 253-258, 339-366, 395-402, 686-688, 749-759 |
-| A9 | 🟡 Major | **Lint tools differ between environments.** clang-format and clang-tidy come from the 23.1.5 tarball on the Mac but the 23.1.6 apt snapshot on Linux, so a tier-1 check can pass in the VM and fail in CI. | IC 4 | 89-90, 201-202, 310-314, 700, 727-730 |
-| A10 | 🟡 Major | **Source doesn't reach the PC's Docker.** With `DOCKER_HOST=ssh://<linux-host>`, bind mounts resolve on the PC, so containers run from the VM can't see the VM's worktree. | IC 9 | 251-252, 292, 404-406, 690, 756 |
-| A11 | 🟡 Major | **Perf tooling is in Level 1 although Level 1 numbers don't count.** It adds four perf tasks, a privileged container and an M0 PMU check, with no workload to measure yet. | ZO M5 | 148-149, 510-518, 540, 773-776 |
-| A12 | 🟢 Nit | "100% line coverage" is undefined for consteval and reflection code (blind-spot #4). | IC 10 | 90-93, 441-442 |
-| A13 | 🟢 Nit | The vcpkg triplets leave out the sanitizer axis that D6 requires, and no binary cache is named. | IC 11 | 430-431, 699 |
-| A14 | 🟢 Nit | Stale "provisional" labels, and a G1 measure ("rebuild gives same versions") that D27 replaced with digest reproduction. | ZO N1 | 77-79, 98-99 |
-| A15 | 🟢 Nit | The Mac GCC hash inputs leave out zstd and zlib, which D33 lists. | ZO N2 | 341-344, 686 |
-| A16 | 🟢 Nit | `toolchain:fetch` is used but never defined. | ZO N3 | 689, 754 |
-| A17 | 🟢 Nit | Reflection targets are switched off twice: by a cache variable and by a probe. | ZO N4 | 416, 696-697 |
-| A18 | 🟢 Nit | The digest runs in Actions but reports `review:cap`, which runs only on the VM. | ZO N5 | 227, 531, 778-779 |
-| A19 | 🟢 Nit | `toolchain/hash` could be `git rev-parse HEAD:toolchains/<name>`, which needs no new code. | ZO N6 | 348-350, 682 |
-| A20 | 🟢 Nit | `usage` and `pitchfork` are listed with no use. | ZO N7 | 717-722 |
-| A21 | 🟢 Nit | App creation is a one-off, so a runbook would do. `secret:set` is a host task, which goes against G5 and D18. | ZO N8 | 643-652, 790-791 |
-| A22 | 🟢 Nit | Start the canary with glaze only. Make D36 a written process with no machinery in Level 1. | ZO N9 | 465-470, 506-508 |
-| A23 | 🟢 Nit | The Q1-Q8 numbering differs from decisions-log's "Technical Plan Q6-Q14". | ZO note | 155-163 |
+**GoldfishContext:**
 
-## Proposed transforms (from the reviewers)
+- `level-1/decisions-log.md`
+- `level-1/concepts_brief.md`
+- `level-1/sources/ccache-pr-1523.json`
+- `level-1/sources/mise-CONTRIBUTING.txt` (saved as `.md` during the review; renamed so the markdown lint skips the upstream copy)
 
-* **A1 (two options).**
-  - **Zoom-out:** treat `cmake/presets/matrix.json` as the expected table. Make it a tier-1 failure when a visible preset asks for a check whose probe is off. Fixtures follow the matrix, not the probes.
-  - **Catalyst:** commit the probe output as `cmake/capabilities.lock.json`, with `mise run ci` comparing fresh probes against it. A legitimate change is accepted by running `caps:update` in the same PR. The lock is generated, so the reason D39 rejected a hand-kept table no longer applies. This also answers Q11.
-* **A2.** Split files by trust boundary. Owner-owned: `.mise/tasks/**`, `cmake/**`, `fixtures/**` and the build scripts. Unowned: the pins files and a single `image/digest` file that workflows read through a setup job. Action SHA bumps stay owner-reviewed, batched weekly.
-* **A3 (two options).**
-  - **Zoom-out:** an LLVM snapshot rotation within the same major.minor is a leaf bump (with fixtures). major.minor bumps need the owner.
-  - **Catalyst:** mirror the pinned LLVM `.deb` files to GHCR by inputs hash (the §2 pattern), or split the image into a compiler base layer and a tools layer, so leaf bumps never re-resolve apt.
-* **A4 / A5.**
-  - Separate building from checking. One trusted builder workflow on `main` builds every missing artifact on the right runner. PR jobs only require that the artifact for `hash(inputs)` exists.
-  - Self-hosted runners upload only a workflow artifact. A hosted job with `packages: write` publishes it.
-  - Drop `lock.toml` and derive the tag from the hash. If it is kept, add a tier-1 check that `hash == lock.hash`.
-  - The agent App is the writer identity.
-* **A6.** Make the runner sandbox the boundary: ephemeral, egress only, no tailnet, never privileged. PRs that touch owner paths need a GitHub Environment approval before any self-hosted job runs.
-* **A7.** Add "Critical path to glaze FIX": the Linux arm64 image, GCC 16 and p2996 on Linux, the encoder, tier-1 CI for those presets, and the merge queue. Everything else goes in a cut order, cut first to last: perf, canary, Mac GCC, Mac p2996, Mac runner, amd64. Add an M0 exit review with pre-agreed cuts.
-* **A8.**
-  - Put Mac GCC last in the cut order.
-  - A bootstrapped "runner golden" Tart image keyed by hash.
-  - The macOS gate is not a required merge-queue check (it runs after merge or daily).
-  - Split hash inputs into build inputs and environment constraints.
-* **A9.** Pin clang-format through one platform-independent mise tool. Run tidy only in the Linux clang image.
-* **A10.** Use git as the transport: push the branch, and the PC container clones at that SHA into a volume.
-* **A11.** Keep the D35 table as the standard. Defer the `perf:*` tasks, the privileged container and the PMU check to Level 2, except perhaps `perf:instructions` (callgrind).
+The owner left out the earlier review reports, so this review does not depend
+on them.
 
-## What held up (both reviewers)
+**Verdict:**
 
-* Rejecting `mise oci build` in favour of a Dockerfile of about ten lines that only calls mise (reproduced on 26.04 and 26.10).
-* `--skip tools` followed by `install --system --locked`, with mise.lock at mode 644 (tested).
-* An inputs-hash GHCR cache for p2996 (the pattern is reused, not invented).
-* Hand-written layered presets (D8), and clang-tidy only on plain-clang targets.
-* Not forking mise, and keeping the upstream asks as drafts.
-* The two-tier gate, the report-only canary and side-by-side base flips (D36).
+- The zoom-out reviewer requests changes: 2 Blockers, 5 Majors and 4 Nits.
+- The catalyst found 5 Majors and 1 Nit.
+- Working separately, both reached the same central point. Since D101 the
+  trust machinery enforces nothing, yet it still costs time on a two-week
+  critical path.
 
-## Author (Elephant) notes for the owner
+Both reviewers checked the saved sources:
 
-* **A1 is the same weak point I flagged when D39 was decided.** Both reviewers found independently that the guard doesn't work as written. The catalyst's lock-file option keeps "probe and adapt" for optional features but makes a lost capability visible and owner-reviewed. It doesn't reverse D39.
-* **A2, A4, A5 and A6 are one cluster: the fence and the automation as written don't fit together.** They are best fixed together, as one change to §2, §6 and §7.
-* **A7 and A8 are scope questions that touch D21 and D26.** Those are your calls; the reviewers suggest sequencing, not reversal.
+- ccache PR #1523 is still an open draft, so the ccache rejection holds.
+- mise takes no outside PRs, so the "don't fork mise" rejection holds.
+
+## Zoom-out findings
+
+### Z1. Blocker: the two-tier trust model no longer enforces anything
+
+- **Scope:**
+  - §6: The fence (848-852), Credentials (886-899) and Owned roots
+    (935-960).
+  - §7: Merge rule (1002-1017).
+  - Risk rows 1445-1448 and 1454.
+  - D101 and D107.
+- **Problem:** the owned-roots/pins split exists so that a trusted file guards
+  an untrusted one. The split covers:
+  - the O/P marks and CODEOWNERS;
+  - `pins-allowlist.toml` and `gate-policy.toml`;
+  - `pins:validate` and `gate:policy`.
+
+  Since D101, one agent PR can change a guard and the file it guards together,
+  and merge on the checks. For example:
+  - `pins-allowlist.toml` with a pin;
+  - `gate-policy.toml` with a preset;
+  - `cmake/probes.cmake` with the capability lock;
+  - `builder.yml`, `post-merge.yml` or `repo-verify.yml` themselves.
+
+  So the design pays for the trust model but gets none of its enforcement.
+- **Fix:**
+  - Add one small, real gate on only the files whose compromise reaches the
+    owner's hardware or signing identity:
+    - `builder.yml`;
+    - the workflows on the self-hosted allowlist;
+    - `repo-verify.yml`;
+    - `runner/**`;
+    - the rulesets.
+  - The gate can be either:
+    - code-owner review on that short list; or
+    - a required check that fails when a non-owner PR touches the list.
+  - Make restoring the gate an M2 entry condition. There are no self-hosted
+    runners before M2, so M1a loses nothing.
+  - The rest of the owned-roots list can then honestly be called
+    documentation, or be dropped.
+
+### Z2. Blocker: the settings check forbids restoring code-owner review
+
+- **Scope:**
+  - §6 daily settings check (967-977, especially 969-971).
+  - File plan: `repo:rulesets`.
+- **Problem:** `repo:rulesets --verify` fails if code-owner review is turned
+  back on. That makes the interim D101 choice ("for the time being") an
+  enforced invariant. To restore Z1's safety, someone must first edit an
+  owned task, and the check stays red until they do.
+- **Fix:** check that the protections are present (the merge queue, the
+  required checks, no extra bypass actors). Do not forbid adding a
+  protection.
+
+### Z3. Major: artifacts use two stores and two trust paths
+
+- **Scope:**
+  - §2.2 (480-494) and §2.4 (505-594).
+  - Alternatives: "GitHub attestations for toolchains too" (1334-1337).
+  - File plan: `toolchain/fetch`, `artifact/names` and the M1b tag ruleset.
+- **Problem:** the design uses:
+  - two stores: Releases for toolchains and GHCR for images;
+  - two trust paths: packslip and attestations;
+  - four fetch sources for toolchains.
+
+  Releases force a chain of workarounds:
+  - a semver scheme with `-r.<n>` variants;
+  - a title search over `gh release list --limit 1000`;
+  - an ordering for immutable releases;
+  - a tag ruleset;
+  - a `salt` field;
+  - an `actions/cache` scoping workaround.
+- **Fix:** publish toolchain archives as OCI artifacts in GHCR, tagged by the
+  inputs hash and checked by the same attestation verify. This removes the
+  version scheme, the title lookup, the cache leg, the run-id lookup and the
+  tag ruleset.
+- **If packslip stays:** if jdx-first (D10/D11) is the real reason for
+  packslip, say so as the trade-off. At a minimum, drop the `actions/cache`
+  leg and use `pr-` GHCR artifacts instead.
+
+### Z4. Major: M1a carries trust work that buys little before M2
+
+- **Scope:**
+  - §10 critical path item 6.
+  - M1a PR order 3 and 6.
+  - Setup steps 9-10.
+  - §6 Credentials and risk row 1446.
+- **Problem:** M1a carries:
+  - packslip signing;
+  - a four-source fetch;
+  - attestation verify;
+  - the `pr-` namespace;
+  - a JWT minter;
+  - a verifier that needs an Admin-write PAT shared with every future
+    project.
+- **Why the PAT is avoidable:** the verifier needs that PAT only to read
+  `bypass_actors`. In a single-admin org, dropping that field lets the check
+  run on `GITHUB_TOKEN`. That removes the `audit` environment,
+  `RULESETS_PAT` and the D107 `repo-verify` risk.
+- **Why the signing buys little:** before M2, nothing outside hosted runners
+  uses `main`'s signatures. Since D101, any green PR can change
+  `builder.yml`.
+- **Fix:**
+  - Move packslip and the merge-group leg to M1b or M2, or adopt Z3.
+  - Spend the freed days on the encoder and the gate.
+
+### Z5. Major: the Technical Plan drops into implementation detail
+
+- **Scope:**
+  - §2 (425-604).
+  - §6 runner enforcement and credential storage (862-934).
+  - File plan rows `agent/token`, the outrunner files and the Dockerfiles.
+- **Problem:** the plan quotes:
+  - exact `gh` flags;
+  - upstream source line numbers;
+  - `retention-days: 7`;
+  - JWT lifetimes;
+  - `$GITHUB_OUTPUT` fields;
+  - canonical-JSON rules.
+
+  The fetch-rule paragraph alone is about 35 lines.
+- **Fix:**
+  - Move the evidence to the decisions log.
+  - Move command lines to runbooks or task files.
+  - Keep components, data flow and trust boundaries in the design.
+
+### Z6. Major: the design describes its history, not its current state
+
+- **Scope:**
+  - Status (4-11).
+  - Inputs (43), which still says "D1 to D102".
+  - Setup steps 5, 6 and 10.
+  - The §6 owned-roots preface.
+- **Problem:**
+  - Setup step 6's "First, CODEOWNERS (D100)" rationale no longer applies
+    after D101.
+  - Its done-when check, a `BLOCKED` App PR, cannot happen now.
+  - Step 10 says its content moved to step 7.
+- **Fix:** rewrite these sections as the current procedure. Leave the history
+  to the decisions log.
+
+### Z7. Major: the vcpkg triplets are speculative
+
+- **Scope:**
+  - §4 Dependencies (736-741).
+  - File plan: `triplets/*.cmake`, `vcpkg.json` and `vcpkg/bootstrap`.
+- **Problem:** the only dependency is the header-only ut library (D52). Yet
+  the plan has nine arm64 triplets, including sanitizer variants, plus amd64
+  copies. None of them proves anything, because no library builds through
+  them.
+- **Fix:**
+  - Keep one triplet per compiler and standard library, three in total.
+  - Add sanitizer triplets with the first compiled dependency, in Level 2.
+
+### Z8. Nit: the probes copy more of the parked catalogue than they need
+
+- **Scope:** file plan: `cmake/probes.cmake` and `gate/policy`.
+- **Fix:**
+  - Copy only the `check_*` calls that §4 lists.
+  - In `gate:policy`, compare plain strings instead of calling
+    `_profile_undone_in` through `cmake -P`.
+
+### Z9. Nit: the digest's agent count has no source until M5
+
+- **Scope:**
+  - §9 (1041-1059).
+  - The G6 measure and CUJs 5 and 6.
+  - `review/cap`, which is scheduled for M5.
+- **Fix:** do one of these:
+  - move `review:cap` into M1b, next to the digest;
+  - drop the agent count from the Level 1 G6 measure.
+
+### Z10. Nit: `vcpkg/bootstrap` is agent-editable in §6 but not in D76
+
+- **Scope:** §6 (944-946) and D76.
+- **Fix:** record the addition in the decisions log, or remove it from §6.
+
+### Z11. Nit: D74's reason for a separate `tools.toml` no longer holds
+
+- **Scope:**
+  - §3 (626-651).
+  - Alternatives: "Folding [tools] into mise.toml" (1374-1375).
+- **Problem:** D74 kept `tools.toml` separate because "the daily tools PR
+  would need the owner". After D101 that is no longer true.
+- **Fix:** restate the reason for the split: parallel edits and hashing per
+  layer.
+
+## Inventive-catalyst findings
+
+### C1. Major: "no human approval" is treated as all or nothing
+
+- **Problem:** this has the same root cause as Z1. About five trust-root files
+  merge on the checks:
+  - `builder.yml`;
+  - `post-merge.yml` and `mac-gate.yml`;
+  - `repo-verify.yml`;
+  - `runner/hook/job-started.sh`.
+
+  The only mitigation is a look after merge. It has no mechanism until the M1b
+  digest, and the digest is item 3 on the cut list.
+- **Resolution (segmentation):**
+  - Move publishing and signing into a small `publish.yml`. Make it the only
+    identity that packslip and `gh attestation verify` accept, so that
+    `builder.yml` stops being a trust root.
+  - Add one required `trust-roots` check. It fails when a PR touches
+    `publish.yml`, the self-hosted allowlist, `repo-verify.yml` or
+    `runner/**`, unless the owner pushed or approved the head commit.
+- **Alternative (extraction):** the runner hook checks the workflow SHA
+  against an allowlist on the host that only the owner updates. This option
+  is unverified: it depends on the hook context exposing the SHA.
+- **Liabilities:**
+  - A second identity to pin and test.
+  - The owner is back on the path for rare trust-root edits, which come in
+    bursts during M1a.
+  - With the hook option, a stale allowlist turns runs red.
+
+### C2. Major: one PR can drop a check and its negative control together
+
+- **Scope:**
+  - §1 capability lock.
+  - §5 negative controls.
+  - The probe-and-lock risk row (D42, D107).
+- **Problem:**
+  - Whether a fixture applies comes from the capability lock.
+  - Removing a capability therefore also turns off the must-fail fixture that
+    would catch the removal.
+  - So one PR can remove a check and its negative control at the same time
+    and stay green.
+- **Resolution (a one-way ratchet):**
+  - Additions to the lock merge freely.
+  - A removal needs a matching entry in an owned `capability-removals.toml`.
+    `gate:policy` fails without that entry.
+  - The fixtures for a removed capability stay applicable until the entry
+    exists.
+- **Liabilities:**
+  - One more owned file, and a lock-diff parser in `gate:policy`.
+  - If agents can write the removals file in the same PR, it is only an audit
+    trail. So the file belongs on C1's trust-root list.
+
+### C3. Major: `main` consumers race the `main` toolchain build
+
+- **Scope:**
+  - §2 Build and fetch rule.
+  - §6 job table.
+- **Problem:**
+  - A `main` job uses only the `main` release, so it fails on a hash that
+    has no release yet.
+  - `post-merge.yml` and `mac-gate.yml` start on push, but a p2996 rebuild
+    takes 61-76 minutes or more.
+  - Toolchain inputs merge daily, so `main` gets a red window every day. That
+    noise drowns the red post-merge signal that several risk rows rely on.
+  - §2 step 3 and §6 also disagree on whether `builder.yml` runs on `push`.
+- **Resolution (inversion):**
+  - After it publishes, the publish job dispatches `post-merge.yml` and
+    `mac-gate.yml` with the head SHA.
+  - Keep the push trigger only for commits that change no artifact inputs.
+  - Settle the trigger list in one place.
+- **Liabilities:**
+  - One more hop, and `actions: write` on the publish job.
+  - A failed publish shows as a missing run instead of a red one, so the
+    digest must flag it.
+
+### C4. Major: `RULESETS_PAT` lives where agent-merged code can use it
+
+- **Scope:**
+  - §6 Credentials (D92).
+  - The `repo-verify.yml` risk row.
+- **Resolution (extraction):**
+  - Move the ruleset audit into one owner-only audit repository with no
+    agent App installed.
+  - A scheduled workflow there holds the PAT and checks every C++ project.
+  - cpp-standard reads that workflow's status with `actions: read`.
+- **Simpler option:** Z4 suggests dropping the `bypass_actors` read and using
+  `GITHUB_TOKEN`.
+- **Liabilities:**
+  - A second repository to maintain.
+  - The settings checklist then depends on a status read across
+    repositories.
+
+### C5. Major: a macOS-only breakage stops macOS work until someone acts
+
+- **Scope:**
+  - §2 fetch rule.
+  - §7 "macOS builds after merge".
+  - The risk rows for Mac GCC and macOS regressions (D62, D85).
+- **Problem:**
+  - After a bump that breaks the Mac build merges, the fetch falls through to
+    a source rebuild.
+  - That rebuild fails for the same reason.
+  - The risk table promises "keep the last good build", but no fetch source
+    provides it.
+- **Resolution:**
+  - Add a macOS-only fallback to the newest signed `main` release, marked as
+    stale. A stale environment never ticks a gate item.
+  - Optionally, let the builder open a revert PR itself.
+- **Liabilities:**
+  - The fallback weakens G1's "tags always resolve", so it must not be used
+    on Linux or for the capability lock.
+  - Auto-revert needs a retry-once rule and a cap.
+
+### C6. Nit: Renovate and toolchain PRs get no macOS signal before merge
+
+- **Resolution:** add a hosted macOS job that is advisory and not required.
+  It builds the PR's Mac toolchain inputs and runs a smoke test. It runs on
+  GitHub's hardware, so the fence is not touched.
+- **Liabilities:**
+  - SDK differences give false results.
+  - A GCC bootstrap may come close to the 6-hour job limit.
+  - Its artifacts must never be fetched.
+  - It is better left as a candidate for M3 or later.
+
+### Areas the catalyst found balanced
+
+- The `main` builder never reuses PR artifacts. Provenance needs this.
+- GCC module compiles are not cached. This is an upstream limit.
+- The runner hook has no token (actions/runner#2813).
+- macOS allows only two VMs.
+- The cut order and the Linux-first critical path.
+- gcov-mode coverage with `static_assert`.
+- One `pins.toml` per toolchain (D85).
+
+## Where the two reviewers agree
+
+- **Z1, C1, C4 and Z4:** D101 left the trust roots ungated.
+  - Both reviewers propose a small gate on about five files:
+    - the builder or publish workflow;
+    - the self-hosted workflows;
+    - `repo-verify.yml`;
+    - `runner/**`;
+    - the rulesets.
+  - Neither proposes a human review of everything.
+  - Both note the gate is needed only from M2, when self-hosted runners
+    start.
+- **Z2:** whatever the owner picks for Z1, the settings check must not forbid
+  it.
+- **C2:** the capability lock needs a one-way rule for removals. Otherwise the
+  probe-and-lock risk in D107 also turns off its own negative control.
