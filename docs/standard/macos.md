@@ -369,27 +369,52 @@ fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (DB5 probe).
 **DB3. lldb-p2996 starts and runs Python.** Probe:
 
 ```sh
-"$P2996/bin/lldb-p2996" -b -o 'script print(1+1)'
+"$P2996/bin/lldb-p2996" -b -o 'script print(40+2)'
 otool -l "$P2996/lib/liblldb.dylib" | grep -A2 LC_RPATH | grep path
+ls "$HOME/.local/share/mise/installs/python/3.15/lib/libpython3.15.dylib"
 ```
 
-Expected: `2`, and an `LC_RPATH` that contains `libpython3.15.dylib`. Today:
-FAIL, `dyld: Library not loaded: @rpath/libpython3.15.dylib`; the only
-rpath is `@loader_path/../lib`.
+Expected: `42`, an `LC_RPATH` entry `.../mise/installs/python/3.15/lib`, and
+that directory holds `libpython3.15.dylib`. PASS if all three. Today: FAIL,
+`dyld: Library not loaded: @rpath/libpython3.15.dylib`; the only rpath is
+`@loader_path/../lib`.
+
+Why: mise's Python is a python-build-standalone build, so
+`libpython3.15.dylib` names itself `@rpath/libpython3.15.dylib`. `liblldb`
+records that name when it links, and the p2996 build sets
+`CMAKE_INSTALL_RPATH` to `@loader_path/../lib` only, so dyld never looks in
+mise's Python.
 
 Fix, in order of preference:
 
-1. Rebuild with `-DCMAKE_INSTALL_RPATH="@loader_path/../lib;$(mise where python@3.15)/lib"`
+1. Rebuild with
+   `-DCMAKE_INSTALL_RPATH="@loader_path/../lib;$HOME/.local/share/mise/installs/python/3.15/lib"`
    and `-DPython3_EXECUTABLE="$(mise which python3.15)"`, so the rpath is part
-   of the build inputs.
+   of the build inputs. If the build script forces `CMAKE_INSTALL_RPATH` in a
+   cache file, change it there; a forced cache value wins over `-D`.
 2. On an existing install:
-   `install_name_tool -add_rpath "$(mise where python@3.15)/lib" "$P2996/lib/liblldb.dylib"`
-   then re-sign it: `codesign -f -s - "$P2996/lib/liblldb.dylib"`.
-3. If lldb starts but `script` fails with `No module named 'encodings'`, set
-   `PYTHONHOME="$(mise where python@3.15)"` in the toolchain environment.
 
-Keep that exact Python 3.15 installed: a mise upgrade or prune that removes
-it breaks lldb-p2996 again. The check re-runs DB3 after any Python change.
+   ```sh
+   install_name_tool -add_rpath "$HOME/.local/share/mise/installs/python/3.15/lib" "$P2996/lib/liblldb.dylib"
+   codesign -f -s - "$P2996/lib/liblldb.dylib"
+   ```
+
+   Xcode 27's `install_name_tool` re-signs an ad-hoc signed file itself
+   (verified: `codesign -v` passes after the edit); the explicit `codesign`
+   keeps the step safe with older tools, where a broken signature makes
+   macOS kill the process.
+
+Use the `installs/python/3.15` path, not `$(mise where python@3.15)`: `mise
+where` prints the hashed install folder, which changes when mise reinstalls
+Python, while `installs/python/3.15` is a link that follows 3.15.x patch
+updates. `PYTHONHOME` is not needed: Python finds its standard library from
+the real location of `libpython3.15.dylib`. Do not rely on
+`DYLD_LIBRARY_PATH` as a workaround: it works when you start `lldb-p2996`
+directly, but SIP removes `DYLD_*` variables whenever a protected program
+such as `/bin/sh` starts, so it fails inside any script or wrapper.
+
+Keep Python 3.15 installed: a mise prune that removes it, or a move to 3.16,
+breaks lldb-p2996 again. Re-run DB3 after any Python change.
 
 **DB4. lldb-dap.** Probe: `"$P2996/bin/lldb-dap-p2996" --help | head -1`.
 PASS if it prints usage. Today: FAIL, the same missing `libpython3.15.dylib`
