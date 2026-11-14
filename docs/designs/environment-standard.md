@@ -985,8 +985,8 @@ GitHub does not let an author approve their own PR, so trust-root changes
 come from the agent App or Renovate, never the owner's login. The M2 entry
 gate turns code-owner review on with `repo:rulesets --phase m2` (D108).
 
-Only `GITHUB_TOKEN` and the owner can dispatch workflows: the agent App has
-no `actions: write` (D134), and `builder.yml` takes no ref or SHA input.
+From M1a PR 6, only `GITHUB_TOKEN` and the owner can dispatch workflows:
+the agent App has no `actions: write` (D134), and `builder.yml` takes no ref or SHA input.
 `post-merge.yml` and `mac-gate.yml` accept a dispatch only from
 `publish.yml`'s `GITHUB_TOKEN` or the owner, on `refs/heads/main`, and
 check out the SHA of `publish.yml`'s verified builder run (D122, D134).
@@ -1026,8 +1026,8 @@ never fails because one was added. It fails if:
 - immutable releases or the toolchain tag ruleset are off (from M1b);
 - a required workflow is disabled.
 
-The agent App has no `actions: write`, so it cannot disable these checks
-(D134).
+From M1a PR 6, the agent App has no `actions: write`, so it cannot disable
+these checks (D134).
 
 #### Every merge goes through the merge queue (D23)
 
