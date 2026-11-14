@@ -46,11 +46,11 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | clang 23.1.5 (Homebrew): `import std` through CMake | FAIL (C4) | `-DCMAKE_CXX_STDLIB_MODULES_JSON=/opt/homebrew/opt/llvm/lib/c++/libc++.modules.json` |
 | clang 23: reflection | no (upstream clang has no P2996) | use p2996 or GCC |
 | GCC 16.2.0: `-g` with `-fsanitize=address` or `undefined` | FAIL (G6): the link runs Homebrew LLVM's `dsymutil`, which dies with SIGILL | put `/usr/bin` before `/opt/homebrew/opt/llvm/bin` for GCC builds, or build without `-g` |
-| `lldb-p2996`, `lldb-dap-p2996` | FAIL: will not start (DB3) | debug with Apple `lldb` (`xcrun lldb`) |
+| `lldb-p2996`, `lldb-dap-p2996` | FAIL: start and run Python after the DB3 fix, but crash loading any program (DB5) | debug with Apple `lldb` (`xcrun lldb`) |
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
 | p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
-| In-tree code-signed debugserver | FAIL (DB5): the build used the system one | `LLDB_DEBUGSERVER_PATH` set to Xcode's debugserver |
+| In-tree code-signed debugserver | FAIL (DB5): the build used the system one, and lldb-p2996 crashes before it attaches (DB5 blocker) | `LLDB_DEBUGSERVER_PATH` set to Xcode's debugserver |
 | p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
 | Developer mode, Xcode first launch | FAIL (A3, A6) | `sudo DevToolsSecurity -enable`; `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
@@ -365,7 +365,13 @@ both.
 **DB2. LLVM 23 lldb.** Probe: `"$LLVM23/bin/lldb" --version`. Expected:
 `lldb version 23.x`. The tarball lldb is built without Python, so `script`
 fails: expected, not a FAIL. Its `debugserver` is ad-hoc signed; if attach
-fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (DB5 probe).
+fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (DB5 probe). LLVM 23 has the
+32-bit offset bug described under the DB5 blocker, and also both
+llvm/llvm-project #202773 and #203055 (in `release/23.x`), so its lldb should load programs
+without crashing but may read wrong symbols for system libraries. Probe:
+`"$LLVM23/bin/lldb" -b -o 'target create /bin/ls'; echo $?`, expect exit 0;
+exit 0 does not rule out the wrong-symbol reads. Not yet run: the LLVM 23
+tarball is not installed on this Mac today.
 
 **DB3. lldb-p2996 starts and runs Python.** Probe:
 
@@ -376,9 +382,11 @@ ls "$HOME/.local/share/mise/installs/python/3.15/lib/libpython3.15.dylib"
 ```
 
 Expected: `42`, an `LC_RPATH` entry `.../mise/installs/python/3.15/lib`, and
-that directory holds `libpython3.15.dylib`. PASS if all three. Today: FAIL,
-`dyld: Library not loaded: @rpath/libpython3.15.dylib`; the only rpath is
-`@loader_path/../lib`.
+that directory holds `libpython3.15.dylib`. PASS if all three. Today: PASS
+on this Mac after fix 2 below was applied to the installed copy
+(2026-11-14). A fresh p2996 build still fails with
+`dyld: Library not loaded: @rpath/libpython3.15.dylib` until the build
+carries fix 1, because its only rpath is `@loader_path/../lib`.
 
 Why: mise's Python is a python-build-standalone build, so
 `libpython3.15.dylib` names itself `@rpath/libpython3.15.dylib`. `liblldb`
@@ -420,8 +428,9 @@ Keep Python 3.15 installed: a mise prune that removes it, or a move to 3.16,
 breaks lldb-p2996 again. Re-run DB3 after any Python change.
 
 **DB4. lldb-dap.** Probe: `"$P2996/bin/lldb-dap-p2996" --help | head -1`.
-PASS if it prints usage. Today: FAIL, the same missing `libpython3.15.dylib`
-as DB3; the DB3 fix fixes it.
+PASS if it prints usage (`OVERVIEW: LLDB DAP`). Today: PASS on this Mac
+after the DB3 fix; a fresh build fails with the same missing
+`libpython3.15.dylib` as DB3 until it carries DB3 fix 1.
 
 **DB5. In-tree debugserver, code-signed.** Why: `LLDB_USE_SYSTEM_DEBUGSERVER=OFF`
 makes the debugserver match lldb-p2996 exactly; macOS refuses to let an
@@ -437,8 +446,9 @@ codesign -dvv "$DS" 2>&1 | grep -E 'Authority|Signature'
 ```
 
 Expected: a path inside `$P2996`, `Authority=lldb_codesign`, and
-`stop reason = breakpoint 1.1`. Today: FAIL (no in-tree debugserver; the
-build used the system one).
+`stop reason = breakpoint 1.1`. Today: FAIL for two reasons: there is no
+in-tree debugserver (the build used the system one), and lldb-p2996 crashes
+before it gets that far (DB5 blocker, after the steps).
 
 Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
 
@@ -456,6 +466,39 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
 5. If the certificate cannot be made (no admin), fall back:
    `export LLDB_DEBUGSERVER_PATH=/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver`
    and record DB5 as FAIL with that workaround.
+
+**DB5 blocker: lldb-p2996 crashes loading any program on macOS 27.** Report
+it on the DB5 line until it passes. Probe:
+`"$P2996/bin/lldb-p2996" -b -o 'target create /bin/ls'; echo $?`. Expected:
+exit 0. Today: exit 132, and the crash report shows `ParseTrieEntries`
+recursing until the stack runs out. Apple `lldb` loads the same program.
+
+Why: lldb reads each system library's symbol table, string table and export
+trie out of the dyld shared cache it has mapped. It adds the distance from
+the library's `__TEXT` to the cache's `__LINKEDIT` to each 32-bit offset field
+in the library's load commands (`ObjectFileMachO::ParseSymtab`). On macOS 27
+that distance is more than 4 GiB for many libraries (`libcorecrypto`:
+`0x1619b2000`), so the sum wraps. lldb then parses unrelated bytes as an
+export trie; when those bytes happen to point back at themselves, the parser
+recurses until it crashes. Verified on this Mac:
+
+- lldb-p2996 read `libcorecrypto`'s trie 4 GiB below the real one. The real
+  trie is well formed: 1,140 exports, depth 12, no node reached twice.
+- Of the 15 libraries `/bin/ls` loads, loaded one at a time, every library
+  whose symbol table parse crashes lldb has a wrapping offset, and none
+  without one crashes it. `libcopyfile` wraps without crashing,
+  so lldb reads the wrong symbols for it silently.
+
+Upstream `main` has the same code. llvm/llvm-project #202773 and #203055
+reject a cyclic trie, which stops the crash, but lldb still reads the wrong
+bytes; they also do not apply to the p2996 fork, which predates the upstream
+move of the trie parser into `MachOTrie.cpp`.
+
+Fix (untested until a p2996 build carries it): patch `ObjectFileMachO.cpp`
+to keep the adjusted offsets in 64-bit variables instead of the 32-bit load
+command fields. Until a build with that patch passes the probe above, debug
+with Apple `lldb`. After a rebuild, run the
+probe above, then the DB5 probe.
 
 ## L. Library features (headers)
 
