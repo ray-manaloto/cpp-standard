@@ -46,14 +46,14 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | clang 23.1.5 (Homebrew): `import std` through CMake | FAIL (C4) | `-DCMAKE_CXX_STDLIB_MODULES_JSON=/opt/homebrew/opt/llvm/lib/c++/libc++.modules.json` |
 | clang 23: reflection | no (upstream clang has no P2996) | use p2996 or GCC |
 | GCC 16.2.0: `-g` with `-fsanitize=address` or `undefined` | FAIL (G6): the link runs Homebrew LLVM's `dsymutil`, which dies with SIGILL | put `/usr/bin` before `/opt/homebrew/opt/llvm/bin` for GCC builds, or build without `-g` |
-| `lldb-p2996`, `lldb-dap-p2996` | FAIL: both start after the DB3 fix; `lldb-p2996` crashes loading any program (DB5 blocker); `lldb-dap-p2996` loading a program is untested | debug with Apple `lldb` (`xcrun lldb`) |
+| `lldb-p2996`, `lldb-dap-p2996` | PASS since the rebuild with #159849 and the Python rpath (DB3, DB4, DB5 blocker): `lldb-p2996` loads and debugs programs, using Xcode's debugserver; `lldb-dap-p2996` starts, debugging through it is untested | none needed |
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
 | p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
-| In-tree code-signed debugserver | FAIL (DB5): the build used the system one, and lldb-p2996 crashes before it attaches (DB5 blocker) | debug with Apple `lldb` (`xcrun lldb`); `LLDB_DEBUGSERVER_PATH` set to Xcode's debugserver helps only once lldb-p2996 loads programs |
+| In-tree code-signed debugserver | FAIL (DB5): the p2996 build forces `LLDB_USE_SYSTEM_DEBUGSERVER=ON`, and this Mac has no `lldb_codesign` certificate | lldb-p2996 uses Xcode's debugserver, which works |
 | p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
-| Developer mode, Xcode first launch | FAIL (A3, A6) | `sudo DevToolsSecurity -enable`; `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
+| Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode disabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
 | p2996 coverage | PASS with the matching tools | use `llvm-cov-p2996 gcov`, never another LLVM's |
 | `g++` / `gcc` on `PATH` | Apple clang: `gcc` is `/usr/bin/gcc`, and `g++` is a mise shim with no active version, which falls through to `/usr/bin/g++` | call `g++-16` by name |
 | `ccache` on `PATH` | mise shim with no version set; it exits with an error | use sccache (D9); ccache does not cache C++20 modules |
@@ -136,10 +136,16 @@ SDK as the OS. Probe: `xcrun --show-sdk-path; xcrun --show-sdk-version`.
 Expected: a path ending `MacOSX.sdk` inside Xcode, and `27.2`. PASS if the
 SDK major matches A1.
 
-**A6. Developer mode for debugging.** Why: lldb needs it to attach without a
-prompt. Probe: `DevToolsSecurity -status`. Expected: `Developer mode is
-currently enabled.` Fix: `sudo DevToolsSecurity -enable`. Today: FAIL
-(`disabled`).
+**A6. Debugging attaches without a prompt.** Why: a debugger that asks for
+a password cannot run unattended. Probe: `DevToolsSecurity -status`. PASS if
+`enabled`. If `disabled`, record A6 after DB5: PASS if the DB5 breakpoint
+line passes without a password prompt; otherwise FAIL, and the fix is
+`sudo DevToolsSecurity -enable`. Today: PASS with `disabled` (2026-11-14):
+lldb-p2996 and Apple `lldb` both stop at a breakpoint with `lldb -b` and no
+prompt. lldb-p2996 launched Xcode's Apple-signed `debugserver` (seen in
+`ps`), and the account is in the `_developer` group (`id -Gn`); which of
+the two makes the prompt unnecessary is untested. Re-check A6 once
+DB5's self-signed debugserver exists.
 
 ## B. Build tools
 
@@ -365,7 +371,7 @@ both.
 **DB2. LLVM 23 lldb.** Probe: `"$LLVM23/bin/lldb" --version`. Expected:
 `lldb version 23.x`. The tarball lldb is built without Python, so `script`
 fails: expected, not a FAIL. Its `debugserver` is ad-hoc signed; if attach
-fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (DB5 probe).
+fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (the path in DB5's "Today").
 
 LLVM 23 already has the upstream fix for the offset wrap described under the
 DB5 blocker (llvm/llvm-project #159849, in LLVM 22 and later), so its lldb
@@ -383,11 +389,11 @@ ls "$HOME/.local/share/mise/installs/python/3.15/lib/libpython3.15.dylib"
 ```
 
 Expected: `42`, an `LC_RPATH` entry `.../mise/installs/python/3.15/lib`, and
-that directory holds `libpython3.15.dylib`. PASS if all three. Today: PASS
-on this Mac after fix 2 below was applied to the installed copy
-(2026-11-14). A fresh p2996 build still fails with
-`dyld: Library not loaded: @rpath/libpython3.15.dylib` until the build
-carries fix 1, because its only rpath is `@loader_path/../lib`.
+that directory holds `libpython3.15.dylib`. PASS if all three. Today: PASS on
+the p2996 build that carries fix 1 (2026-11-14): `42`, and the second
+`LC_RPATH` is `.../mise/installs/python/3.15/lib`. A build without fix 1
+fails with `dyld: Library not loaded: @rpath/libpython3.15.dylib`, because
+its only rpath is `@loader_path/../lib`.
 
 Why: mise's Python is a python-build-standalone build, so
 `libpython3.15.dylib` names itself `@rpath/libpython3.15.dylib`. `liblldb`
@@ -429,9 +435,9 @@ Keep Python 3.15 installed: a mise prune that removes it, or a move to 3.16,
 breaks lldb-p2996 again. Re-run DB3 after any Python change.
 
 **DB4. lldb-dap.** Probe: `"$P2996/bin/lldb-dap-p2996" --help | head -1`.
-PASS if it prints usage (`OVERVIEW: LLDB DAP`). Today: PASS on this Mac
-after the DB3 fix; a fresh build fails with the same missing
-`libpython3.15.dylib` as DB3 until it carries DB3 fix 1.
+PASS if it prints usage (`OVERVIEW: LLDB DAP`). Today: PASS on the
+build that carries DB3 fix 1; a build without it fails with the same missing
+`libpython3.15.dylib` as DB3.
 
 **DB5. In-tree debugserver, code-signed.** Why: `LLDB_USE_SYSTEM_DEBUGSERVER=OFF`
 makes the debugserver match lldb-p2996 exactly; macOS refuses to let an
@@ -440,16 +446,24 @@ unsigned debugserver attach to a process. lldb looks for it in
 (`ProcessGDBRemote.cpp`). Probe:
 
 ```sh
-DS="$(find "$P2996" -name debugserver -type f | head -1)"; echo "$DS"
+DS="$(find -L "$P2996" -name debugserver -type f 2>/dev/null | head -1)"; echo "$DS"
 codesign -dvv "$DS" 2>&1 | grep -E 'Authority|Signature'
 "$P2996/bin/clang++-p2996" -std=c++26 -g p.cpp -o pd
 "$P2996/bin/lldb-p2996" -b -o 'b main' -o run -o 'frame variable' -o kill pd 2>&1 | grep -m1 'stop reason'
 ```
 
 Expected: a path inside `$P2996`, `Authority=lldb_codesign`, and
-`stop reason = breakpoint 1.1`. Today: FAIL for two reasons: there is no
-in-tree debugserver (the build used the system one), and lldb-p2996 crashes
-before it gets that far (DB5 blocker, after the steps).
+`stop reason = breakpoint 1.1`. Today: FAIL on the first two. There is no
+debugserver under `$P2996` because the p2996 build forces
+`LLDB_USE_SYSTEM_DEBUGSERVER=ON` (its `CMakeCache.txt` has
+`LLDB_USE_SYSTEM_DEBUGSERVER:BOOL=ON`). Building one signed with
+`lldb_codesign` also needs that certificate, which this Mac does not have (step 2 finds
+none). The breakpoint part passes: lldb-p2996 stops at the breakpoint
+using Xcode's debugserver
+(`/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Resources/debugserver`,
+seen in `ps` during the run; the same file as
+`.../LLDB.framework/Versions/A/Resources/debugserver`). `find -L` is needed because `$P2996` is a
+link.
 
 Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
 
@@ -460,18 +474,25 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    needs an admin password; in a VM, run it while building the golden image.
 2. Check it: `security find-certificate -c lldb_codesign /Library/Keychains/System.keychain`
    prints the certificate.
-3. Configure p2996 with `-DLLDB_USE_SYSTEM_DEBUGSERVER=OFF` (the build signs
-   debugserver with `lldb_codesign` by default; `LLDB_CODESIGN_IDENTITY`
-   overrides the name).
+3. Configure p2996 with `-DLLDB_USE_SYSTEM_DEBUGSERVER=OFF` and
+   `-DLLDB_CODESIGN_IDENTITY=lldb_codesign`, and stop the build before
+   configure if step 2 finds no certificate. Without the certificate, CMake
+   only warns and signs debugserver ad hoc
+   (`lldb/tools/debugserver/source/CMakeLists.txt`,
+   `get_debugserver_codesign_identity`, whose warning says this "will cause
+   failures in the test suite"). Whether an ad-hoc debugserver can attach
+   here is untested.
 4. Rebuild and install; run the DB5 probe.
-5. If the certificate cannot be made (no admin), fall back:
-   `export LLDB_DEBUGSERVER_PATH=/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver`
-   and record DB5 as FAIL with that workaround.
+5. If the certificate cannot be made (no admin), keep
+   `LLDB_USE_SYSTEM_DEBUGSERVER=ON`: lldb-p2996 then uses Xcode's
+   debugserver, which works today. Record DB5 as FAIL with that workaround.
 
-**DB5 blocker: lldb-p2996 crashes loading any program on macOS 27.** Report
-it on the DB5 line until it passes. Probe:
+**DB5 blocker: lldb-p2996 crashed loading any program on macOS 27.** Fixed
+by the cherry-pick below; keep the probe, and report it on the DB5 line if
+it fails again. Probe:
 `"$P2996/bin/lldb-p2996" -b -o 'target create /bin/ls'; echo $?`. Expected:
-exit 0. Today: exit 132 (128 + signal 4, `SIGILL`). The crash report in
+exit 0. Today: PASS, exit 0 on the build with #159849 (2026-11-14). Before
+that build: exit 132 (128 + signal 4, `SIGILL`). The crash report in
 `~/Library/Logs/DiagnosticReports/` says `EXC_BAD_ACCESS`
 (`KERN_PROTECTION_FAILURE`), "Thread stack size exceeded due to excessive
 recursion", with `ParseTrieEntries` calling itself, and names the signal as
@@ -487,14 +508,15 @@ fields. On macOS 27
 that distance is more than 4 GiB for many libraries (`libcorecrypto`:
 `0x1619b2000`), so the sum wraps. lldb then parses unrelated bytes as an
 export trie; when those bytes happen to point back at themselves, the parser
-recurses until it crashes. Verified on this Mac:
+recurses until it crashes. Verified on this Mac, on the build that did
+not yet carry #159849:
 
 - lldb-p2996 read `libcorecrypto`'s trie 4 GiB below the real one. The real
   trie is well formed: 1,140 exports, depth 12, no node reached twice.
 - Of the 15 libraries `/bin/ls` loads, loaded one at a time, every library
-  whose symbol table parse crashes lldb has a wrapping offset, and none
-  without one crashes it. `libcopyfile` wraps without crashing, so lldb
-  reads the wrong symbols for it silently.
+  whose symbol table parse crashed lldb had a wrapping offset, and none
+  without one crashed it. `libcopyfile` wrapped without crashing, so lldb
+  read the wrong symbols for it silently.
 
 Upstream fixed this in llvm/llvm-project #159849 ("Local structs for larger
 VA offsets", September 2025), which moves those offsets into 64-bit structs.
@@ -503,9 +525,13 @@ It is in LLVM 22 and later and in Apple's `swiftlang/llvm-project`, but not in
 changes (#202773, #203055) only reject a cyclic trie, so they would stop the
 crash but not the wrong reads, and they do not apply to the fork.
 
-Fix (untested until a p2996 build carries it): cherry-pick #159849 into the
-p2996 build; it applies cleanly to the fork. Until a build with it passes the
-probe above, debug with Apple `lldb`. After a rebuild, run the probe above, then the DB5 probe.
+Fix: cherry-pick #159849 into the p2996 build; it applies cleanly to the
+fork. Verified on the build that carries it (2026-11-14): the probe above
+exits 0; each of the 15 libraries `/bin/ls` loads parses on its own,
+including the 8 that crashed (`libcopyfile` now reports 181 symbols, not the
+191 it read from the wrong place); and a C++26 program built with p2996 stops
+at a breakpoint, `frame variable` prints a `std::vector`, and
+`image lookup -n printf` finds it in `libsystem_c.dylib`.
 
 ## L. Library features (headers)
 
