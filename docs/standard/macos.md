@@ -411,8 +411,10 @@ Python, while `installs/python/3.15` is a link that follows 3.15.x patch
 updates. `PYTHONHOME` is not needed: Python finds its standard library from
 the real location of `libpython3.15.dylib`. Do not rely on
 `DYLD_LIBRARY_PATH` as a workaround: it works when you start `lldb-p2996`
-directly, but SIP removes `DYLD_*` variables whenever a protected program
-such as `/bin/sh` starts, so it fails inside any script or wrapper.
+directly, but SIP removes `DYLD_*` variables when a protected program such
+as `/bin/sh` starts, so a value set before a script or wrapper runs never
+reaches lldb (verified: `DYLD_LIBRARY_PATH=... /bin/sh -c lldb-p2996` fails,
+while a script that exports it itself works). The rpath fix needs neither.
 
 Keep Python 3.15 installed: a mise prune that removes it, or a move to 3.16,
 breaks lldb-p2996 again. Re-run DB3 after any Python change.
