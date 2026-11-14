@@ -46,7 +46,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | clang 23.1.5 (Homebrew): `import std` through CMake | FAIL (C4) | `-DCMAKE_CXX_STDLIB_MODULES_JSON=/opt/homebrew/opt/llvm/lib/c++/libc++.modules.json` |
 | clang 23: reflection | no (upstream clang has no P2996) | use p2996 or GCC |
 | GCC 16.2.0: `-g` with `-fsanitize=address` or `undefined` | FAIL (G6): the link runs Homebrew LLVM's `dsymutil`, which dies with SIGILL | put `/usr/bin` before `/opt/homebrew/opt/llvm/bin` for GCC builds, or build without `-g` |
-| `lldb-p2996`, `lldb-dap-p2996` | PASS since the rebuild with #159849 and the Python rpath (DB3, DB4, DB5 blocker): `lldb-p2996` loads and debugs programs, using Xcode's debugserver; `lldb-dap-p2996` starts, debugging through it is untested | none needed |
+| `lldb-p2996`, `lldb-dap-p2996` | PASS since the rebuild with #159849 and the Python rpath (DB3, DB4, DB5 blocker): both load and debug programs, using Xcode's debugserver | none needed |
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
 | p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
@@ -437,7 +437,13 @@ breaks lldb-p2996 again. Re-run DB3 after any Python change.
 **DB4. lldb-dap.** Probe: `"$P2996/bin/lldb-dap-p2996" --help | head -1`.
 PASS if it prints usage (`OVERVIEW: LLDB DAP`). Today: PASS on the
 build that carries DB3 fix 1; a build without it fails with the same missing
-`libpython3.15.dylib` as DB3.
+`libpython3.15.dylib` as DB3. A full session also works (2026-11-14, driven
+by a small DAP client over stdio, the way an editor does): `launch` of a
+p2996-built program, a breakpoint that reports `verified` and stops with
+reason `breakpoint`, `variables` showing `v = size=3` with children `1 2 3`,
+`s = "p2996"` and a struct, `evaluate` of `pt.x + v.size()` giving `10`, then
+`continue` to `exitCode 0`. A breakpoint on a line past the end of the file
+reports `verified: false`.
 
 **DB5. In-tree debugserver, code-signed.** Why: `LLDB_USE_SYSTEM_DEBUGSERVER=OFF`
 makes the debugserver match lldb-p2996 exactly; macOS refuses to let an
