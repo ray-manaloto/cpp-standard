@@ -367,14 +367,12 @@ both.
 fails: expected, not a FAIL. Its `debugserver` is ad-hoc signed; if attach
 fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (DB5 probe).
 
-LLVM 23 has the 32-bit offset bug described under the DB5 blocker, and also
-llvm/llvm-project #202773 and #203055 (both in `release/23.x`), so its lldb
-should load programs without crashing but may read wrong symbols for system
-libraries. Load probe:
+LLVM 23 already has the upstream fix for the offset wrap described under the
+DB5 blocker (llvm/llvm-project #159849, in LLVM 22 and later), so its lldb
+should load programs on macOS 27. Load probe:
 `"$LLVM23/bin/lldb" -b -o 'target create /bin/ls'; echo $?`. PASS if it
 prints `Current executable set to '/bin/ls'` and exits 0; FAIL on any other
-exit code. A PASS does not rule out the wrong-symbol reads. Not yet run: the
-LLVM 23 tarball is not installed on this Mac today.
+exit code. Not yet run: the LLVM 23 tarball is not installed on this Mac today.
 
 **DB3. lldb-p2996 starts and runs Python.** Probe:
 
@@ -482,8 +480,10 @@ Apple `lldb` loads the same program.
 
 Why: lldb reads each system library's symbol table, string table and export
 trie out of the dyld shared cache it has mapped. It adds the distance from
-the library's `__TEXT` to the cache's `__LINKEDIT` to each 32-bit offset field
-in the library's load commands (`ObjectFileMachO::ParseSymtab`). On macOS 27
+the library's `__TEXT` to the cache's `__LINKEDIT` to the library's load
+command offsets (`ObjectFileMachO::ParseSymtab`); in LLVM 21 the export trie,
+dyld info, indirect symbol and function starts offsets are still 32-bit
+fields. On macOS 27
 that distance is more than 4 GiB for many libraries (`libcorecrypto`:
 `0x1619b2000`), so the sum wraps. lldb then parses unrelated bytes as an
 export trie; when those bytes happen to point back at themselves, the parser
@@ -496,15 +496,16 @@ recurses until it crashes. Verified on this Mac:
   without one crashes it. `libcopyfile` wraps without crashing, so lldb
   reads the wrong symbols for it silently.
 
-Upstream `main` has the same code. llvm/llvm-project #202773 and #203055
-reject a cyclic trie, which stops the crash, but lldb still reads the wrong
-bytes; they also do not apply to the p2996 fork, which predates the upstream
-move of the trie parser into `MachOTrie.cpp`.
+Upstream fixed this in llvm/llvm-project #159849 ("Local structs for larger
+VA offsets", September 2025), which moves those offsets into 64-bit structs.
+It is in LLVM 22 and later and in Apple's `swiftlang/llvm-project`, but not in
+`release/21.x`, which the p2996 fork is based on. Later upstream trie-parser
+changes (#202773, #203055) only reject a cyclic trie, so they would stop the
+crash but not the wrong reads, and they do not apply to the fork.
 
-Fix (untested until a p2996 build carries it): patch `ObjectFileMachO.cpp`
-to keep the adjusted offsets in 64-bit variables instead of the 32-bit load
-command fields. Until a build with that patch passes the probe above, debug
-with Apple `lldb`. After a rebuild, run the probe above, then the DB5 probe.
+Fix (untested until a p2996 build carries it): cherry-pick #159849 into the
+p2996 build; it applies cleanly to the fork. Until a build with it passes the
+probe above, debug with Apple `lldb`. After a rebuild, run the probe above, then the DB5 probe.
 
 ## L. Library features (headers)
 
