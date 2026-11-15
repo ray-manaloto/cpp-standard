@@ -94,6 +94,21 @@ url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghali
 url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554130"
 provenance = "cosign"
 
+[[tools."github:llvm/llvm-project"]]
+version = "23.1.5"
+backend = "github:llvm/llvm-project"
+specifiers = ["23.1.5"]
+
+[tools."github:llvm/llvm-project".options]
+asset_pattern = "LLVM-*-macOS-ARM64.tar.xz"
+version_prefix = "llvmorg-"
+
+[tools."github:llvm/llvm-project"."platforms.macos-arm64"]
+checksum = "sha256:aba592b4a15e8f90c634c5367b51ec8418b8bcd2829865db331a17dc9418dcff"
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.5/LLVM-23.1.5-macOS-ARM64.tar.xz"
+url_api = "https://api.github.com/repos/llvm/llvm-project/releases/assets/705797776"
+provenance = "github-attestations"
+
 [[tools.hk]]
 version = "2.12.0"
 backend = "packslip:github.com/jdx/hk"
