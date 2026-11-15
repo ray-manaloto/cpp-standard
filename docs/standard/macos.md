@@ -495,11 +495,11 @@ installed by the build agent after the owner limited the `lldb_codesign`
 key to `/usr/bin/codesign` (step 2). The build agent reports that its
 three signing steps (the `build.py` preflight, CMake's `llvm_codesign`,
 the `install.py` re-sign) ran with no keychain dialog; step 2 records the
-check of the CMake-signed copy. With `P2996` set
-to its `view/`: `bin/debugserver-p2996`, `Authority=lldb_codesign`,
-`valid on disk`, `satisfies its Designated Requirement`, the
-`com.apple.security.cs.debugger` entitlement kept, `--version` exits 0,
-and `stop reason = breakpoint 1.1`. `ps` in the stopped session lists the
+check of the CMake-signed copy. With `P2996` set to its `view/`:
+`bin/debugserver-p2996`, `Authority=lldb_codesign`, `valid on disk`,
+`satisfies its Designated Requirement`, the entitlement
+`com.apple.security.cs.debugger` kept, `--version` exits 0, and
+`stop reason = breakpoint 1.1`. `ps` in the stopped session lists the
 build's own `bin/debugserver`. The lldb-dap probe with the `ps` line also
 passes and lists the same debugserver. No debugserver was left running.
 It has the same p2996 commit as `-b6e46c1709ce`; the build agent reports
