@@ -801,6 +801,7 @@ pulled by that digest.
 **V3. Inside the guest (VM).** Run every section above inside the guest.
 Expected differences: R2 N/A; DB5 needs the certificate (step 1) and
 Developer mode (step 5) set up while the golden image was built.
+Today: not run; Tart is not installed (V1).
 
 ## Report
 
