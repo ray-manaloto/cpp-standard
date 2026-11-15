@@ -26,7 +26,10 @@ D88 and D136). The design is
    before the task starts, so a check could PASS on a tool the Mac did not
    have. The task refuses to start unless `MISE_AUTO_INSTALL=0` is set. It
    cannot undo an install that a run without it made first. It lists
-   `$MISE_DATA_DIR/installs` two levels deep when it starts and when it ends:
+   `$MISE_DATA_DIR/installs` two levels deep when it starts and when it ends,
+   and flags any file or folder under it, at any depth, modified during the
+   run (a reinstall into an existing folder keeps the same names; mise's own
+   lock files in `installs/.mise` are skipped):
    the report's `mise installs:` line says `unchanged`, or names what changed
    and fails the run (exit 3, even with `--allow-fail`). The listing cannot
    tell this run from another process installing at the same time, so rerun
