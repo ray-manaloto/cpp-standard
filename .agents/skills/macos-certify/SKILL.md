@@ -17,7 +17,9 @@ It installs nothing and changes nothing outside a temporary scratch
 directory (playbook rule 4). A full host run takes about a minute. It
 refuses to start (exit 2) unless `MISE_AUTO_INSTALL=0` is set: without it,
 `mise run` installs any missing tool of this repository's config before the
-task starts, so a check could PASS on a tool the Mac did not have.
+task starts, so a check could PASS on a tool the Mac did not have. It
+then re-runs itself once with `MISE_ENV_CACHE=0`, because mise's
+environment cache can hold a PATH from before a tool was installed.
 
 ## Run it
 

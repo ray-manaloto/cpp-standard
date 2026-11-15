@@ -67,7 +67,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | p2996 coverage | PASS with the matching tools | use `llvm-cov-p2996 gcov`, never another LLVM's |
 | `g++` / `gcc` on `PATH` | Apple clang (`/usr/bin/g++`, `/usr/bin/gcc`); no stray mise shims (B2 PASS) | call `g++-16` by name |
 | `ccache` on `PATH` | not installed (B2 PASS) | use sccache (D9); ccache does not cache C++20 modules |
-| Tart | not installed | V checks wait for the install |
+| Tart 2.41.1 | PASS (V1), from mise | none needed; V2 and V3 wait for the image pull and a guest run |
 
 ## The end state
 
@@ -79,7 +79,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | clang-p2996 + libc++ | `bloomberg/clang-p2996` at a pinned commit | **yes** | No prebuilt binary exists. It is the reflection reference compiler (D30). |
 | include-what-you-use for p2996 | IWYU `clang_21` branch, built out of tree against p2996 | **yes** | p2996 is based on LLVM 21. Homebrew's IWYU uses clang 23 and cannot parse `^^` (D136). |
 | CMake 4.5, Ninja, sccache, vcpkg, gcovr, Doxygen, hyperfine | mise | no | Build, cache, dependencies, coverage report, docs, timing. |
-| Tart | `brew install openai/tools/tart` | no | VM host (host only). |
+| Tart | mise, `aqua:openai/tart` (pinned in `.mise/conf.d/vm.toml` and in the dotfiles global config) | no | VM host (host only). Never from Homebrew: every tool is mise-managed. |
 
 ### The p2996 build configuration
 
@@ -957,9 +957,24 @@ PASS if `p.json` is listed (verified).
 
 ## V. Tart VM
 
-**V1. Tart (host).** Probe: `tart --version`. Expected: `2.41.1` or later,
-installed with `brew install openai/tools/tart` (the old `cirruslabs` tap
-moved). Today: FAIL, not installed.
+**V1. Tart (host).** Why: every tool is mise-managed. Tart is pinned in
+`.mise/conf.d/vm.toml` (`tart` in mise's registry is `aqua:openai/tart`, the
+release `tart.tar.gz` with sha256 checksums; macOS only) and, at the same
+version, in the dotfiles global mise config. Inside this repository the
+repository pin wins, so two pins that drift apart cannot both pass. Probe:
+`tart --version`, `mise ls tart --json` and `mise which tart`. PASS if
+`tart --version` equals the repository pin (`2.41.1`) and `tart` on `PATH`
+is that mise install (or a mise shim for it), not Homebrew's or another
+copy. The evidence names the dotfiles global pin when it differs or is
+missing. Today (2026-11-15): PASS, `tart 2.41.1 from mise`, installed with
+`mise install --locked`; the repository pin and the dotfiles global pin
+resolve to one install folder, the `tart.app` bundle is whole and signed
+by `Developer ID Application: Cirrus Labs, Inc.`, and the lock checksum
+(`.mise/mise.lock`) matches the release's `tart_2.41.1_checksums.txt`.
+Right after that install, V1 first reported "not installed": mise's
+environment cache (`env_cache`, on in the global config) still held the
+PATH from before. The task now re-runs itself once with
+`MISE_ENV_CACHE=0`, so no check sees a stale PATH.
 
 **V2. Base image pinned by digest (host).** The base image is
 `ghcr.io/cirruslabs/macos-golden-gate-xcode:27.2`, the image closest to this
@@ -1205,7 +1220,7 @@ print("PASS")
   release build script's macOS arm64 settings (no LTO, no PGO).
 - GCC: Homebrew `gcc.rb` and `Patches/gcc/gcc-16.2.0.diff` (D33).
 - IWYU: `include-what-you-use` `README.md`, branch `clang_21`.
-- Tart: `openai/tools/tart` 2.41.1; GHCR manifests for
+- Tart: `openai/tart` 2.41.1 release (`tart.tar.gz`, `tart_2.41.1_checksums.txt`) and the aqua registry entry `pkgs/openai/tart/registry.yaml`; GHCR manifests for
   `cirruslabs/macos-golden-gate-xcode:27.2`.
 - Host probes: run on 2026-11-14 on macOS 27.2.1 (26B131), Xcode 27.2
   (27B52).
