@@ -38,6 +38,21 @@ if [[ "${MISE_AUTO_INSTALL:-}" != 0 ]]; then
   echo "certify: run it as MISE_AUTO_INSTALL=0 mise run certify:ubuntu ...; with auto-install on, mise can install a missing tool before or during the run (playbook rule 4)" >&2
   exit 2
 fi
+# Rule 4 proof for this Mac-side launcher: list mise's installs (every tool
+# folder and version) now and after the run. The report gives the result, and
+# any change fails the run, --allow-fail or not.
+inst_dir="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs"
+# No installs folder yet lists as empty; a folder that cannot be read fails.
+inst_list() {
+  [[ -e "$inst_dir" ]] || return 0
+  local l
+  l="$(find "$inst_dir" -mindepth 2 -maxdepth 2)" || return 1
+  [[ -z "$l" ]] || LC_ALL=C sort <<<"$l"
+}
+inst_before="$(inst_list)" || {
+  echo "certify: cannot list $inst_dir (rule 4 proof)" >&2
+  exit 2
+}
 dest="${CERT_UBUNTU_SSH:-}"
 [[ -n "$dest" ]] || {
   echo "certify: set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC)" >&2
@@ -324,6 +339,7 @@ report() {
   printf '[host kernel] marks a kernel-dependent check: it ran in a container on the PC'"'"'s Omarchy kernel, not Ubuntu'"'"'s.\n'
   cat "$scratch/body.txt"
   printf 'Summary: %d PASS, %d FAIL, %d N/A\n' "$npass" "$nfail" "$nna"
+  printf 'mise installs (this Mac): %s\n' "$inst_note"
   printf 'Missing or wrong:'
   ids="$(grep -E '^[A-Z0-9]+ +FAIL' "$scratch/body.txt" | awk '{print $1}')"
   if [[ -z "$ids" ]]; then printf ' none\n'; else
@@ -336,7 +352,14 @@ if [[ $((npass + nfail + nna)) == 0 ]]; then
   echo "certify: --only '$only' matched no check" >&2
   exit 2
 fi
+inst_after="$(inst_list)" || inst_after="<cannot list $inst_dir>"
+if [[ "$inst_after" == "$inst_before" ]]; then
+  inst_note="unchanged ($(grep -c . <<<"$inst_after") entries under installs/<tool>/)"
+else
+  inst_note="CHANGED during the run (by this run or another process; rerun when nothing else installs): $(diff <(printf '%s\n' "$inst_before") <(printf '%s\n' "$inst_after") | sed -n "s#^\([<>]\) $inst_dir/#\1 #p" | tr '\n' ' ')"
+fi
 report | mask
 [[ -n "$out" ]] && report | mask >"$out"
+[[ "$inst_after" == "$inst_before" ]] || exit 3
 [[ -z "$rc_inner" ]] || exit 1
 [[ $nfail == 0 || "${usage_allow_fail:-false}" == true ]]

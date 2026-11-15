@@ -34,7 +34,10 @@ this kernel, not what Ubuntu's own kernel would do.
 2. Run `MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail` from the
    Mac; the task refuses to start without `MISE_AUTO_INSTALL=0`, because a
    plain `mise run` can install a missing tool of this repository's config
-   on the Mac first (rule 4). Both tasks reach
+   on the Mac first (rule 4). It also lists the Mac's mise installs at start
+   and end; the report's `mise installs (this Mac):` line says `unchanged`,
+   or names the change and fails the run (exit 3; another process installing
+   at the same time also trips it, so rerun then). Both tasks reach
    the PC's Docker over ssh: set `CERT_UBUNTU_SSH` to the ssh destination of
    the PC (its tailnet name or an ssh alias for it). The `ubuntu-certify`
    skill explains the report. The first report is

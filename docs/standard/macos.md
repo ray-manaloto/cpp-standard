@@ -25,9 +25,12 @@ D88 and D136). The design is
    a plain `mise run` installs any missing tool of this repository's config
    before the task starts, so a check could PASS on a tool the Mac did not
    have. The task refuses to start unless `MISE_AUTO_INSTALL=0` is set. It
-   cannot undo an install that a run without it made first; on a fresh Mac
-   or VM, the proof that nothing was installed is a listing of
-   `$MISE_DATA_DIR/installs` two levels deep from before and after the run
+   cannot undo an install that a run without it made first. It lists
+   `$MISE_DATA_DIR/installs` two levels deep when it starts and when it ends:
+   the report's `mise installs:` line says `unchanged`, or names what changed
+   and fails the run (exit 3, even with `--allow-fail`). The listing cannot
+   tell this run from another process installing at the same time, so rerun
+   when nothing else is installing
    ([research note](../designs/level-1/research/mise-auto-install.md)).
 5. `MISE_AUTO_INSTALL=0 mise run certify:macos --allow-fail` runs every probe below and prints
    the report (the `macos-certify` skill explains it). The host reports

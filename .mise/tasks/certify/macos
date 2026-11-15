@@ -37,6 +37,21 @@ fi
 if [[ "${MISE_ENV_CACHE:-}" != 0 ]]; then
   MISE_ENV_CACHE=0 exec mise -C "$root" x -- "$0" "$@"
 fi
+# Rule 4 proof: list mise's installs (every tool folder and version) now and
+# after the run. The report gives the result, and any change fails the run,
+# --allow-fail or not.
+inst_dir="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs"
+# No installs folder yet lists as empty; a folder that cannot be read fails.
+inst_list() {
+  [[ -e "$inst_dir" ]] || return 0
+  local l
+  l="$(find "$inst_dir" -mindepth 2 -maxdepth 2)" || return 1
+  [[ -z "$l" ]] || LC_ALL=C sort <<<"$l"
+}
+inst_before="$(inst_list)" || {
+  echo "certify: cannot list $inst_dir (rule 4 proof)" >&2
+  exit 2
+}
 
 only=",${usage_only:-},"
 out="${usage_out:-}"
@@ -810,12 +825,20 @@ fix_for() {
   esac
 }
 
+inst_after="$(inst_list)" || inst_after="<cannot list $inst_dir>"
+if [[ "$inst_after" == "$inst_before" ]]; then
+  inst_note="unchanged ($(grep -c . <<<"$inst_after") entries under installs/<tool>/)"
+else
+  inst_note="CHANGED during the run (by this run or another process; rerun when nothing else installs): $(diff <(printf '%s\n' "$inst_before") <(printf '%s\n' "$inst_after") | sed -n "s#^\([<>]\) $inst_dir/#\1 #p" | tr '\n' ' ')"
+fi
+
 report() {
   printf 'macOS certification  %s  %s\n' "$label" "$(date +%F)"
   printf 'macOS %s  %s  SDK %s\n' "$os_ver" "$xcode_ver" "$sdk_ver"
   cat "$body"
   printf 'Summary: %d PASS, %d FAIL, %d N/A\n' "$npass" "$nfail" "$nna"
   printf 'Known upstream (do not fail strict mode):%s\n' "${known_ids:- none}"
+  printf 'mise installs: %s\n' "$inst_note"
   printf 'Missing or wrong:'
   if [[ -z "$failed_ids" ]]; then printf ' none\n'; else
     printf '\n'
@@ -829,4 +852,5 @@ if [[ $((npass + nfail + nna)) == 0 ]]; then
 fi
 report
 [[ -n "$out" ]] && report >"$out"
+[[ "$inst_after" == "$inst_before" ]] || exit 3
 [[ $((nfail - n_known)) == 0 || "${usage_allow_fail:-false}" == true ]]
