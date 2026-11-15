@@ -49,6 +49,12 @@ inst_list() {
   l="$(find "$inst_dir" -mindepth 2 -maxdepth 2)" || return 1
   [[ -z "$l" ]] || LC_ALL=C sort <<<"$l"
 }
+# Names alone miss a reinstall into an existing version folder, so a marker
+# file taken now also flags any file or folder under installs/ modified
+# during the run, at any depth (about 10 s for 1.5 million entries). The
+# cleanup handler set later removes the marker too.
+inst_mark="$(mktemp "${TMPDIR:-/tmp}/certify-mark.XXXXXX")" || exit 2
+trap 'rm -f "$inst_mark"' EXIT
 inst_before="$(inst_list)" || {
   echo "certify: cannot list $inst_dir (rule 4 proof)" >&2
   exit 2
@@ -83,6 +89,7 @@ p2996_vol="cpp-standard-p2996-${pin:0:12}-$p2996_in"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/certify-ubuntu.XXXXXX")"
 cname="cpp-standard-cert-$$"
 cleanup() {
+  rm -f "$inst_mark"
   if [[ "${usage_keep:-false}" == true ]]; then
     echo "certify: kept container $cname and $scratch" >&2
   else
@@ -353,6 +360,13 @@ if [[ $((npass + nfail + nna)) == 0 ]]; then
   exit 2
 fi
 inst_after="$(inst_list)" || inst_after="<cannot list $inst_dir>"
+if [[ -e "$inst_dir" ]]; then
+  # installs/.mise holds mise's own lock files, which every mise call touches.
+  inst_new="$(find "$inst_dir" -mindepth 1 -path "$inst_dir/.mise" -prune -o -newer "$inst_mark" -print | LC_ALL=C sort)" ||
+    inst_new="$inst_dir/<cannot check modification times>"
+  [[ -z "$inst_new" ]] || inst_after+=$'\n'"${inst_new//$'\n'/ (modified)$'\n'} (modified)"
+fi
+rm -f "$inst_mark"
 if [[ "$inst_after" == "$inst_before" ]]; then
   inst_note="unchanged ($(grep -c . <<<"$inst_after") entries under installs/<tool>/)"
 else
