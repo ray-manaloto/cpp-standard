@@ -12,3 +12,15 @@ version_prefix = "llvmorg-"
 asset_pattern = "LLVM-*-macOS-ARM64.tar.xz"
 os = ["macos"]
 postinstall = '''sdk="$(xcrun --show-sdk-path)" && test -d "$sdk" && case "$sdk" in *'"'* | *'\'*) false ;; esac && b="$MISE_TOOL_INSTALL_PATH/bin" && printf -- '-isysroot "%s"\n' "$sdk" > "$b/arm64-apple-darwin.cfg" && printf -- '%s\n' '@arm64-apple-darwin.cfg' '$-Wl,-L,<CFGDIR>/../lib' '$-Wl,-rpath,<CFGDIR>/../lib' '$-Wl,-lc++abi' '$-Wl,-lunwind' > "$b/arm64-apple-darwin-clang++.cfg"'''
+
+# Inside this project, put the tarball ahead of Homebrew LLVM (D38), with
+# Apple's dsymutil ahead of both: GCC's -g link runs the first dsymutil on
+# PATH, and both Homebrew's and the tarball's 23.1.5 die with SIGILL there
+# (playbook G6). tools = true applies both entries in the tools phase, in this
+# order. On Linux the tarball is not installed: each entry repeats PATH's
+# current first entry, which mise drops as a duplicate, so PATH is unchanged.
+[env]
+_.path = [
+  { path = "{% if tools['github:llvm/llvm-project'] is defined %}{{ config_root }}/.mise/apple-bin{% else %}{{ env.PATH | split(pat=':') | first }}{% endif %}", tools = true },
+  { path = "{% if tools['github:llvm/llvm-project'] is defined %}{{ tools['github:llvm/llvm-project'].path }}/bin{% else %}{{ env.PATH | split(pat=':') | first }}{% endif %}", tools = true },
+]

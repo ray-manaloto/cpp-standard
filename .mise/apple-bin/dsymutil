@@ -1,0 +1,3 @@
+#!/bin/sh
+# Apple's dsymutil for GCC -g links on macOS (playbook G6); see .mise/conf.d/llvm.toml.
+exec /usr/bin/dsymutil "$@"
