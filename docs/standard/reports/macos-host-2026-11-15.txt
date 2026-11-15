@@ -1,0 +1,74 @@
+macOS certification  host  2026-11-15
+macOS 27.2.1  Xcode 27.2  SDK 27.2
+A1    PASS macOS 27.2.1
+A2    PASS /Applications/Xcode.app/Contents/Developer; Xcode 27.2
+A3    FAIL checkFirstLaunchStatus exit 69
+A4    PASS CLT 27.2.0.0.1792721180
+A5    PASS /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk (27.2)
+B1    PASS all eight print a version; cmake 4.5
+B2    PASS g++: /usr/bin/g++ (Apple clang version 21.0.0 (clang-2100.4.1.1)); ccache exit 127; stray mise shims: none
+B3    PASS sccache --show-stats prints statistics
+C1    PASS ~/.local/share/mise/installs/llvm-project-ymaoov3r/bin/clang++: clang version 23.1.5 (https://github.com/llvm/llvm-project 392dfff97d29b59d77e5cac6d4b6ef2585fe7117)
+C2    PASS Configuration file: ~/.local/share/mise/installs/llvm-project-ymaoov3r/bin/arm64-apple-darwin-clang++.cfg; sysroot = xcrun SDK
+C3    PASS ok; dyld loads ~/.local/share/mise/installs/llvm-project-ymaoov3r/lib/libc++.1.0.dylib
+C4    PASS import std ok
+C5    PASS all nine runtimes
+C6    PASS fired: asan tsan ubsan
+C7    PASS all nine tools
+C8    PASS Apple ld ok; ld64.lld ok
+C9    PASS clang clang++ lldb resolve to the tarball
+G1    PASS g++-16 (cpp-standard GCC 16.2.0 (D33 9f99e2b94d93)) 16.2.0 --with-pkgversion='cpp-standard GCC 16.2.0 (D33 9f99e2b94d93)'
+G2    PASS members=2; import std ok
+G3    PASS /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk (27.2)
+G4    PASS ASan and UBSan fire; TSan does not link (expected on aarch64 Darwin)
+G6    PASS dsymutil <repo>/.mise/apple-bin/dsymutil; link-ok
+G5    N/A  rule, no probe: C++ dependencies for GCC come from vcpkg (K1)
+P1    PASS commit 562409c79426; +assertions
+P2    PASS arm64-apple-darwin-clang++.cfg; -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk (27.2)
+P3    PASS _LIBCPP_HARDENING_MODE_DEFAULT 16 (extensive)
+P4    PASS members=2; import std ok; fired: asan tsan ubsan
+P5    PASS 15 tools; polly-ok
+P6    FAIL missing: FileCheck not count yaml2obj (LLVM_INSTALL_UTILS off)
+P7    PASS clang-tidy, clang-format, clang-include-cleaner: exit 0, 0 errors
+P8    PASS include-what-you-use 0.25 (git:791e69e) based on clang version 21.0.0git (https://github.com/bloomberg/clang-p2996.git 562409c7942690d59ea470762515f88f24b16e23)
+P9    PASS File 'p.cpp' Lines executed:100.00% of 1
+P10   FAIL known upstream (LLVM 21 TAPI vs the macOS 27 SDK): ld64.lld: error: could not load TAPI file at /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libSystem.tbd: malformed file
+DB1   PASS lldb-2103.0.34.407; script 2
+DB2   PASS lldb version 23.1.5 (https://github.com/llvm/llvm-project revision 392dfff97d29b59d77e5cac6d4b6ef2585fe7117); target create exit 0
+DB3   PASS script 42; rpath ~/.local/share/mise/installs/python/3.15/lib; libpython3.15.dylib present
+DB4   PASS usage ok; dap session PASS
+DB5   PASS debugserver-p2996: Authority=lldb_codesign, verify --strict ok, breakpoint 1.1, ps: build's own debugserver, target create exit 0
+A6    PASS DevToolsSecurity enabled
+L1    PASS all six headers on: clang23 p2996 gcc16
+L2    PASS matches the table on: clang23 p2996 gcc16
+L3    PASS the two-part guard matches on GCC 16 and p2996
+H1    N/A  per-project rule, no probe
+H2    PASS exit=133 (extensive mode traps)
+K1    N/A  project check (triplets/arm64-osx-*.cmake); no C++ project in this repo yet
+K2    PASS vcpkg package management program version 2026-10-29-139f2e53438b1529e178f6295bc563f4e0de734f
+E1    N/A  project check (compile_commands.json after configure); no C++ project in this repo yet
+E2    PASS clangd-p2996: All checks completed, 0 errors
+T1    N/A  rule: $LLVM23 tools for plain projects, -p2996 tools for reflection projects (P7)
+T2    PASS USAGE: scan-build [options] <build command> [build options]
+T3    PASS clang 23: include-what-you-use 0.27 based on Homebrew clang version 23.1.5; p2996: P8 PASS
+T4    PASS realtime type link; fuzzer ran 16 inputs
+T5    PASS leaks heap vmmap malloc_history resolve
+T6    N/A  tier-2 tools (D19); installed: none
+T7    N/A  runs, writes no xray-log: the Darwin XRay runtime does not work (llvm/llvm-project#196848)
+R1    PASS all five templates
+R2    PASS CPU Counters trace: 14 counter sample rows
+R3    PASS sample exit 0
+R4    PASS Iterations 100 twice
+R5    PASS p.json written
+R6    PASS hyperfine 2.0.0
+V1    FAIL tart not installed (want 2.41.1 or later)
+V2    FAIL not run: Tart not installed (V1)
+V3    N/A  VM check: run this task inside the guest
+Summary: 51 PASS, 5 FAIL, 8 N/A
+Known upstream (do not fail strict mode): P10
+Missing or wrong:
+  A3: sudo xcodebuild -runFirstLaunch; sudo xcodebuild -license accept
+  P6: rebuild p2996 with LLVM_INSTALL_UTILS=ON
+  P10: known upstream: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK
+  V1: install Tart 2.41.1+ (brew install openai/tools/tart)
+  V2: tart pull the golden-gate-xcode image by its digest

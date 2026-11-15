@@ -26,12 +26,15 @@ mise run certify:macos --only DB,P4 --allow-fail    # one section or a few check
 mise run certify:macos --allow-fail --keep          # keep the scratch dir and its logs
 ```
 
-Without `--allow-fail` the task exits 1 when any check fails; use that form
-in automation that must stop on a regression. Each check also prints its line
+Without `--allow-fail` the task exits 1 when any check fails, except the
+"known upstream" FAILs (today only P10), which it lists on their own summary
+line; use that form in automation that must stop on a regression. A check
+becomes known upstream only when the playbook says so and names the upstream
+change that clears it; add its id to `known_upstream` in the task. Each check also prints its line
 on stderr as it finishes, so a long run shows progress.
 
 `--only` takes ids or prefixes: `DB` selects DB1 to DB5, `C` selects C1 to
-C8. A6 is decided after DB5, so it prints after the D section.
+C9. A6 is decided after DB5, so it prints after the D section.
 
 ## Refresh the baseline
 
@@ -40,7 +43,7 @@ After a toolchain change, write a new one and compare:
 
 ```bash
 mise run certify:macos --allow-fail --out docs/standard/reports/macos-host-$(date +%F).txt
-git diff --no-index docs/standard/reports/macos-host-2026-11-14.txt docs/standard/reports/macos-host-$(date +%F).txt
+git diff --no-index docs/standard/reports/macos-host-2026-11-15.txt docs/standard/reports/macos-host-$(date +%F).txt
 ```
 
 A check that changes from PASS to FAIL is a regression: report it with the
@@ -52,7 +55,8 @@ machine `host` (or `vm`), so it can be committed to this public repository.
 ## In a Tart VM
 
 The task reads `kern.hv_vmm_present`. In a guest it reports R2, V1 and V2 as
-N/A. V3 is PASS only on a full run (no `--only`) with no FAIL above it, FAIL
+N/A. V3 is PASS only on a full run (no `--only`) with no FAIL above it other
+than a known-upstream one, FAIL
 otherwise, and N/A under `--only`. Untested so far: Tart is not installed on
 the host yet (V1), so neither the guest path nor V2's `tart list` match has
 run.

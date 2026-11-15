@@ -32,7 +32,10 @@ label="${usage_name:-}"
 
 P2996="${P2996:-$HOME/.local/share/p2996/current}"
 LLVM23="${LLVM23-$(mise where github:llvm/llvm-project 2>/dev/null || true)}"
-GXX="${GXX:-g++-16}"
+# The D33 source build, through its stable link; Homebrew g++-16 otherwise (G1 then FAILs).
+gcc_d33="$HOME/.local/share/gcc-d33/current/bin/g++-16"
+[[ -x "$gcc_d33" ]] || gcc_d33="g++-16"
+GXX="${GXX:-$gcc_d33}"
 PROBE="$(mktemp -d "${TMPDIR:-/tmp}/certify-macos.XXXXXX")"
 if [[ -z "$PROBE" || ! -d "$PROBE" ]]; then
   echo "certify: cannot create a scratch directory under ${TMPDIR:-/tmp}" >&2
@@ -41,6 +44,12 @@ fi
 body="$PROBE/report-body.txt"
 : >"$body"
 npass=0 nfail=0 nna=0 failed_ids=""
+# FAILs the playbook marks "known upstream": reported and listed, but they do
+# not fail strict mode or V3. Each needs an upstream change, named in fix_for.
+# Only a FAIL whose evidence starts with "known upstream" counts: the check
+# writes that prefix only when it sees the known cause, so any other failure
+# of the same check still fails strict mode.
+known_upstream=" P10 " n_known=0 known_ids=""
 db5_stop=unrun p8_ok=no p8_msg=unset # results later checks reuse (A6, T3)
 user_name="$(id -un)"
 
@@ -64,6 +73,7 @@ want() { # want ID: is this check selected by --only?
 
 res() { # res ID PASS|FAIL|N/A EVIDENCE
   local tilde='~' ev="$3"
+  ev="${ev//"$root"/<repo>}"
   ev="${ev//"$HOME"/$tilde}"
   ev="${ev//"$user_name"/<user>}"
   ev="$(printf '%s' "$ev" | tr '\n\t' '  ' | tr -s ' ' | cut -c1-240)"
@@ -73,6 +83,7 @@ res() { # res ID PASS|FAIL|N/A EVIDENCE
     FAIL)
       nfail=$((nfail + 1))
       failed_ids="$failed_ids $1"
+      [[ "$known_upstream" == *" $1 "* && "$3" == "known upstream"* ]] && n_known=$((n_known + 1)) known_ids="$known_ids $1"
       ;;
     *) nna=$((nna + 1)) ;;
   esac
@@ -139,7 +150,7 @@ awk -v dir="$PROBE" '
   }
   inb && first {
     first = 0
-    if (match($0, /^(\/\/|#) (refl\.cpp|san\.cpp|dap\.cpp|dap_probe\.py|CMakeLists\.txt)/)) {
+    if (match($0, /^(\/\/|#) (refl\.cpp|san\.cpp|fuzz\.cpp|dap\.cpp|dap_probe\.py|CMakeLists\.txt)/)) {
       name = substr($0, RSTART, RLENGTH); sub(/^(\/\/|#) /, "", name)
       out = dir "/" name
     }
@@ -153,7 +164,7 @@ mv "$PROBE/CMakeLists.txt" "$PROBE/cmake/" 2>/dev/null
 sed -n 's/^# CMakeLists.txt, next to m.cpp: //p' "$doc" | head -1 |
   perl -pe 's/^import std; */import std;\n/' >"$PROBE/cmake/m.cpp"
 printf '#include <print>\nint main(){std::println("ok");}\n' >"$PROBE/p.cpp"
-for f in refl.cpp san.cpp dap.cpp dap_probe.py cmake/m.cpp cmake/CMakeLists.txt; do
+for f in refl.cpp san.cpp fuzz.cpp dap.cpp dap_probe.py cmake/m.cpp cmake/CMakeLists.txt; do
   [[ -s "$PROBE/$f" ]] || {
     echo "certify: could not extract $f from the playbook appendix" >&2
     exit 2
@@ -212,18 +223,29 @@ if want B1; then
   fi
 fi
 if want B2; then
+  # A stray shim is a mise shim on PATH with no active version: it errors or
+  # falls through to another compiler. Apple's /usr/bin/g++ is allowed; builds
+  # call g++-16 by name (DL-591).
+  stray=""
+  IFS=: read -r -a pdirs <<<"$PATH"
+  for d in "${pdirs[@]}"; do
+    [[ "$d" == */mise/shims ]] || continue
+    for t in g++ c++ clang++ ccache; do
+      [[ -e "$d/$t" ]] || continue
+      (cd "$root" && mise which "$t" >/dev/null 2>&1) || stray="$stray $t"
+    done
+  done
+  gp="$(command -v g++ || true)"
   g="$(g++ --version 2>&1 | head -1)"
-  c="$(ccache --version 2>&1 | head -1)"
   crc=$(
     ccache --version >/dev/null 2>&1
     echo $?
   )
   gok=no cok=no
-  { ! command -v g++ >/dev/null || [[ "$g" == *" 16."* && "$g" != *clang* ]]; } && gok=yes
+  { [[ -z "$gp" || "$gp" == /usr/bin/g++ ]] || [[ "$g" == *" 16."* && "$g" != *clang* ]]; } && gok=yes
   { ! command -v ccache >/dev/null || [[ $crc == 0 ]]; } && cok=yes
-  if [[ $gok == yes && $cok == yes ]]; then res B2 PASS "g++: $g; ccache: $c"; else
-    res B2 FAIL "g++: $g; ccache (exit $crc): $c"
-  fi
+  ev="g++: ${gp:-absent} (${g:-none}); ccache exit $crc; stray mise shims:${stray:- none}"
+  if [[ -z "$stray" && $gok == yes && $cok == yes ]]; then res B2 PASS "$ev"; else res B2 FAIL "$ev"; fi
 fi
 if want B3; then
   sccache --show-stats >/dev/null 2>&1 && res B3 PASS "sccache --show-stats prints statistics" ||
@@ -234,20 +256,33 @@ fi
 
 L="$LLVM23/bin/clang++"
 if [[ -z "$LLVM23" || ! -x "$L" ]]; then
-  for id in C1 C2 C3 C4 C5 C6 C7 C8; do want $id && no_llvm23 $id; done
+  for id in C1 C2 C3 C4 C5 C6 C7 C8 C9; do want $id && no_llvm23 $id; done
 else
   if want C1; then
     v="$("$L" --version | head -1)"
     [[ "$v" == "clang version 23"* ]] && res C1 PASS "$L: $v" || res C1 FAIL "$v"
   fi
   if want C2; then
-    cfg="$("$L" -### -x c++ /dev/null 2>&1 | grep -m1 'Configuration file')"
-    [[ "$cfg" == *arm64-apple-darwin-clang++.cfg* ]] && res C2 PASS "$cfg" || res C2 FAIL "${cfg:-no configuration file}"
+    hh="$("$L" -### -x c++ /dev/null 2>&1)"
+    cfg="$(printf '%s\n' "$hh" | grep -m1 'Configuration file')"
+    # The sysroot is written at install time; it must still be the SDK xcrun picks now.
+    # Read the -isysroot clang really passes (-### output), not the config file text.
+    csr="$(printf '%s\n' "$hh" | grep -o '"-isysroot" "[^"]*"' | tail -1 | sed 's/^"-isysroot" "\(.*\)"$/\1/')"
+    xsr="$(xcrun --show-sdk-path 2>/dev/null)"
+    if [[ "$cfg" != *arm64-apple-darwin-clang++.cfg* ]]; then
+      res C2 FAIL "${cfg:-no configuration file}"
+    elif [[ -z "$csr" || "$csr" != "$xsr" || ! -d "$csr" ]]; then
+      res C2 FAIL "clang -isysroot ${csr:-missing} is not the current xcrun SDK ${xsr:-none}"
+    else res C2 PASS "$cfg; sysroot = xcrun SDK"; fi
   fi
   if want C3; then
     o="$("$L" -std=c++26 p.cpp -o c3 2>&1 && ./c3)"
-    lib="$(otool -L c3 2>/dev/null | grep -m1 'c++')"
-    [[ "$o" == ok && "$lib" == *"$LLVM23"* ]] && res C3 PASS "ok; $lib" || res C3 FAIL "out '$o'; $lib"
+    # otool -L shows @rpath/libc++.1.dylib; ask dyld which file it loads and
+    # compare real paths (the mise install dir is reached through a link).
+    lib="$(DYLD_PRINT_LIBRARIES=1 ./c3 2>&1 >/dev/null | grep -m1 -o '/[^ ]*/libc++\.1[.0-9]*\.dylib')"
+    rlib="$(perl -MCwd=realpath -e 'print realpath(shift)' "$lib" 2>/dev/null)"
+    rtop="$(perl -MCwd=realpath -e 'print realpath(shift)' "$LLVM23" 2>/dev/null)"
+    [[ "$o" == ok && -n "$rtop" && "$rlib" == "$rtop"/lib/* ]] && res C3 PASS "ok; dyld loads $lib" || res C3 FAIL "out '$o'; dyld loads ${lib:-no libc++.1}"
   fi
   if want C4; then
     o="$(cmake_probe "$L" c4)"
@@ -276,6 +311,20 @@ else
     a="$("$L" -std=c++26 p.cpp -o c8a 2>&1 && ./c8a)"
     b="$("$L" -std=c++26 -fuse-ld=lld p.cpp -o c8l 2>&1 && ./c8l)"
     [[ "$a" == ok && "$b" == ok ]] && res C8 PASS "Apple ld ok; ld64.lld ok" || res C8 FAIL "ld: $a; lld: $b"
+  fi
+  if want C9; then
+    # Inside this project the plain names must be the tarball's (D38, .mise/conf.d/llvm.toml).
+    # Anchor to this repository's mise install, not $LLVM23, which a caller may override.
+    mw="$(cd "$root" && mise where github:llvm/llvm-project 2>/dev/null)"
+    tb="$(perl -MCwd=realpath -e 'print realpath(shift)' "$mw/bin" 2>/dev/null)"
+    [[ -n "$mw" && -n "$tb" ]] || tb="(no mise install)"
+    bad=""
+    for t in clang clang++ lldb; do
+      p="$(cd "$root" && command -v "$t")"
+      rp="$(perl -MCwd=realpath -e 'print realpath(shift)' "$p" 2>/dev/null)"
+      [[ -n "$rp" && "$(dirname "$rp")" == "$tb" ]] || bad="$bad $t=${p:-none}"
+    done
+    [[ -z "$bad" ]] && res C9 PASS "clang clang++ lldb resolve to the tarball" || res C9 FAIL "not the tarball:$bad"
   fi
 fi
 
@@ -329,6 +378,8 @@ else
   fi
   if want G6; then
     ds="$(command -v dsymutil)"
+    rds="$(perl -MCwd=realpath -e 'print realpath(shift)' "$ds" 2>/dev/null)"
+    [[ -n "$rds" && "$rds" != "$ds" ]] && ds="$ds -> $rds"
     o="$("$GXX" -std=c++26 -g -fsanitize=address san.cpp -o g6 2>&1 && echo link-ok)"
     [[ "$o" == *link-ok* ]] && res G6 PASS "dsymutil $ds; link-ok" || res G6 FAIL "dsymutil $ds; $(printf '%s' "$o" | tail -1)"
   fi
@@ -415,7 +466,13 @@ else
   fi
   if want P10; then
     o="$("$P" -std=c++26 -fuse-ld=lld p.cpp -o p10 2>&1 && ./p10)"
-    [[ "$o" == ok ]] && res P10 PASS ok || res P10 FAIL "$(printf '%s' "$o" | grep -m1 -E 'error|TAPI' || printf '%s' "$o" | head -1)"
+    e="$(printf '%s' "$o" | grep -m1 -E 'error|TAPI' || printf '%s' "$o" | head -1)"
+    if [[ "$o" == ok ]]; then
+      res P10 PASS ok
+    elif [[ "$o" == *"could not load TAPI file"*"libSystem.tbd"* && "$o" == *"unknown architecture"* && "$o" == *"arm64e.x1-macos"* ]]; then
+      # Only the known cause is exempt (see known_upstream); anything else is a plain FAIL.
+      res P10 FAIL "known upstream (LLVM 21 TAPI vs the macOS 27 SDK): $e"
+    else res P10 FAIL "$e"; fi
   fi
 fi
 
@@ -582,10 +639,14 @@ if want T3; then
 fi
 if want T4; then
   ok=""
-  for f in realtime type fuzzer; do
+  for f in realtime type; do
     "$P" -std=c++26 -fsanitize=$f p.cpp -o t_$f >/dev/null 2>&1 && ok="$ok $f"
   done
-  [[ "$ok" == " realtime type fuzzer" ]] && res T4 PASS "realtime type fuzzer link" || res T4 FAIL "linked:${ok:- none}"
+  # libFuzzer: a real target (fuzz.cpp has LLVMFuzzerTestOneInput, no main) that runs.
+  fz="$("$P" -std=c++26 -g -fsanitize=fuzzer fuzz.cpp -o t_fuzzer 2>&1 && tmo 60 ./t_fuzzer -runs=16 2>&1)"
+  frc=$?
+  [[ $frc == 0 && "$fz" == *"Done 16 runs"* ]] && ok="$ok fuzzer"
+  [[ "$ok" == " realtime type fuzzer" ]] && res T4 PASS "realtime type link; fuzzer ran 16 inputs" || res T4 FAIL "ok:${ok:- none}; fuzzer exit $frc"
 fi
 if want T5; then
   miss=""
@@ -670,9 +731,9 @@ if [[ "$in_vm" == 1 ]]; then
   if want V3; then
     if [[ "$only" != ",," ]]; then
       res V3 N/A "needs a full run without --only"
-    elif [[ $nfail == 0 ]]; then
-      res V3 PASS "full in-guest run, no FAIL above"
-    else res V3 FAIL "full in-guest run: $nfail checks failed above"; fi
+    elif [[ $((nfail - n_known)) == 0 ]]; then
+      res V3 PASS "full in-guest run, no FAIL above except known upstream"
+    else res V3 FAIL "full in-guest run: $((nfail - n_known)) checks failed above (not counting known upstream)"; fi
   fi
 else
   tv="$(tart --version 2>/dev/null)"
@@ -696,13 +757,15 @@ fix_for() {
   case "$1" in
     A3) echo "sudo xcodebuild -runFirstLaunch; sudo xcodebuild -license accept" ;;
     A6) echo "sudo DevToolsSecurity -enable (DB5 step 5)" ;;
-    B2) echo "drop or pin the mise g++ and ccache shims" ;;
+    B2) echo "uninstall the inactive mise tools behind the stray shims (mise uninstall <tool>; mise reshim)" ;;
+    C2) echo "install the LLVM 23 tarball with mise (D38); after an Xcode or xcode-select change: mise install --force github:llvm/llvm-project" ;;
+    C9) echo "run through mise in this repository (.mise/conf.d/llvm.toml puts the tarball first)" ;;
     C[1-8] | DB2) echo "install the LLVM 23 tarball with mise (D38)" ;;
     G1 | G3) echo "the GCC 16.2 source build (D33)" ;;
     G4 | G6) echo "put /usr/bin before Homebrew LLVM on PATH for GCC builds (G6)" ;;
     P6) echo "rebuild p2996 with LLVM_INSTALL_UTILS=ON" ;;
     P8 | T3) echo "build IWYU (branch clang_21) against p2996" ;;
-    P10) echo "use Apple ld until p2996 moves to an LLVM whose lld reads the SDK" ;;
+    P10) echo "known upstream: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK" ;;
     L1 | L2 | R4) echo "see the check; clang 23 parts need the LLVM 23 tarball" ;;
     V1) echo "install Tart 2.41.1+ (brew install openai/tools/tart)" ;;
     V2) echo "tart pull the golden-gate-xcode image by its digest" ;;
@@ -715,6 +778,7 @@ report() {
   printf 'macOS %s  %s  SDK %s\n' "$os_ver" "$xcode_ver" "$sdk_ver"
   cat "$body"
   printf 'Summary: %d PASS, %d FAIL, %d N/A\n' "$npass" "$nfail" "$nna"
+  printf 'Known upstream (do not fail strict mode):%s\n' "${known_ids:- none}"
   printf 'Missing or wrong:'
   if [[ -z "$failed_ids" ]]; then printf ' none\n'; else
     printf '\n'
@@ -728,4 +792,4 @@ if [[ $((npass + nfail + nna)) == 0 ]]; then
 fi
 report
 [[ -n "$out" ]] && report >"$out"
-[[ $nfail == 0 || "${usage_allow_fail:-false}" == true ]]
+[[ $((nfail - n_known)) == 0 || "${usage_allow_fail:-false}" == true ]]
