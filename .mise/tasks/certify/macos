@@ -1,0 +1,731 @@
+#!/usr/bin/env bash
+#MISE description="Run the macOS certification checks in docs/standard/macos.md and print the report"
+#USAGE flag "--out <file>" help="Also write the report to this file"
+#USAGE flag "--only <ids>" help="Run only these checks: comma-separated ids or section prefixes (A3,DB,C)"
+#USAGE flag "--name <label>" help="Machine label in the report header (default: host, or vm in a guest)"
+#USAGE flag "--allow-fail" help="Exit 0 even when a check fails (for writing a baseline)"
+#USAGE flag "--keep" help="Keep the scratch directory with the probe files and logs"
+#
+# Runs every probe in docs/standard/macos.md in section order and prints one
+# report line per check: `<id> PASS|FAIL|N/A <evidence>`. The probe sources
+# (refl.cpp, san.cpp, dap.cpp, dap_probe.py, the CMake probe) are extracted
+# from the playbook's appendix at run time, so the playbook stays the single
+# source for them. It installs nothing and changes nothing outside a scratch
+# directory (playbook rule 4). Bash 3.2 compatible: macOS /bin/bash.
+# `cond && res PASS ... || res FAIL ...` is safe here: res always returns 0.
+# shellcheck disable=SC2015
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+doc="$root/docs/standard/macos.md"
+[[ -f "$doc" ]] || {
+  echo "certify: $doc not found" >&2
+  exit 2
+}
+
+only=",${usage_only:-},"
+out="${usage_out:-}"
+[[ -z "$out" || "$out" == /* ]] || out="$PWD/$out" # the run later works in the scratch dir
+in_vm="$(sysctl -n kern.hv_vmm_present 2>/dev/null || echo 0)"
+label="${usage_name:-}"
+[[ -n "$label" ]] || { [[ "$in_vm" == 1 ]] && label=vm || label=host; }
+
+P2996="${P2996:-$HOME/.local/share/p2996/current}"
+LLVM23="${LLVM23-$(mise where github:llvm/llvm-project 2>/dev/null || true)}"
+GXX="${GXX:-g++-16}"
+PROBE="$(mktemp -d "${TMPDIR:-/tmp}/certify-macos.XXXXXX")"
+if [[ -z "$PROBE" || ! -d "$PROBE" ]]; then
+  echo "certify: cannot create a scratch directory under ${TMPDIR:-/tmp}" >&2
+  exit 2
+fi
+body="$PROBE/report-body.txt"
+: >"$body"
+npass=0 nfail=0 nna=0 failed_ids=""
+db5_stop=unrun p8_ok=no p8_msg=unset # results later checks reuse (A6, T3)
+user_name="$(id -un)"
+
+cleanup() { [[ "${usage_keep:-false}" == true ]] || rm -rf "$PROBE"; }
+trap cleanup EXIT
+
+# --- helpers -----------------------------------------------------------------
+
+# tmo SECONDS CMD...: run CMD, killing it after SECONDS (exit 142). perl ships
+# with macOS; coreutils `timeout` does not.
+tmo() { perl -e 'alarm shift @ARGV; exec @ARGV or die "exec: $!\n"' "$@"; }
+
+want() { # want ID: is this check selected by --only?
+  [[ "$only" == ",," ]] && return 0
+  local IFS=, tok
+  for tok in ${usage_only:-}; do
+    [[ "$1" == "$tok" || "$1" == "$tok"[0-9]* ]] && return 0
+  done
+  return 1
+}
+
+res() { # res ID PASS|FAIL|N/A EVIDENCE
+  local tilde='~' ev="$3"
+  ev="${ev//"$HOME"/$tilde}"
+  ev="${ev//"$user_name"/<user>}"
+  ev="$(printf '%s' "$ev" | tr '\n\t' '  ' | tr -s ' ' | cut -c1-240)"
+  printf '%-5s %-4s %s\n' "$1" "$2" "$ev" | tee -a "$body" >&2
+  case "$2" in
+    PASS) npass=$((npass + 1)) ;;
+    FAIL)
+      nfail=$((nfail + 1))
+      failed_ids="$failed_ids $1"
+      ;;
+    *) nna=$((nna + 1)) ;;
+  esac
+}
+
+major() { printf '%s' "${1%%.*}"; }
+
+p8_eval() { # sets p8_ok and p8_msg; P8 and T3 both use it, so --only T3 works
+  local iw v rc
+  p8_ok=no
+  iw="$(first_match "$P2996/bin/*include-what-you-use*")"
+  if [[ -z "$iw" ]]; then
+    p8_msg="no include-what-you-use in \$P2996/bin (not built)"
+    return
+  fi
+  v="$(tmo 30 "$iw" --version 2>&1)"
+  rc=$?
+  # Expected: IWYU 0.25 built against p2996 itself (clang 21 at the pinned commit).
+  if [[ $rc == 0 && "$v" == *"include-what-you-use 0.25"* && "$v" == *"clang version 21"* &&
+    -n "$pin" && "$v" == *"${pin:0:7}"* ]]; then
+    p8_ok=yes p8_msg="$v"
+  else p8_msg="exit $rc: $v (want include-what-you-use 0.25, clang version 21 at ${pin:0:12})"; fi
+}
+
+first_match() { compgen -G "$1" | head -1; } # first path matching a glob, or nothing
+
+sdk_version() { # sdk_version SDK_PATH: the SDK's own version (SDKSettings.plist)
+  plutil -extract Version raw "$1/SDKSettings.plist" 2>/dev/null || echo "?"
+}
+
+cmake_probe() { # cmake_probe CXX TAG: build and run the appendix CMake probe
+  local b="$PROBE/cm_$2"
+  rm -rf "$b"
+  tmo 300 cmake -S "$PROBE/cmake" -B "$b" -G Ninja -DCMAKE_CXX_COMPILER="$1" >"$b.log" 2>&1 &&
+    tmo 300 cmake --build "$b" >>"$b.log" 2>&1 && tmo 30 "$b/m" 2>&1
+}
+
+san_fires() { # san_fires CXX SANITIZER TEXT TAG: build san.cpp, run it, look for TEXT (2: no link)
+  local exe="$PROBE/s_${2}_$4"
+  "$1" -g -std=c++26 -fsanitize="$2" "$PROBE/san.cpp" -o "$exe" >"$exe.log" 2>&1 || return 2
+  local o # not a pipeline: under pipefail the program's own nonzero exit would hide the match
+  o="$(cd "$PROBE" && ASAN_OPTIONS=detect_leaks=0 tmo 60 "$exe" 2>&1)"
+  [[ "$o" == *"$3"* ]]
+}
+
+san_three() { # san_three CXX TAG: prints the sanitizers that fired
+  local fired=""
+  san_fires "$1" address 'heap-buffer-overflow' "$2" && fired="$fired asan"
+  san_fires "$1" thread 'data race' "$2" && fired="$fired tsan"
+  san_fires "$1" undefined 'runtime error' "$2" && fired="$fired ubsan"
+  printf '%s' "${fired# }"
+}
+
+no_llvm23() { res "$1" FAIL "LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)"; }
+
+# --- probe sources from the playbook appendix ---------------------------------
+
+awk -v dir="$PROBE" '
+  /^## Appendix: probe sources/ { app = 1 }
+  !app { next }
+  /^```/ {
+    if (inb) { inb = 0; if (out != "") close(out); out = "" } else { inb = 1; first = 1 }
+    next
+  }
+  inb && first {
+    first = 0
+    if (match($0, /^(\/\/|#) (refl\.cpp|san\.cpp|dap\.cpp|dap_probe\.py|CMakeLists\.txt)/)) {
+      name = substr($0, RSTART, RLENGTH); sub(/^(\/\/|#) /, "", name)
+      out = dir "/" name
+    }
+  }
+  inb && out != "" { print > out }
+' "$doc"
+mkdir -p "$PROBE/cmake"
+mv "$PROBE/CMakeLists.txt" "$PROBE/cmake/" 2>/dev/null
+# m.cpp is given inline in the CMake probe's first comment line.
+# GCC needs the module declaration on its own line, so split after `import std;`.
+sed -n 's/^# CMakeLists.txt, next to m.cpp: //p' "$doc" | head -1 |
+  perl -pe 's/^import std; */import std;\n/' >"$PROBE/cmake/m.cpp"
+printf '#include <print>\nint main(){std::println("ok");}\n' >"$PROBE/p.cpp"
+for f in refl.cpp san.cpp dap.cpp dap_probe.py cmake/m.cpp cmake/CMakeLists.txt; do
+  [[ -s "$PROBE/$f" ]] || {
+    echo "certify: could not extract $f from the playbook appendix" >&2
+    exit 2
+  }
+done
+pin="$(grep -oE 'pinned commit \(today `[0-9a-f]{40}' "$doc" | grep -oE '[0-9a-f]{40}' | head -1)"
+cd "$PROBE" || exit 2
+
+# --- A. Apple base -----------------------------------------------------------
+
+os_ver="$(sw_vers -productVersion 2>/dev/null)"
+xcode_ver="$(xcodebuild -version 2>/dev/null | head -1)"
+sdk_path="$(xcrun --show-sdk-path 2>/dev/null)"
+sdk_ver="$(xcrun --show-sdk-version 2>/dev/null)"
+
+if want A1; then
+  [[ "$(major "$os_ver")" == 27 ]] && res A1 PASS "macOS $os_ver" || res A1 FAIL "macOS $os_ver (want 27.x)"
+fi
+if want A2; then
+  p="$(xcode-select -p 2>/dev/null)"
+  if [[ "$p" == *Xcode*.app* && "$xcode_ver" == "Xcode 27"* ]]; then
+    res A2 PASS "$p; $xcode_ver"
+  else res A2 FAIL "$p; $xcode_ver"; fi
+fi
+if want A3; then
+  xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1
+  rc=$?
+  [[ $rc == 0 ]] && res A3 PASS "checkFirstLaunchStatus exit 0" || res A3 FAIL "checkFirstLaunchStatus exit $rc"
+fi
+if want A4; then
+  v="$(pkgutil --pkg-info=com.apple.pkg.CLTools_Executables 2>/dev/null | sed -n 's/^version: //p')"
+  [[ "$(major "$v")" == 27 ]] && res A4 PASS "CLT $v" || res A4 FAIL "CLT '${v:-not installed}' (want 27.x)"
+fi
+if want A5; then
+  if [[ "$(major "$sdk_ver")" == "$(major "$os_ver")" ]]; then
+    res A5 PASS "$sdk_path ($sdk_ver)"
+  else res A5 FAIL "$sdk_path ($sdk_ver) vs macOS $os_ver"; fi
+fi
+a6_status="$(DevToolsSecurity -status 2>&1 | grep -oE 'enabled|disabled' | head -1)"
+# A6 with `disabled` is decided after DB5 (see the playbook); recorded there.
+
+# --- B. Build tools ----------------------------------------------------------
+
+if want B1; then
+  miss="" line=""
+  for t in mise cmake ninja sccache vcpkg gcovr doxygen hyperfine; do
+    v="$("$t" --version 2>&1 | head -1)" || v=""
+    if [[ -z "$v" ]] || ! command -v "$t" >/dev/null; then miss="$miss $t"; fi
+  done
+  cm="$(cmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+  cm_ok=no
+  [[ -n "$cm" ]] && awk -v v="$cm" 'BEGIN{split(v,a,"."); exit !(a[1]>4 || (a[1]==4 && a[2]>=5))}' && cm_ok=yes
+  line="cmake $cm"
+  if [[ -z "$miss" && $cm_ok == yes ]]; then res B1 PASS "all eight print a version; $line"; else
+    res B1 FAIL "missing:${miss:- none}; $line (want >= 4.5)"
+  fi
+fi
+if want B2; then
+  g="$(g++ --version 2>&1 | head -1)"
+  c="$(ccache --version 2>&1 | head -1)"
+  crc=$(
+    ccache --version >/dev/null 2>&1
+    echo $?
+  )
+  gok=no cok=no
+  { ! command -v g++ >/dev/null || [[ "$g" == *" 16."* && "$g" != *clang* ]]; } && gok=yes
+  { ! command -v ccache >/dev/null || [[ $crc == 0 ]]; } && cok=yes
+  if [[ $gok == yes && $cok == yes ]]; then res B2 PASS "g++: $g; ccache: $c"; else
+    res B2 FAIL "g++: $g; ccache (exit $crc): $c"
+  fi
+fi
+if want B3; then
+  sccache --show-stats >/dev/null 2>&1 && res B3 PASS "sccache --show-stats prints statistics" ||
+    res B3 FAIL "sccache --show-stats failed"
+fi
+
+# --- C. LLVM / clang 23 ------------------------------------------------------
+
+L="$LLVM23/bin/clang++"
+if [[ -z "$LLVM23" || ! -x "$L" ]]; then
+  for id in C1 C2 C3 C4 C5 C6 C7 C8; do want $id && no_llvm23 $id; done
+else
+  if want C1; then
+    v="$("$L" --version | head -1)"
+    [[ "$v" == "clang version 23"* ]] && res C1 PASS "$L: $v" || res C1 FAIL "$v"
+  fi
+  if want C2; then
+    cfg="$("$L" -### -x c++ /dev/null 2>&1 | grep -m1 'Configuration file')"
+    [[ "$cfg" == *arm64-apple-darwin-clang++.cfg* ]] && res C2 PASS "$cfg" || res C2 FAIL "${cfg:-no configuration file}"
+  fi
+  if want C3; then
+    o="$("$L" -std=c++26 p.cpp -o c3 2>&1 && ./c3)"
+    lib="$(otool -L c3 2>/dev/null | grep -m1 'c++')"
+    [[ "$o" == ok && "$lib" == *"$LLVM23"* ]] && res C3 PASS "ok; $lib" || res C3 FAIL "out '$o'; $lib"
+  fi
+  if want C4; then
+    o="$(cmake_probe "$L" c4)"
+    [[ "$o" == *"import std ok"* ]] && res C4 PASS "import std ok" || res C4 FAIL "$(tail -2 "$PROBE/cm_c4.log")"
+  fi
+  if want C5; then
+    d="$("$L" -print-resource-dir)/lib/darwin" miss=""
+    for r in asan_osx_dynamic ubsan_osx_dynamic tsan_osx_dynamic lsan_osx_dynamic rtsan_osx_dynamic \
+      tysan_osx_dynamic fuzzer_osx profile_osx xray_osx; do
+      [[ -n "$(first_match "$d/*$r*")" ]] || miss="$miss $r"
+    done
+    [[ -z "$miss" ]] && res C5 PASS "all nine runtimes" || res C5 FAIL "missing:$miss"
+  fi
+  if want C6; then
+    f="$(san_three "$L" c6)"
+    [[ "$f" == "asan tsan ubsan" ]] && res C6 PASS "fired: $f" || res C6 FAIL "fired: ${f:-none}"
+  fi
+  if want C7; then
+    miss=""
+    for t in clangd clang-tidy clang-format llvm-mca llvm-cov llvm-profdata ld64.lld lldb scan-build; do
+      [[ -e "$LLVM23/bin/$t" ]] || miss="$miss $t"
+    done
+    [[ -z "$miss" ]] && res C7 PASS "all nine tools" || res C7 FAIL "missing:$miss"
+  fi
+  if want C8; then
+    a="$("$L" -std=c++26 p.cpp -o c8a 2>&1 && ./c8a)"
+    b="$("$L" -std=c++26 -fuse-ld=lld p.cpp -o c8l 2>&1 && ./c8l)"
+    [[ "$a" == ok && "$b" == ok ]] && res C8 PASS "Apple ld ok; ld64.lld ok" || res C8 FAIL "ld: $a; lld: $b"
+  fi
+fi
+
+# --- G. GCC 16.2 -------------------------------------------------------------
+
+if ! command -v "$GXX" >/dev/null; then
+  for id in G1 G2 G3 G4 G6; do want $id && res $id FAIL "$GXX not found"; done
+else
+  gv="$("$GXX" -v 2>&1)"
+  if want G1; then
+    v="$("$GXX" --version | head -1)"
+    pk="$(printf '%s' "$gv" | grep -o -- "--with-pkgversion='[^']*'")"
+    if [[ "$v" == *16.2.0* && "$pk" == *cpp-standard* ]]; then res G1 PASS "$v $pk"; else
+      res G1 FAIL "$v ${pk:-no pkgversion} (want the cpp-standard source build, D33)"
+    fi
+  fi
+  if want G2; then
+    r="$("$GXX" -std=c++26 -freflection refl.cpp -o g2 2>&1 && ./g2)"
+    m="$(cmake_probe "$GXX" g2)"
+    [[ "$r" == members=2 && "$m" == *"import std ok"* ]] && res G2 PASS "members=2; import std ok" ||
+      res G2 FAIL "refl: $r; cmake: ${m:-$(tail -1 "$PROBE/cm_g2.log")}"
+  fi
+  if want G3; then
+    sr="$(printf '%s' "$gv" | grep -o -- '--with-sysroot=[^ ]*' | head -1)"
+    sr="${sr#--with-sysroot=}"
+    sv="$(sdk_version "$sr")"
+    if [[ -d "$sr" && "$(major "$sv")" == "$(major "$os_ver")" ]]; then res G3 PASS "$sr ($sv)"; else
+      res G3 FAIL "${sr:-no sysroot} (SDK $sv, macOS $os_ver)"
+    fi
+  fi
+  if want G4; then
+    a=no u=no t=linked
+    san_fires "$GXX" address 'heap-buffer-overflow' g4
+    case $? in 0) a=yes ;; 2) a=no-link ;; esac
+    san_fires "$GXX" undefined 'runtime error' g4
+    case $? in 0) u=yes ;; 2) u=no-link ;; esac
+    "$GXX" -std=c++26 -fsanitize=thread san.cpp -o g4t >g4t.log 2>&1 || t=no-link
+    if [[ $a == yes && $u == yes && $t == no-link ]]; then
+      res G4 PASS "ASan and UBSan fire; TSan does not link (expected on aarch64 Darwin)"
+    else
+      why=""
+      if grep -q dsymutil "$PROBE/s_address_g4.log" 2>/dev/null; then
+        # Show that the sanitizers themselves work once the G6 PATH fix applies.
+        a2=no u2=no
+        PATH="/usr/bin:$PATH" san_fires "$GXX" address 'heap-buffer-overflow' g4b && a2=yes
+        PATH="/usr/bin:$PATH" san_fires "$GXX" undefined 'runtime error' g4b && u2=yes
+        why=" (the -g link runs a dsymutil that crashes, G6; with /usr/bin first: asan=$a2 ubsan=$u2)"
+      fi
+      res G4 FAIL "asan=$a ubsan=$u tsan=$t$why"
+    fi
+  fi
+  if want G6; then
+    ds="$(command -v dsymutil)"
+    o="$("$GXX" -std=c++26 -g -fsanitize=address san.cpp -o g6 2>&1 && echo link-ok)"
+    [[ "$o" == *link-ok* ]] && res G6 PASS "dsymutil $ds; link-ok" || res G6 FAIL "dsymutil $ds; $(printf '%s' "$o" | tail -1)"
+  fi
+fi
+want G5 && res G5 N/A "rule, no probe: C++ dependencies for GCC come from vcpkg (K1)"
+
+# --- P. clang-p2996 ----------------------------------------------------------
+
+P="$P2996/bin/clang++-p2996"
+if [[ ! -x "$P" ]]; then
+  for id in P1 P2 P3 P4 P5 P6 P7 P8 P9 P10; do want $id && res $id FAIL "$P not found"; done
+else
+  pv="$("$P" --version 2>&1)"
+  if want P1; then
+    [[ -n "$pin" && "$pv" == *"$pin"* && "$pv" == *"+assertions"* ]] && res P1 PASS "commit ${pin:0:12}; +assertions" ||
+      res P1 FAIL "$(printf '%s' "$pv" | head -1) (pin ${pin:-unknown})"
+  fi
+  if want P2; then
+    cfg="$(printf '%s' "$pv" | grep 'Configuration file' | head -1)"
+    cf="${cfg#*: }"
+    # -isysroot may sit in a file the config pulls in with @file.
+    isr="$(sed -n 's/^-isysroot[ =]*//p' "$cf" 2>/dev/null | head -1)"
+    while IFS= read -r inc; do
+      [[ -n "$isr" ]] && break
+      isr="$(sed -n 's/^-isysroot[ =]*//p' "$(dirname "$cf")/$inc" 2>/dev/null | head -1)"
+    done < <(sed -n 's/^@//p' "$cf" 2>/dev/null)
+    iv="$(sdk_version "$isr")"
+    if [[ "$cfg" == *arm64-apple-darwin-clang++.cfg* && -d "$isr" && "$(major "$iv")" == "$(major "$sdk_ver")" ]]; then
+      res P2 PASS "$(basename "$cf"); -isysroot $isr ($iv)"
+    else res P2 FAIL "${cfg:-no config}; isysroot ${isr:-none} ($iv)"; fi
+  fi
+  if want P3; then
+    h="$(grep _LIBCPP_HARDENING_MODE_DEFAULT "$P2996/include/c++/v1/__config_site" 2>/dev/null | awk '{print $3}')"
+    [[ "$h" == 16 ]] && res P3 PASS "_LIBCPP_HARDENING_MODE_DEFAULT 16 (extensive)" || res P3 FAIL "default ${h:-missing}"
+  fi
+  if want P4; then
+    r="$("$P" -std=c++26 -freflection-latest refl.cpp -o p4 2>&1 && ./p4)"
+    m="$(cmake_probe "$P" p4)"
+    f="$(san_three "$P" p4)"
+    if [[ "$r" == members=2 && "$m" == *"import std ok"* && "$f" == "asan tsan ubsan" ]]; then
+      res P4 PASS "members=2; import std ok; fired: $f"
+    else res P4 FAIL "refl: $r; cmake: ${m:-fail}; fired: ${f:-none}"; fi
+  fi
+  if want P5; then
+    n=0
+    for t in clangd clang-tidy clang-format clang-include-cleaner clang-query clang-doc scan-build \
+      ld64.lld llvm-mca llvm-cov llvm-profdata llvm-xray lldb lldb-dap mlir-opt; do
+      [[ -e "$P2996/bin/$t-p2996" ]] && n=$((n + 1))
+    done
+    po="$("$P" -O2 -mllvm -polly -c -x c++ /dev/null -o /dev/null 2>&1 && echo polly-ok)"
+    [[ "$n" == 15 && "$po" == polly-ok ]] && res P5 PASS "15 tools; polly-ok" || res P5 FAIL "$n tools; ${po:-polly fail}"
+  fi
+  if want P6; then
+    miss=""
+    for t in FileCheck not count yaml2obj; do
+      [[ -e "$P2996/bin/$t" || -e "$P2996/bin/$t-p2996" ]] || miss="$miss $t"
+    done
+    [[ -z "$miss" ]] && res P6 PASS "all four utilities" || res P6 FAIL "missing:$miss (LLVM_INSTALL_UTILS off)"
+  fi
+  if want P7; then
+    # Each tool must run (exit 0) and report no error; a missing or crashing
+    # tool is a FAIL, not "0 errors".
+    o1="$(tmo 120 "$P2996/bin/clang-tidy-p2996" refl.cpp -- -std=c++26 -freflection-latest 2>&1)"
+    r1=$?
+    e1="$(grep -c 'error:' <<<"$o1")"
+    tmo 60 "$P2996/bin/clang-format-p2996" --dry-run refl.cpp >/dev/null 2>&1
+    r2=$?
+    o3="$(tmo 120 "$P2996/bin/clang-include-cleaner-p2996" refl.cpp -- -std=c++26 -freflection-latest 2>&1)"
+    r3=$?
+    e3="$(grep -c 'error:' <<<"$o3")"
+    if [[ $r1 == 0 && "$e1" == 0 && $r2 == 0 && $r3 == 0 && "$e3" == 0 ]]; then
+      res P7 PASS "clang-tidy, clang-format, clang-include-cleaner: exit 0, 0 errors"
+    else
+      res P7 FAIL "tidy exit $r1, $e1 errors; format exit $r2; include-cleaner exit $r3, $e3 errors"
+    fi
+  fi
+  if want P8; then
+    p8_eval
+    [[ $p8_ok == yes ]] && res P8 PASS "$p8_msg" || res P8 FAIL "$p8_msg"
+  fi
+  if want P9; then
+    o="$("$P" --coverage -std=c++26 p.cpp -o pc 2>&1 && ./pc >/dev/null && "$P2996/bin/llvm-cov-p2996" gcov -n pc-p.gcda 2>&1 | head -2)"
+    [[ "$o" == *"File 'p.cpp'"* && "$o" == *"100.00%"* ]] && res P9 PASS "$o" || res P9 FAIL "$o"
+  fi
+  if want P10; then
+    o="$("$P" -std=c++26 -fuse-ld=lld p.cpp -o p10 2>&1 && ./p10)"
+    [[ "$o" == ok ]] && res P10 PASS ok || res P10 FAIL "$(printf '%s' "$o" | grep -m1 -E 'error|TAPI' || printf '%s' "$o" | head -1)"
+  fi
+fi
+
+# --- D. Debuggers ------------------------------------------------------------
+
+if want DB1; then
+  v="$(xcrun lldb --version 2>&1 | head -1)"
+  s="$(tmo 60 xcrun lldb -b -o 'script print(1+1)' 2>&1 | tail -1)"
+  [[ "$v" == lldb-* && "$s" == 2 ]] && res DB1 PASS "$v; script 2" || res DB1 FAIL "$v; script '$s'"
+fi
+if want DB2; then
+  if [[ -z "$LLVM23" || ! -x "$LLVM23/bin/lldb" ]]; then no_llvm23 DB2; else
+    v="$("$LLVM23/bin/lldb" --version 2>&1 | head -1)"
+    o="$(tmo 60 "$LLVM23/bin/lldb" -b -o 'target create /bin/ls' 2>&1)"
+    rc=$?
+    [[ "$v" == *"version 23"* && $rc == 0 && "$o" == *"Current executable set to '/bin/ls'"* ]] &&
+      res DB2 PASS "$v; target create exit 0" || res DB2 FAIL "$v; target create exit $rc"
+  fi
+fi
+if [[ -x "$P2996/bin/lldb-p2996" ]]; then
+  if want DB3; then
+    s="$(tmo 60 "$P2996/bin/lldb-p2996" -b -o 'script print(40+2)' 2>&1 | tail -1)"
+    rp="$(otool -l "$P2996/lib/liblldb.dylib" 2>/dev/null | grep -A2 LC_RPATH | grep -m1 'mise/installs/python/3.15/lib' | awk '{print $2}')"
+    py="$HOME/.local/share/mise/installs/python/3.15/lib/libpython3.15.dylib"
+    [[ "$s" == 42 && -n "$rp" && -e "$py" ]] && res DB3 PASS "script 42; rpath $rp; libpython3.15.dylib present" ||
+      res DB3 FAIL "script '$s'; rpath '${rp:-none}'; libpython $([[ -e "$py" ]] && echo present || echo missing)"
+  fi
+  if want DB4; then
+    h="$("$P2996/bin/lldb-dap-p2996" --help 2>&1 | head -1)"
+    "$P" -g -std=c++26 dap.cpp -o dapd >/dev/null 2>&1
+    s="$(tmo 120 python3 -I dap_probe.py "$P2996/bin/lldb-dap-p2996" dapd dap.cpp 10 2>&1 | tail -1)"
+    [[ "$h" == *"OVERVIEW: LLDB DAP"* && "$s" == PASS ]] && res DB4 PASS "usage ok; dap session PASS" ||
+      res DB4 FAIL "help '$h'; session '$s'"
+  fi
+  if want DB5; then
+    ds="$(find -L "$P2996" -name 'debugserver*' -type f 2>/dev/null | head -1)"
+    auth="$(codesign -dvv "$ds" 2>&1 | grep -m1 '^Authority=')"
+    codesign --verify --strict "$ds" >/dev/null 2>&1
+    vrc=$?
+    "$P" -std=c++26 -g p.cpp -o pd >/dev/null 2>&1
+    o="$(tmo 120 "$P2996/bin/lldb-p2996" -b -o 'script import os; print("LLDBPID=%d" % os.getpid())' \
+      -o 'b main' -o run -o 'platform shell /bin/ps -axo pid=,ppid=,comm=' -o kill pd 2>&1)"
+    stop=no
+    [[ "$o" == *"stop reason = breakpoint 1.1"* ]] && stop=yes
+    db5_stop=$stop
+    # lldb prints its own pid (its Python, DB3); the debugserver serving this
+    # session is that lldb's child. Compare real paths too, so another
+    # session's debugserver cannot match.
+    lpid="$(printf '%s\n' "$o" | sed -n 's/^LLDBPID=\([0-9][0-9]*\)$/\1/p' | head -1)"
+    ran="$(printf '%s\n' "$o" | awk -v p="$lpid" '$2 == p && $3 ~ /debugserver/ { print $3; exit }')"
+    realp() { perl -MCwd=realpath -e 'print realpath(shift) // ""' "$1"; }
+    if [[ -n "$ran" && -n "$ds" && "$(realp "$ran")" == "$(realp "$ds")" ]]; then :; else ran=""; fi
+    tmo 60 "$P2996/bin/lldb-p2996" -b -o 'target create /bin/ls' >/dev/null 2>&1
+    brc=$?
+    if [[ -n "$ds" && "$auth" == "Authority=lldb_codesign" && $vrc == 0 && $stop == yes && -n "$ran" && $brc == 0 ]]; then
+      res DB5 PASS "$(basename "$ds"): $auth, verify --strict ok, breakpoint 1.1, ps: build's own debugserver, target create exit 0"
+    else
+      res DB5 FAIL "debugserver '${ds:-none}' $auth; verify rc $vrc; stop $stop; own debugserver ran: ${ran:-no}; target create exit $brc"
+    fi
+  fi
+else
+  for id in DB3 DB4 DB5; do want $id && res $id FAIL "$P2996/bin/lldb-p2996 not found"; done
+fi
+if want A6; then
+  # The playbook: with `disabled`, A6 is PASS if DB5's breakpoint line passes
+  # without a password prompt; this run is unattended, so reaching it proves that.
+  if [[ "$a6_status" == enabled ]]; then
+    res A6 PASS "DevToolsSecurity enabled"
+  elif [[ "$db5_stop" == yes ]]; then
+    res A6 PASS "DevToolsSecurity ${a6_status:-unknown}, but DB5 reached its breakpoint unattended"
+  elif [[ "$db5_stop" == unrun ]]; then
+    res A6 FAIL "DevToolsSecurity ${a6_status:-unknown}; DB5 not run, so the fallback rule cannot apply"
+  else
+    res A6 FAIL "DevToolsSecurity ${a6_status:-unknown}, and DB5 did not reach its breakpoint unattended"
+  fi
+fi
+
+# --- L. Library features -----------------------------------------------------
+
+# Every L check covers all three compilers; a missing one is a FAIL.
+compilers="" missing_cxx=""
+if [[ -x "$L" ]]; then compilers="$compilers clang23"; else missing_cxx="$missing_cxx clang23"; fi
+if [[ -x "$P" ]]; then compilers="$compilers p2996"; else missing_cxx="$missing_cxx p2996"; fi
+if command -v "$GXX" >/dev/null; then compilers="$compilers gcc16"; else missing_cxx="$missing_cxx gcc16"; fi
+cxx_of() { case "$1" in clang23) echo "$L" ;; p2996) echo "$P" ;; gcc16) echo "$GXX" ;; esac }
+
+if want L1; then
+  bad=""
+  for c in $compilers; do
+    for h in expected flat_map format mdspan print ranges; do
+      printf '#include <%s>\n' "$h" | "$(cxx_of "$c")" -std=c++26 -fsyntax-only -x c++ - >/dev/null 2>&1 || bad="$bad $c:<$h>"
+    done
+  done
+  for c in $missing_cxx; do bad="$bad $c:not-installed"; done
+  [[ -z "$bad" ]] && res L1 PASS "all six headers on:$compilers" || res L1 FAIL "failed:$bad (checked:${compilers:- none})"
+fi
+if want L2; then
+  printf '#include <version>\n__cpp_lib_generator __cpp_lib_stacktrace\n' >v.cpp
+  bad=""
+  for c in $compilers; do
+    o="$("$(cxx_of "$c")" -std=c++26 -E -P v.cpp 2>/dev/null | tail -1 | tr -s ' ')"
+    case $c in gcc16) e="202207L __cpp_lib_stacktrace" ;; *) e="__cpp_lib_generator __cpp_lib_stacktrace" ;; esac
+    [[ "$o" == "$e" ]] || bad="$bad $c='$o'"
+  done
+  for c in $missing_cxx; do bad="$bad $c:not-installed"; done
+  [[ -z "$bad" ]] && res L2 PASS "matches the table on:$compilers" || res L2 FAIL "differs or not checked:$bad"
+fi
+if want L3; then
+  printf '#include <version>\n#if defined(__cpp_impl_reflection) || __has_feature(reflection)\nREFL_YES\n#else\nREFL_NO\n#endif\n' >l3.cpp
+  gp="$("$GXX" -std=c++26 -freflection -E -P l3.cpp 2>/dev/null | tail -1)"
+  pp="$("$P" -std=c++26 -freflection-latest -E -P l3.cpp 2>/dev/null | tail -1)"
+  [[ "$gp" == REFL_YES && "$pp" == REFL_YES ]] && res L3 PASS "the two-part guard matches on GCC 16 and p2996" ||
+    res L3 FAIL "gcc16 $gp; p2996 $pp"
+fi
+
+# --- H. Hardening ------------------------------------------------------------
+
+want H1 && res H1 N/A "per-project rule, no probe"
+if want H2; then
+  printf '#include <vector>\nint main(){std::vector<int> v(1); return v[5];}\n' >h.cpp
+  "$P" -std=c++26 h.cpp -o h >/dev/null 2>&1
+  ./h >/dev/null 2>&1
+  rc=$?
+  [[ $rc == 133 ]] && res H2 PASS "exit=133 (extensive mode traps)" || res H2 FAIL "exit=$rc (want 133)"
+fi
+
+# --- K. Dependencies ---------------------------------------------------------
+
+want K1 && res K1 N/A "project check (triplets/arm64-osx-*.cmake); no C++ project in this repo yet"
+if want K2; then
+  v="$(vcpkg version 2>&1 | head -1)"
+  [[ "$v" == *version* ]] && res K2 PASS "$v" || res K2 FAIL "${v:-vcpkg not found}"
+fi
+
+# --- E. Editor ---------------------------------------------------------------
+
+want E1 && res E1 N/A "project check (compile_commands.json after configure); no C++ project in this repo yet"
+if want E2; then
+  mkdir -p e2 && cp refl.cpp e2/ && printf -- '-std=c++26\n-freflection-latest\n' >e2/compile_flags.txt
+  o="$(cd e2 && tmo 120 "$P2996/bin/clangd-p2996" --check=refl.cpp 2>&1 | tail -1)"
+  [[ "$o" == *"All checks completed, 0 errors"* ]] && res E2 PASS "clangd-p2996: All checks completed, 0 errors" || res E2 FAIL "$o"
+fi
+
+# --- T. Analysis -------------------------------------------------------------
+
+want T1 && res T1 N/A "rule: \$LLVM23 tools for plain projects, -p2996 tools for reflection projects (P7)"
+if want T2; then
+  o="$(tmo 30 "$P2996/bin/scan-build-p2996" --help 2>&1)"
+  rc=$?
+  o1="$(printf '%s\n' "$o" | head -1)"
+  [[ $rc == 0 && "$o1" == "USAGE: scan-build"* ]] && res T2 PASS "$o1" || res T2 FAIL "exit $rc: $o1"
+fi
+if want T3; then
+  # clang 23 projects: an IWYU built against LLVM 23; reflection projects: P8's.
+  hv="$(tmo 30 include-what-you-use --version 2>&1)"
+  hrc=$?
+  hv1="$(printf '%s\n' "$hv" | head -1)"
+  [[ "$p8_msg" == unset ]] && p8_eval
+  if [[ $hrc == 0 && "$hv" == *"clang version 23"* && $p8_ok == yes ]]; then
+    res T3 PASS "clang 23: $hv1; p2996: P8 PASS"
+  else
+    res T3 FAIL "clang 23 IWYU (exit $hrc): ${hv1:-none}; p2996 IWYU: P8 $([[ $p8_ok == yes ]] && echo PASS || echo 'not PASS')"
+  fi
+fi
+if want T4; then
+  ok=""
+  for f in realtime type fuzzer; do
+    "$P" -std=c++26 -fsanitize=$f p.cpp -o t_$f >/dev/null 2>&1 && ok="$ok $f"
+  done
+  [[ "$ok" == " realtime type fuzzer" ]] && res T4 PASS "realtime type fuzzer link" || res T4 FAIL "linked:${ok:- none}"
+fi
+if want T5; then
+  miss=""
+  for t in leaks heap vmmap malloc_history; do xcrun -f $t >/dev/null 2>&1 || miss="$miss $t"; done
+  [[ -z "$miss" ]] && res T5 PASS "leaks heap vmmap malloc_history resolve" || res T5 FAIL "missing:$miss"
+fi
+if want T6; then
+  have=""
+  for t in cppcheck ClangBuildAnalyzer clang-uml mrdocs; do command -v $t >/dev/null && have="$have $t"; done
+  res T6 N/A "tier-2 tools (D19); installed:${have:- none}"
+fi
+if want T7; then
+  rm -f xray-log.*
+  "$P" -std=c++26 -fxray-instrument -fxray-instruction-threshold=1 p.cpp -o px >/dev/null 2>&1 &&
+    XRAY_OPTIONS="patch_premain=true xray_mode=xray-basic" ./px >/dev/null 2>&1
+  if ls xray-log.* >/dev/null 2>&1; then res T7 PASS "xray-log written (the Darwin runtime works now; update the playbook)"; else
+    res T7 N/A "runs, writes no xray-log: the Darwin XRay runtime does not work (llvm/llvm-project#196848)"
+  fi
+fi
+
+# --- R. Profiling ------------------------------------------------------------
+
+if want R1; then
+  tl="$(xcrun xctrace list templates 2>/dev/null)" miss=""
+  for t in 'Time Profiler' 'CPU Counters' 'Allocations' 'Leaks' 'CPU Profiler'; do
+    [[ "$tl" == *"$t"* ]] || miss="$miss '$t'"
+  done
+  [[ -z "$miss" ]] && res R1 PASS "all five templates" || res R1 FAIL "missing:$miss"
+fi
+if want R2; then
+  if [[ "$in_vm" == 1 ]]; then res R2 N/A "VM: PMU counters come from the host"; else
+    "$P" -std=c++26 p.cpp -o r2p >/dev/null 2>&1
+    tmo 120 xcrun xctrace record --template 'CPU Counters' --no-prompt --output r2.trace --launch -- ./r2p >r2.log 2>&1
+    rc=$?
+    # Counter data, not just a table name: count the rows of the counter
+    # samples table.
+    rows=0
+    if [[ $rc == 0 && -d r2.trace ]]; then
+      xcrun xctrace export --input r2.trace \
+        --xpath '/trace-toc/run[@number="1"]/data/table[@schema="CountingModeSamples"]' >r2.xml 2>/dev/null
+      rows="$(grep -c '<row' r2.xml)"
+    fi
+    if [[ "$rows" -gt 0 ]]; then res R2 PASS "CPU Counters trace: $rows counter sample rows"; else
+      res R2 FAIL "xctrace exit $rc; counter sample rows $rows; $(tail -1 r2.log)"
+    fi
+  fi
+fi
+if want R3; then
+  "$P" -std=c++26 p.cpp -o r3 >/dev/null 2>&1
+  printf '#include <thread>\nint main(){std::this_thread::sleep_for(std::chrono::seconds(3));}\n' >r3.cpp
+  "$P" -std=c++26 r3.cpp -o r3s >/dev/null 2>&1
+  ./r3s &
+  pid=$!
+  sample "$pid" 1 -file r3.txt >/dev/null 2>&1
+  rc=$?
+  wait "$pid" 2>/dev/null
+  [[ $rc == 0 ]] && res R3 PASS "sample exit 0" || res R3 FAIL "sample exit $rc"
+fi
+if want R4; then
+  printf 'int dot(const int*a,const int*b,int n){int s=0;for(int i=0;i<n;++i)s+=a[i]*b[i];return s;}\n' >k.cpp
+  pm="$("$P" -O2 -S --target=aarch64-linux-gnu -mcpu=apple-m1 k.cpp -o k-elf.s 2>&1 &&
+    "$P2996/bin/llvm-mca-p2996" -mtriple=aarch64 -mcpu=apple-m1 k-elf.s 2>&1 | grep -m1 Iterations)"
+  if [[ -x "$L" ]]; then
+    lm="$("$L" -O2 -S k.cpp -o k.s 2>&1 && "$LLVM23/bin/llvm-mca" -mcpu=apple-m1 k.s 2>&1 | grep -m1 Iterations)"
+  else lm="LLVM 23 not installed"; fi
+  [[ "$pm" == *"100"* && "$lm" == *"100"* ]] && res R4 PASS "Iterations 100 twice" || res R4 FAIL "clang23: $lm; p2996 (ELF): $pm"
+fi
+if want R5; then
+  "$P" -std=c++26 -ftime-trace -c p.cpp -o p.o >/dev/null 2>&1
+  [[ -f p.json ]] && res R5 PASS "p.json written" || res R5 FAIL "no p.json"
+fi
+if want R6; then
+  v="$(hyperfine --version 2>&1 | head -1)"
+  [[ "$v" == hyperfine* ]] && res R6 PASS "$v" || res R6 FAIL "${v:-hyperfine not found}"
+fi
+
+# --- V. Tart -----------------------------------------------------------------
+
+if [[ "$in_vm" == 1 ]]; then
+  for id in V1 V2; do want $id && res $id N/A "host check"; done
+  # V3 means every section ran in the guest: only a full run can say so.
+  if want V3; then
+    if [[ "$only" != ",," ]]; then
+      res V3 N/A "needs a full run without --only"
+    elif [[ $nfail == 0 ]]; then
+      res V3 PASS "full in-guest run, no FAIL above"
+    else res V3 FAIL "full in-guest run: $nfail checks failed above"; fi
+  fi
+else
+  tv="$(tart --version 2>/dev/null)"
+  if want V1; then
+    [[ -n "$tv" ]] && awk -v v="$tv" 'BEGIN{split(v,a,"."); exit !(a[1]>2 || (a[1]==2 && (a[2]>41 || (a[2]==41 && a[3]>=1))))}' &&
+      res V1 PASS "tart $tv" || res V1 FAIL "tart ${tv:-not installed} (want 2.41.1 or later)"
+  fi
+  if want V2; then
+    dg="$(grep -A2 '^Digest on ' "$doc" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)" # V2's digest line
+    if [[ -z "$tv" ]]; then res V2 FAIL "not run: Tart not installed (V1)"; else
+      tart list 2>/dev/null | grep -q "golden-gate-xcode.*${dg#sha256:}" && res V2 PASS "pulled by $dg" ||
+        res V2 FAIL "no golden-gate-xcode image pulled by $dg"
+    fi
+  fi
+  want V3 && res V3 N/A "VM check: run this task inside the guest"
+fi
+
+# --- Report ------------------------------------------------------------------
+
+fix_for() {
+  case "$1" in
+    A3) echo "sudo xcodebuild -runFirstLaunch; sudo xcodebuild -license accept" ;;
+    A6) echo "sudo DevToolsSecurity -enable (DB5 step 5)" ;;
+    B2) echo "drop or pin the mise g++ and ccache shims" ;;
+    C[1-8] | DB2) echo "install the LLVM 23 tarball with mise (D38)" ;;
+    G1 | G3) echo "the GCC 16.2 source build (D33)" ;;
+    G4 | G6) echo "put /usr/bin before Homebrew LLVM on PATH for GCC builds (G6)" ;;
+    P6) echo "rebuild p2996 with LLVM_INSTALL_UTILS=ON" ;;
+    P8 | T3) echo "build IWYU (branch clang_21) against p2996" ;;
+    P10) echo "use Apple ld until p2996 moves to an LLVM whose lld reads the SDK" ;;
+    L1 | L2 | R4) echo "see the check; clang 23 parts need the LLVM 23 tarball" ;;
+    V1) echo "install Tart 2.41.1+ (brew install openai/tools/tart)" ;;
+    V2) echo "tart pull the golden-gate-xcode image by its digest" ;;
+    *) echo "see $1 in docs/standard/macos.md" ;;
+  esac
+}
+
+report() {
+  printf 'macOS certification  %s  %s\n' "$label" "$(date +%F)"
+  printf 'macOS %s  %s  SDK %s\n' "$os_ver" "$xcode_ver" "$sdk_ver"
+  cat "$body"
+  printf 'Summary: %d PASS, %d FAIL, %d N/A\n' "$npass" "$nfail" "$nna"
+  printf 'Missing or wrong:'
+  if [[ -z "$failed_ids" ]]; then printf ' none\n'; else
+    printf '\n'
+    for id in $failed_ids; do printf '  %s: %s\n' "$id" "$(fix_for "$id")"; done
+  fi
+}
+
+if [[ $((npass + nfail + nna)) == 0 ]]; then
+  echo "certify: --only '${usage_only:-}' matched no check" >&2
+  exit 2
+fi
+report
+[[ -n "$out" ]] && report >"$out"
+[[ $nfail == 0 || "${usage_allow_fail:-false}" == true ]]
