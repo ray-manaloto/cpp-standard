@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#MISE description="Build the Ubuntu 26.10 amd64 image that certify:ubuntu certifies, on the PC's Docker"
+#USAGE flag "--tag <ref>" help="Image tag (default: cpp-standard-cert-ubuntu:26.10)"
+#
+# Builds docs/standard/ubuntu-cert.Dockerfile on the Docker host named by
+# CERT_UBUNTU_SSH (an ssh destination), so nothing is built on the Mac. This
+# is the setup step: certify:ubuntu itself installs nothing.
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+dest="${CERT_UBUNTU_SSH:?set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC)}"
+tag="${usage_tag:-cpp-standard-cert-ubuntu:26.10}"
+DOCKER_HOST="ssh://$dest" docker build --platform linux/amd64 -t "$tag" -f - "$root/docs/standard" \
+  <"$root/docs/standard/ubuntu-cert.Dockerfile"
+DOCKER_HOST="ssh://$dest" docker image inspect -f '{{.Id}}' "$tag"

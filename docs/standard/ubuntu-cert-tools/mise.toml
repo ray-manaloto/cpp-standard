@@ -1,0 +1,32 @@
+# Tools for the Ubuntu certification image (../ubuntu-cert.Dockerfile): the
+# Mac's versions (reports/macos-host-2026-11-14.txt, B1), plus mold and uv.
+# The image installs them with `mise install --locked` from this directory, so
+# every download is checked against mise.lock (linux-x64), and points
+# MISE_GLOBAL_CONFIG_FILE at this file instead of changing a global config
+# with `mise use -g`. Regenerate the lock inside the image:
+# `mise lock --platform linux-x64` in a copy of this directory.
+[settings]
+# A fixed cutoff instead of the default 24h age, so the uv sidecar lock is
+# the same whenever it is made (M0 (i) finding; the repository's mise.toml
+# does the same).
+minimum_release_age = "2026-11-13T00:00:00Z"
+
+[env]
+VCPKG_ROOT = { value = "{{ tools['github:microsoft/vcpkg-tool'].path }}", tools = true }
+VCPKG_DISABLE_METRICS = "1"
+
+[tools]
+# A locked pypi install (gcovr) needs a mise-managed interpreter; 3.14.8 is the
+# Mac's global Python.
+python = "3.14.8"
+uv = "0.13.8"
+cmake = "4.5.0"
+ninja = "1.13.2"
+sccache = "0.19.0"
+# vcpkg as the Mac's global config pins it: the release binary renamed to vcpkg,
+# with the standalone bundle (scripts/, triplets/) laid over it; VCPKG_ROOT below.
+"github:microsoft/vcpkg-tool" = { version = "2026-10-29", additional_asset_patterns = ["vcpkg-standalone-bundle.tar.gz"], rename_exe = "vcpkg", platforms = { linux-x64 = { asset_pattern = "vcpkg-glibc" } } }
+"pypi:gcovr" = "8.8"
+"conda:doxygen" = "1.18.0"
+hyperfine = "2.0.0"
+mold = "3.0.0"
