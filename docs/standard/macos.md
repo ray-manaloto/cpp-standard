@@ -50,7 +50,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
 | p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
-| In-tree code-signed debugserver | PASS (DB5) on `current` (`-b6e46c1709ce`), with Developer mode enabled (A6) | none needed; the previous build used Xcode's debugserver |
+| In-tree code-signed debugserver | PASS (DB5) on `current` (`-9f4a6fe02298`, built with the `lldb_codesign` key limited to `/usr/bin/codesign`), with Developer mode enabled (A6) | none needed; `-37f3cecb1624` used Xcode's debugserver |
 | p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
 | Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode enabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept`; `sudo DevToolsSecurity -enable` (DB5 step 5) |
@@ -476,21 +476,22 @@ disk` and `satisfies its Designated Requirement`, and
 as `bin/debugserver-p2996`; hence `'debugserver*'`. To check a build before
 it becomes `current`, set `P2996` to that build's `<prefix>/view`.
 
-Today: PASS on `current`, `-b6e46c1709ce` (2026-11-14, Developer mode
-enabled by the owner with `sudo DevToolsSecurity -enable`, A6):
-`$P2996/bin/debugserver-p2996`, `Authority=lldb_codesign`, `valid on disk`,
-`satisfies its Designated Requirement`, and
+Today: PASS on `current`, `-9f4a6fe02298` (2026-11-14, rerun after the
+build agent made it `current`; `previous` is now `-b6e46c1709ce`;
+Developer mode enabled by the owner with `sudo DevToolsSecurity -enable`,
+A6): `$P2996/bin/debugserver-p2996`, `Authority=lldb_codesign`,
+`valid on disk`, `satisfies its Designated Requirement`, and
 `stop reason = breakpoint 1.1`. `ps`, run inside the stopped session
 (`platform shell /bin/ps -axo pid=,comm=`), lists the build's own
 `bin/debugserver`, not Xcode's. The lldb-dap probe (DB4) also passes on
-this build. To see which debugserver it starts, add
+it. To see which debugserver it starts, add
 `subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,comm="])` to the probe
 right after its `v =` line, while the program is stopped at the
 breakpoint. On `current` it lists the same `bin/debugserver`; on
-`previous`, it lists Xcode's. No password dialog appeared, and no debugserver was
-left running.
+`-37f3cecb1624`, which has no debugserver of its own, it listed Xcode's.
+No password dialog appeared, and no debugserver was left running.
 
-Also PASS on `-9f4a6fe02298` (2026-11-14, not `current`), built and
+Before the switch, `-9f4a6fe02298` (2026-11-14) also passed, built and
 installed by the build agent after the owner limited the `lldb_codesign`
 key to `/usr/bin/codesign` (step 2). The build agent reports that its
 three signing steps (the `build.py` preflight, CMake's `llvm_codesign`,
@@ -507,6 +508,9 @@ that a build input changed, so the ID changed.
 
 Earlier results:
 
+- `-b6e46c1709ce` (now `previous`), reinstalled (2026-11-14): PASS, the
+  same results as Today, including the lldb-dap probe with the `ps`
+  line. Built before the key limit.
 - `-b6e46c1709ce`, first install (2026-11-14): FAIL.
   `bin/debugserver` exists and shows `Authority=lldb_codesign`, but
   `codesign --verify --strict -v` prints `invalid signature (code or
@@ -524,8 +528,8 @@ Earlier results:
   --preserve-metadata=identifier,entitlements,flags,runtime`, and refuses
   the build unless `codesign --verify --strict` and `debugserver
   --version` pass.
-- `-37f3cecb1624` (now `previous`): FAIL on the first three lines. There
-  is no debugserver under it because that p2996 build sets
+- `-37f3cecb1624` (on disk, no longer linked): FAIL on the first three
+  lines. There is no debugserver under it because that p2996 build sets
   `LLDB_USE_SYSTEM_DEBUGSERVER=ON` (its `CMakeCache.txt` has
   `LLDB_USE_SYSTEM_DEBUGSERVER:BOOL=ON`). Building one signed with
   `lldb_codesign` also needs that certificate, which this Mac now has
@@ -596,7 +600,7 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    `bin/debugserver` shows `Authority=lldb_codesign` and
    `Signed Time` 21:06:17 local, after the limit and before the installed
    copy's re-sign (21:13:08), so the CMake step signed under the limit.
-   DB5 passes on that build (the "Also PASS" paragraph above). Whether
+   DB5 passes on that build, now `current` ("Today" above). Whether
    other apps are now refused is untested, because that test opens a
    dialog.
 3. Configure p2996 with `-DLLDB_USE_SYSTEM_DEBUGSERVER=OFF` and
