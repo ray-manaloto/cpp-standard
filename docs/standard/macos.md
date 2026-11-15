@@ -536,16 +536,22 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    It imports the private key with `-A`, so the key's sign entry lists no
    application (`applications: <null>`); its partition list is
    `apple-tool:`.
+2. Check it: `security find-certificate -c lldb_codesign /Library/Keychains/System.keychain`
+   prints the certificate.
 
-   Optional hardening (done on this Mac, 2026-11-14): limit the key to
-   `/usr/bin/codesign`. The p2996 recipe signs in three places. Dotfiles'
-   `build.py` preflight and `install.py` re-sign call `codesign`. lldb's
-   CMake step signs debugserver through `llvm_codesign` in
-   `llvm/cmake/modules/AddLLVM.cmake`, whose `CMAKE_CODESIGN` defaults to
-   `xcrun codesign`. Here both `codesign` and `xcrun -f codesign` resolve
-   to `/usr/bin/codesign`. In Keychain
-   Access (`open "/System/Library/CoreServices/Applications/Keychain Access.app"`):
-   System Keychains, System, My Certificates, expand `lldb_codesign`,
+   Optional hardening, once this check finds the certificate (done on
+   this Mac, 2026-11-14): limit the key to `/usr/bin/codesign`. The p2996
+   recipe signs in three places. In the dotfiles repository,
+   `python/toolchains/p2996/src/p2996/build.py` (the preflight) and
+   `python/toolchains/p2996/src/p2996/install.py` (the re-sign after
+   install) call `codesign`. lldb's CMake step signs debugserver through
+   `llvm_codesign` in `llvm/cmake/modules/AddLLVM.cmake`, whose
+   `CMAKE_CODESIGN` defaults to `xcrun codesign` (read in the p2996
+   source at `562409c79`, not run). Here both `codesign` and
+   `xcrun -f codesign` resolve to `/usr/bin/codesign`. Open Keychain
+   Access:
+   `open "/System/Library/CoreServices/Applications/Keychain Access.app"`.
+   Then System Keychains, System, My Certificates, expand `lldb_codesign`,
    double-click "Imported Private Key", Access Control. Choose "Confirm
    before allowing access" and leave "Ask for Keychain password"
    unchecked. Under "Always allow access by these applications" click
@@ -570,8 +576,6 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    the limit: a full p2996 build and install, including the CMake signing
    step. Whether other apps are now refused is untested, because that test
    opens a dialog.
-2. Check it: `security find-certificate -c lldb_codesign /Library/Keychains/System.keychain`
-   prints the certificate.
 3. Configure p2996 with `-DLLDB_USE_SYSTEM_DEBUGSERVER=OFF` and
    `-DLLDB_CODESIGN_IDENTITY=lldb_codesign`, and stop the build before
    configure if step 2 finds no certificate. CMake does not stop on its
