@@ -1,0 +1,14 @@
+# LLVM's own macOS release tarball (D38). postinstall writes clang's config
+# files next to clang++ (playbook C2): the Xcode SDK as sysroot, and the
+# tarball's own libc++, libc++abi and libunwind for C++ links. The sysroot is
+# fixed at install time: re-run `mise install --force github:llvm/llvm-project`
+# after an Xcode or xcode-select change. The postinstall stops, writing
+# nothing, when xcrun fails, the SDK is not a directory, or its path holds a
+# quote or backslash; the path is double-quoted for clang's config parser, so
+# spaces are safe.
+[tools."github:llvm/llvm-project"]
+version = "23.1.5"
+version_prefix = "llvmorg-"
+asset_pattern = "LLVM-*-macOS-ARM64.tar.xz"
+os = ["macos"]
+postinstall = '''sdk="$(xcrun --show-sdk-path)" && test -d "$sdk" && case "$sdk" in *'"'* | *'\'*) false ;; esac && b="$MISE_TOOL_INSTALL_PATH/bin" && printf -- '-isysroot "%s"\n' "$sdk" > "$b/arm64-apple-darwin.cfg" && printf -- '%s\n' '@arm64-apple-darwin.cfg' '$-Wl,-L,<CFGDIR>/../lib' '$-Wl,-rpath,<CFGDIR>/../lib' '$-Wl,-lc++abi' '$-Wl,-lunwind' > "$b/arm64-apple-darwin-clang++.cfg"'''
