@@ -1,0 +1,28 @@
+# Build, cache, dependency, coverage, docs and timing tools (playbook B1),
+# pinned here so a fresh Mac or the Tart guest gets them from this repository
+# alone, not from a user's global mise config. macOS only for now: the Linux
+# images pin their own tools layer (D45).
+[tools]
+cmake = { version = "4.5.0", os = ["macos"] }
+ninja = { version = "1.13.2", os = ["macos"] }
+sccache = { version = "0.19.0", os = ["macos"] }
+hyperfine = { version = "2.0.0", os = ["macos"] }
+# gcovr installs from its uv lock (.mise/locks/pypi-gcovr) into a uv
+# environment on this pinned Python; mise needs uv 0.12.10 or later for that.
+python = { version = "3.14.8", os = ["macos"] }
+uv = { version = "0.13.8", os = ["macos"] }
+"pypi:gcovr" = { version = "8.8", python = "3.14.8", os = ["macos"] }
+# Doxygen is not in the mise registry; conda-forge has it.
+"conda:doxygen" = { version = "1.18.0", os = ["macos"] }
+
+# vcpkg in manifest mode: the release binary with the standalone bundle
+# (scripts/, triplets/) laid over it; VCPKG_ROOT below names this install.
+[tools."github:microsoft/vcpkg-tool"]
+version = "2026-10-29"
+os = ["macos"]
+additional_asset_patterns = ["vcpkg-standalone-bundle.tar.gz"]
+rename_exe = "vcpkg"
+platforms = { macos-arm64 = { asset_pattern = "vcpkg-macos" }, linux-x64 = { asset_pattern = "vcpkg-glibc" }, linux-arm64 = { asset_pattern = "vcpkg-glibc-arm64" } }
+
+[env]
+VCPKG_ROOT = { value = "{% if tools['github:microsoft/vcpkg-tool'] is defined %}{{ tools['github:microsoft/vcpkg-tool'].path }}{% else %}{{ get_env(name='VCPKG_ROOT', default='') }}{% endif %}", tools = true }
