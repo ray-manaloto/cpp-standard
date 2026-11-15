@@ -46,14 +46,14 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | clang 23.1.5 (Homebrew): `import std` through CMake | FAIL (C4) | `-DCMAKE_CXX_STDLIB_MODULES_JSON=/opt/homebrew/opt/llvm/lib/c++/libc++.modules.json` |
 | clang 23: reflection | no (upstream clang has no P2996) | use p2996 or GCC |
 | GCC 16.2.0: `-g` with `-fsanitize=address` or `undefined` | FAIL (G6): the link runs Homebrew LLVM's `dsymutil`, which dies with SIGILL | put `/usr/bin` before `/opt/homebrew/opt/llvm/bin` for GCC builds, or build without `-g` |
-| `lldb-p2996`, `lldb-dap-p2996` | PASS since the rebuild with #159849 and the Python rpath (DB3, DB4, DB5 blocker): both load and debug programs, using Xcode's debugserver | none needed |
+| `lldb-p2996`, `lldb-dap-p2996` | PASS since the rebuild with #159849 and the Python rpath (DB3, DB4, DB5 blocker): both load and debug programs, using the in-tree debugserver (DB5) | none needed |
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
 | p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
-| In-tree code-signed debugserver | FAIL (DB5): the `current` build sets `LLDB_USE_SYSTEM_DEBUGSERVER=ON`; the test build `-b6e46c1709ce` has an in-tree debugserver, but the file was changed after signing, so its signature is invalid and it is killed at launch (exit 137) | lldb-p2996 uses Xcode's debugserver, which works |
+| In-tree code-signed debugserver | PASS (DB5) on `current` (`-b6e46c1709ce`), with Developer mode enabled (A6) | none needed; the previous build used Xcode's debugserver |
 | p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
-| Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode disabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
+| Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode enabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept`; `sudo DevToolsSecurity -enable` (DB5 step 5) |
 | p2996 coverage | PASS with the matching tools | use `llvm-cov-p2996 gcov`, never another LLVM's |
 | `g++` / `gcc` on `PATH` | Apple clang: `gcc` is `/usr/bin/gcc`, and `g++` is a mise shim with no active version, which falls through to `/usr/bin/g++` | call `g++-16` by name |
 | `ccache` on `PATH` | mise shim with no version set; it exits with an error | use sccache (D9); ccache does not cache C++20 modules |
@@ -140,12 +140,13 @@ SDK major matches A1.
 a password cannot run unattended. Probe: `DevToolsSecurity -status`. PASS if
 `enabled`. If `disabled`, record A6 after DB5: PASS if the DB5 breakpoint
 line passes without a password prompt; otherwise FAIL, and the fix is
-`sudo DevToolsSecurity -enable`. Today: PASS with `disabled` (2026-11-14):
-lldb-p2996 and Apple `lldb` both stop at a breakpoint with `lldb -b` and no
-prompt. lldb-p2996 launched Xcode's Apple-signed `debugserver` (seen in
-`ps`), and the account is in the `_developer` group (`id -Gn`); which of
-the two makes the prompt unnecessary is untested. Re-check A6 once
-DB5's self-signed debugserver exists.
+`sudo DevToolsSecurity -enable`. Today: PASS with `enabled` (2026-11-14):
+lldb-p2996 stops at a breakpoint with the self-signed in-tree debugserver
+(DB5) and no prompt. With `disabled`, Xcode's Apple-signed `debugserver`
+attached without a prompt, but the self-signed one opened a "Developer
+Tools Access" password dialog (reported by the build agent), although the
+account is in the `_developer` group (`id -Gn`). So a Mac or VM that uses
+the in-tree debugserver needs `sudo DevToolsSecurity -enable` (DB5 step 5).
 
 ## B. Build tools
 
@@ -371,7 +372,7 @@ both.
 **DB2. LLVM 23 lldb.** Probe: `"$LLVM23/bin/lldb" --version`. Expected:
 `lldb version 23.x`. The tarball lldb is built without Python, so `script`
 fails: expected, not a FAIL. Its `debugserver` is ad-hoc signed; if attach
-fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (the path in DB5's "Today").
+fails, set `LLDB_DEBUGSERVER_PATH` to Xcode's (the path in DB5's earlier results).
 
 LLVM 23 already has the upstream fix for the offset wrap described under the
 DB5 blocker (llvm/llvm-project #159849, in LLVM 22 and later), so its lldb
@@ -460,7 +461,7 @@ unsigned debugserver attach to a process. lldb looks for it in
 (`ProcessGDBRemote.cpp`). Probe:
 
 ```sh
-DS="$(find -L "$P2996" -name debugserver -type f 2>/dev/null | head -1)"; echo "$DS"
+DS="$(find -L "$P2996" -name 'debugserver*' -type f 2>/dev/null | head -1)"; echo "$DS"
 codesign -dvv "$DS" 2>&1 | grep -E 'Authority|Signature'
 codesign --verify --strict -v "$DS"
 "$P2996/bin/clang++-p2996" -std=c++26 -g p.cpp -o pd
@@ -470,15 +471,25 @@ codesign --verify --strict -v "$DS"
 Expected: a path inside `$P2996`, `Authority=lldb_codesign`, `valid on
 disk` and `satisfies its Designated Requirement`, and
 `stop reason = breakpoint 1.1`. `codesign -dvv` only reads the signature;
-`codesign --verify --strict` checks that the file still matches it. To
-check a build before it becomes `current`, set `P2996` to that build's
-prefix and use `view/bin/lldb-p2996` in the last line.
+`codesign --verify --strict` checks that the file still matches it.
+`current` points at a build's `view/` folder, where debugserver is linked
+as `bin/debugserver-p2996`; hence `'debugserver*'`. To check a build before
+it becomes `current`, set `P2996` to that build's `<prefix>/view`.
 
-Today, on two builds:
+Today: PASS on `current`, `-b6e46c1709ce` (2026-11-14, Developer mode
+enabled by the owner with `sudo DevToolsSecurity -enable`, A6):
+`$P2996/bin/debugserver-p2996`, `Authority=lldb_codesign`, `valid on disk`,
+`satisfies its Designated Requirement`, and
+`stop reason = breakpoint 1.1`. `ps`, run inside the stopped session
+(`platform shell /bin/ps -axo pid=,comm=`), lists the build's own
+`bin/debugserver`, not Xcode's. The lldb-dap probe (DB4) also passes on
+this build. No password dialog appeared, and no debugserver was left
+running.
 
-- `-b6e46c1709ce` (2026-11-14, not `current`), built with
-  `LLDB_USE_SYSTEM_DEBUGSERVER=OFF` and `LLDB_CODESIGN_IDENTITY=lldb_codesign`:
-  FAIL. `bin/debugserver` exists and shows `Authority=lldb_codesign`, but
+Earlier results:
+
+- `-b6e46c1709ce`, first install (2026-11-14): FAIL.
+  `bin/debugserver` exists and shows `Authority=lldb_codesign`, but
   `codesign --verify --strict -v` prints `invalid signature (code or
   signature have been modified)`. The file changed after it was signed:
   `Signed Time` is 19:24:41 and its modification time is 19:31.
@@ -486,12 +497,16 @@ Today, on two builds:
   likely because of the kernel's code-signing check (the system log did
   not record the reason). The session prints
   `error: failed to get reply to handshake packet within timeout of 6.0
-  seconds`. Likely cause, not yet confirmed: the install step adds the
-  Python `LC_RPATH` to every binary after signing. `otool -l` shows that
-  rpath on debugserver, and `otool -L` shows debugserver does not link
-  libpython.
-- `-37f3cecb1624` (`current`): FAIL on the first three lines. There is no
-  debugserver under `$P2996` because the p2996 build sets
+  seconds`. Cause, from the build agent: `cmake --install` adds the
+  install rpaths with `install_name_tool` after the build tree signs
+  debugserver. The build agent's fixed install re-signs
+  `bin/debugserver` last with
+  `codesign --force --sign lldb_codesign
+  --preserve-metadata=identifier,entitlements,flags,runtime`, and refuses
+  the build unless `codesign --verify --strict` and `debugserver
+  --version` pass.
+- `-37f3cecb1624` (now `previous`): FAIL on the first three lines. There
+  is no debugserver under it because that p2996 build sets
   `LLDB_USE_SYSTEM_DEBUGSERVER=ON` (its `CMakeCache.txt` has
   `LLDB_USE_SYSTEM_DEBUGSERVER:BOOL=ON`). Building one signed with
   `lldb_codesign` also needs that certificate, which this Mac now has
@@ -505,12 +520,12 @@ Today, on two builds:
 Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
 
 1. Create the signing certificate once per Mac or VM, as an admin:
-   `lldb/scripts/macos-setup-codesign.sh` from the p2996 source tree. Run
-   it without `sudo`, because it calls `sudo` itself for the keychain
-   steps. Under `sudo`, `$TMPDIR` is empty, so the script tries to write
-   `/lldb_codesign.tmpl` and fails. If you must run it under `sudo`, use
    `sudo env TMPDIR="$TMPDIR" bash lldb/scripts/macos-setup-codesign.sh`
-   (this form worked on 2026-11-14). It imports the private key with `-A`,
+   from the p2996 source tree (this form worked on 2026-11-14). Plain
+   `sudo` fails: it empties `$TMPDIR`, so the script tries to write
+   `/lldb_codesign.tmpl`. Running it without `sudo` should also work,
+   since it calls `sudo` itself for the keychain steps, but that form is
+   untested here. It imports the private key with `-A`,
    so any app on the Mac can sign with it without a prompt.
    It creates a self-signed `lldb_codesign` identity in
    `/Library/Keychains/System.keychain` and trusts it for code signing. It
@@ -531,9 +546,19 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    step) breaks the signature. Leave debugserver out of such steps, or
    sign it again as the last step with its entitlements file
    (`lldb/tools/debugserver/resources/debugserver-macosx-entitlements.plist`).
-5. If the certificate cannot be made (no admin), keep
+5. Enable Developer mode once per Mac or VM, as an admin:
+   `sudo DevToolsSecurity -enable`, then check that
+   `DevToolsSecurity -status` prints `enabled`. Without it, the
+   self-signed debugserver opened a password dialog (A6, reported by the
+   build agent), which blocks unattended runs. In a VM, do it in the
+   golden image. The setting covers the whole Mac: any program running as a
+   `_developer` member can then attach a debugger to that user's other
+   processes without a password, except hardened-runtime binaries that
+   lack `get-task-allow`. `sudo DevToolsSecurity -disable` turns it off.
+6. If the certificate cannot be made (no admin), keep
    `LLDB_USE_SYSTEM_DEBUGSERVER=ON`: lldb-p2996 then uses Xcode's
-   debugserver, which works today. Record DB5 as FAIL with that workaround.
+   debugserver, which worked without Developer mode. Record DB5 as FAIL
+   with that workaround.
 
 **DB5 blocker: lldb-p2996 crashed loading any program on macOS 27.** Fixed
 by the cherry-pick below; keep the probe, and report it on the DB5 line if
@@ -770,8 +795,8 @@ Probe: `tart list | grep golden-gate-xcode`. PASS if the local image was
 pulled by that digest.
 
 **V3. Inside the guest (VM).** Run every section above inside the guest.
-Expected differences: R2 N/A; DB5 needs the certificate step done while the
-golden image was built.
+Expected differences: R2 N/A; DB5 needs the certificate (step 1) and
+Developer mode (step 5) set up while the golden image was built.
 
 ## Report
 
