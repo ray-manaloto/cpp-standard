@@ -1,0 +1,10 @@
+# The Docker CLI that certify:ubuntu and certify:ubuntu-image run on the Mac
+# (docs/standard/ubuntu.md, rule 2). They reach the PC's Docker over ssh
+# (DOCKER_HOST=ssh://...), so only the client runs here. Pinned in this
+# repository so the launcher does not depend on a user's global mise config
+# (the Ubuntu side of the gap #63 closed for the macOS build tools). mise's
+# registry maps `docker-cli` to aqua:docker/cli (download.docker.com static
+# tarball, sha256 checksum in .mise/mise.lock). macOS only: the launcher runs
+# on the Mac, and CI does not run it.
+[tools]
+docker-cli = { version = "29.9.3", os = ["macos"] }

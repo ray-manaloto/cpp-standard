@@ -83,6 +83,15 @@ conda_deps = [
     "libcxx-23.1.5-hc645fd0_2",
 ]
 
+[[tools.docker-cli]]
+version = "29.9.3"
+backend = "aqua:docker/cli"
+specifiers = ["29.9.3"]
+
+[tools.docker-cli."platforms.macos-arm64"]
+checksum = "sha256:79145e169bca0b9571d02de8e1cd311a36e0e8fdb4599b6661a87b1bb3afbe13"
+url = "https://download.docker.com/mac/static/stable/aarch64/docker-29.9.3.tgz"
+
 [[tools.editorconfig-checker]]
 version = "4.0.2"
 backend = "github:editorconfig-checker/editorconfig-checker"
