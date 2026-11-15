@@ -368,6 +368,20 @@ Expected: `16` (`_LIBCPP_HARDENING_MODE_EXTENSIVE` is `1 << 4` in
 `import std ok`; the C6 loop with `clang++-p2996` fires all three. PASS if
 all.
 
+Caveat, as for GCC (G1): the config file links `libc++` and `libunwind`
+dynamically and adds `-rpath` to the build's hashed prefix (today
+`562409c…-d688c1d4bd0f/lib`), not `current`. A program built with p2996
+loads `@rpath/libc++.1.dylib` and `@rpath/libunwind.1.dylib` from there, with
+no fallback to the system `libc++`, so deleting that prefix breaks it.
+`-static-libstdc++` does not help (clang ignores it on macOS). Keep an old
+prefix until nothing built with it is in use, or link the static archives:
+`clang++-p2996 --no-default-config -isysroot "$(xcrun --show-sdk-path)"
+-std=c++26 -nostdlib++ x.cpp "$P2996/lib/libc++.a" "$P2996/lib/libc++abi.a"
+"$P2996/lib/libunwind.a"`. That program depends only on
+`/usr/lib/libSystem.B.dylib` (`otool -L`), and a throw/catch test passes
+(checked 2026-11-15; the dotfiles lead found the deleted-prefix failure,
+`dyld: Library not loaded: @rpath/libunwind.1.dylib`).
+
 **P5. Projects present.** Probe:
 
 ```sh
@@ -554,7 +568,8 @@ Install order for a new p2996 build (the dotfiles p2996 `install` task):
 first `install --keep-current`, which assembles and verifies the build but
 leaves `current` where it is; then this probe with `P2996` set to the new
 build's `<prefix>/view`; then a plain `install`, which makes it `current`.
-A build whose debugserver fails DB5 then never becomes `current`.
+A build whose debugserver fails DB5 then never becomes `current`. Keep the
+old prefix until nothing built with it is in use (P4 caveat).
 
 Earlier: PASS on `-9f4a6fe02298` (2026-11-14, rerun after the
 build agent made it `current`; `previous` was then `-b6e46c1709ce`;
