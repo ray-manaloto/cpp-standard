@@ -111,8 +111,8 @@ upstream docs. List these as Linux-only; do not report them as missing.
 major. Probe: `sw_vers -productVersion`. Expected: `27.2` or a later 27.x.
 PASS if the major is 27.
 
-**A2. Full Xcode selected.** Why: Instruments, `xctrace` and the signed
-`debugserver` come only with Xcode (D136). Probe:
+**A2. Full Xcode selected.** Why: Instruments, `xctrace` and the
+Apple-signed `debugserver` come only with Xcode (D136). Probe:
 
 ```sh
 xcode-select -p; xcodebuild -version
@@ -483,8 +483,12 @@ enabled by the owner with `sudo DevToolsSecurity -enable`, A6):
 `stop reason = breakpoint 1.1`. `ps`, run inside the stopped session
 (`platform shell /bin/ps -axo pid=,comm=`), lists the build's own
 `bin/debugserver`, not Xcode's. The lldb-dap probe (DB4) also passes on
-this build. No password dialog appeared, and no debugserver was left
-running.
+this build. To see which debugserver it starts, add
+`subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,comm="])` to the probe
+right after its `v =` line, while the program is stopped at the
+breakpoint. On `current` it lists the same `bin/debugserver`; on
+`previous`, it lists Xcode's. No password dialog appeared, and no debugserver was
+left running.
 
 Earlier results:
 
