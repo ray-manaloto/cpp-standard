@@ -483,8 +483,8 @@ A6): `$P2996/bin/debugserver-p2996`, `Authority=lldb_codesign`,
 `valid on disk`, `satisfies its Designated Requirement`, and
 `stop reason = breakpoint 1.1`. `ps`, run inside the stopped session
 (`platform shell /bin/ps -axo pid=,comm=`), lists the build's own
-`bin/debugserver`, not Xcode's. The lldb-dap probe (DB4) also passes on
-it. To see which debugserver it starts, add
+`bin/debugserver`, not Xcode's. The lldb-dap probe (DB4) also
+passes on this build. To see which debugserver it starts, add
 `subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,comm="])` to the probe
 right after its `v =` line, while the program is stopped at the
 breakpoint. On `current` it lists the same `bin/debugserver`; on
@@ -498,8 +498,8 @@ three signing steps (the `build.py` preflight, CMake's `llvm_codesign`,
 the `install.py` re-sign) ran with no keychain dialog; step 2 records the
 check of the CMake-signed copy. With `P2996` set to its `view/`:
 `bin/debugserver-p2996`, `Authority=lldb_codesign`, `valid on disk`,
-`satisfies its Designated Requirement`, the entitlement
-`com.apple.security.cs.debugger` kept, `--version` exits 0, and
+`satisfies its Designated Requirement`, `--version` exits 0,
+the entitlement `com.apple.security.cs.debugger` kept, and
 `stop reason = breakpoint 1.1`. `ps` in the stopped session lists the
 build's own `bin/debugserver`. The lldb-dap probe with the `ps` line also
 passes and lists the same debugserver. No debugserver was left running.
