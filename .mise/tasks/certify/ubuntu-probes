@@ -92,6 +92,16 @@ lsan_fires() { # lsan_fires CXX TAG: LeakSanitizer reports the appendix leak
   o="$(timeout 60 "./lsan_$2" 2>&1)"
   [[ "$o" == *"detected memory leaks"* ]]
 }
+iwyu_works() { # iwyu_works IWYU [FLAGS]: it analyses a file and finds the unused include
+  printf '#include <vector>\nint main() { return 0; }\n' >"$PROBE/iw.cpp"
+  local o r
+  # shellcheck disable=SC2086
+  o="$("$1" -std=c++26 ${2:-} "$PROBE/iw.cpp" 2>&1)"
+  r=$?
+  # Without --error, IWYU exits 0 after an analysis, suggestions or not
+  # (0.25 and 0.27 both did here); anything else is a failed run.
+  [[ $r == 0 && "$o" == *"should remove these lines"* && "$o" == *"#include <vector>"* && "$o" != *"error:"* ]]
+}
 dap_probe() { # dap_probe LLDB-DAP PROGRAM: the appendix probe (it launches with ASLR on, DB2)
   timeout 120 python3 -I dap_probe.py "$1" "$2" dap.cpp 10 2>&1 | tail -1
 }
@@ -340,8 +350,10 @@ else
     else
       o="$("$iw" --version 2>&1)"
       r=$?
-      [[ $r == 0 && -n "$PIN" && "$o" == *"include-what-you-use 0.25"* && "$o" == *"$PIN"* ]] &&
-        res P8 PASS "$(head -1 <<<"$o")" || res P8 FAIL "exit $r: $(tr '\n' ' ' <<<"$o" | cut -c1-120) (want 0.25 on p2996 ${PIN:0:12})"
+      if [[ $r == 0 && -n "$PIN" && "$o" == *"include-what-you-use 0.25"* && "$o" == *"$PIN"* ]]; then
+        iwyu_works "$iw" && res P8 PASS "$(head -1 <<<"$o"); flags the unused <vector>" ||
+          res P8 FAIL "$(head -1 <<<"$o"); did not flag the unused <vector> (builtin headers?)"
+      else res P8 FAIL "exit $r: $(tr '\n' ' ' <<<"$o" | cut -c1-120) (want 0.25 on p2996 ${PIN:0:12})"; fi
     fi
   fi
   if want P9; then
@@ -505,10 +517,17 @@ if want T2; then
   [[ "$o" == "USAGE: scan-build"* ]] && res T2 PASS "$o" || res T2 FAIL "$o"
 fi
 if want T3; then
-  iw="$(command -v include-what-you-use iwyu 2>/dev/null | head -1)"
-  v="$([[ -n "$iw" ]] && "$iw" --version 2>&1 | head -1)"
-  [[ "$v" == *"clang version 23"* ]] && res T3 PASS "$v" ||
-    res T3 FAIL "no IWYU built against LLVM 23 (${v:-none installed}; the archive iwyu is 0.23 on clang 19)"
+  iw="$(command -v include-what-you-use 2>/dev/null)"
+  v="" r=127
+  [[ -n "$iw" ]] && {
+    v="$("$iw" --version 2>&1)"
+    r=$?
+  }
+  cv="$(clang++-23 --version | head -1 | grep -oE 'clang version [0-9.]+')"
+  if [[ $r == 0 && "$v" == *"include-what-you-use 0.27"* && -n "$cv" && "$v" == *"$cv"* ]]; then
+    iwyu_works "$iw" && res T3 PASS "$(head -1 <<<"$v" | cut -c1-150); flags the unused <vector>" ||
+      res T3 FAIL "$(head -1 <<<"$v"); did not flag the unused <vector> (builtin headers?)"
+  else res T3 FAIL "want IWYU 0.27 on ${cv:-clang 23}: ${iw:-none on PATH}, exit $r, $(head -1 <<<"$v" | cut -c1-100)"; fi
 fi
 if want T4; then
   ok=""

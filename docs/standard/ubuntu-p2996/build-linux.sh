@@ -14,6 +14,10 @@ sccache --start-server >/dev/null 2>&1 || true
 sccache --zero-stats >/dev/null
 work="$1" prefix="$2" jobs="$3"
 commit=562409c7942690d59ea470762515f88f24b16e23
+# include-what-you-use, built in the LLVM tree as an external project (the
+# dotfiles p2996 recipe does the same, dotfiles #707): the clang_21 branch head,
+# IWYU 0.25, which matches p2996's clang 21.
+iwyu_commit=791e69ea4662cb3e74e8128fd5fd69bd7f4ea6b3
 here="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$work" "$prefix"
 if [[ ! -d "$work/src/.git" ]]; then
@@ -25,6 +29,16 @@ if [[ ! -d "$work/src/.git" ]]; then
   # applied the way its source.py does.
   git -C "$work/src" apply --unidiff-zero "$here/lldb-base-specifier-derived.patch"
 fi
+if [[ ! -d "$work/iwyu/.git" ]]; then
+  git init -q "$work/iwyu"
+  git -C "$work/iwyu" fetch -q --depth 1 https://github.com/include-what-you-use/include-what-you-use "$iwyu_commit"
+  git -C "$work/iwyu" checkout -q FETCH_HEAD
+fi
+# IWYU unpatched: exactly the pinned commit, nothing changed or added.
+[[ "$(git -C "$work/iwyu" rev-parse HEAD)" == "$iwyu_commit" && -z "$(git -C "$work/iwyu" status --porcelain)" ]] || {
+  echo "build-linux.sh: $work/iwyu is not a clean checkout of $iwyu_commit" >&2
+  exit 1
+}
 # Every run, a fresh or a reused tree: the pinned commit with exactly these two
 # patches, or stop. LLVM_FORCE_VC_REVISION below stamps the commit into
 # --version, so the tree must really be that commit.
@@ -54,6 +68,8 @@ cmake -G Ninja -S "$work/src/llvm" -B "$work/build" \
   -DCMAKE_C_COMPILER=clang-23 -DCMAKE_CXX_COMPILER=clang++-23 -DLLVM_USE_LINKER=lld \
   -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
   -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;lld;lldb;mlir;polly" \
+  -DLLVM_EXTERNAL_PROJECTS=iwyu -DLLVM_EXTERNAL_IWYU_SOURCE_DIR="$work/iwyu" \
+  -DIWYU_RESOURCE_RELATIVE_TO=iwyu \
   -DLLVM_ENABLE_RUNTIMES="libunwind;libcxxabi;libcxx;compiler-rt" \
   -DLLVM_TARGETS_TO_BUILD=X86 \
   -DLLVM_ENABLE_ASSERTIONS=ON -DLIBCXX_HARDENING_MODE=extensive -DLLVM_INSTALL_UTILS=ON \

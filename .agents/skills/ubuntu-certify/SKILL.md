@@ -92,7 +92,7 @@ minutes from `cpp-standard-sccache`, about 45 without it):
 DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker image ls --filter label=org.cpp-standard.cert=1
 DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume ls --filter label=org.cpp-standard.cert=1
 DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker image rm cpp-standard-cert-ubuntu:26.10
-DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume rm cpp-standard-cert-build cpp-standard-sccache cpp-standard-p2996-562409c79426-9a47cc76800b
+DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume rm cpp-standard-cert-build cpp-standard-sccache cpp-standard-p2996-562409c79426-f3fb14942dd6
 ```
 
 ## Reading the report
@@ -115,9 +115,8 @@ DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume rm cpp-standard-cert-build cpp-
 
 ## Gotchas
 
-- `san.cpp` and `fuzz.cpp` are meant to match the macOS playbook's (its
-  update to the looping race and a real fuzz target is pending); once it
-  lands, change both playbooks together. The race in `san.cpp` loops because a one-increment
+- `san.cpp` and `fuzz.cpp` are the same files as in `macos.md`; change both
+  playbooks together. The race in `san.cpp` loops because a one-increment
   race was caught in only some runs (C6 has the counts).
 - `apt-get install iwyu` pulls in the archive clang 22 and repoints `cc`,
   `c++` and `clang++` (B2). Never add it to the image.

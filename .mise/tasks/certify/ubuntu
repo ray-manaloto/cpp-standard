@@ -297,10 +297,10 @@ fix_for() {
     A3) echo "run on the amd64 PC; never under qemu" ;;
     B2) echo "remove the archive clang (it comes with the archive iwyu; ubuntu-cert.Dockerfile leaves it out)" ;;
     E2) echo "clangd matching clang-23 needs llvmorg-23.1.6 or an apt.llvm.org stonking suite (D25)" ;;
-    P8) echo "build IWYU branch clang_21 against \$P2996 and install it into the p2996 prefix (docs/standard/ubuntu.md, P8)" ;;
+    P8) echo "rebuild p2996 with build-linux.sh (it builds IWYU 0.25 in the tree) into volume $p2996_vol (docs/standard/ubuntu.md, P8)" ;;
     P*) echo "build p2996 for amd64 and mount it as volume $p2996_vol (docs/standard/ubuntu.md, P)" ;;
     DB4 | DB5) echo "the p2996 install (P)" ;;
-    T3) echo "build IWYU against LLVM 23 (the archive iwyu is IWYU 0.23 on clang 19)" ;;
+    T3) echo "rebuild the image (mise run certify:ubuntu-image; stage iwyu builds IWYU 0.27); if the LLVM 23 snapshot is gone, move LLVM_VER and recertify (docs/standard/ubuntu.md, T3)" ;;
     V2) echo "run the container with --privileged (certify:ubuntu does)" ;;
     *) echo "see $1 in docs/standard/ubuntu.md" ;;
   esac
