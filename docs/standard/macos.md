@@ -21,8 +21,15 @@ D88 and D136). The design is
 3. A check marked **(host)** runs only on bare metal. A check marked
    **(VM)** runs only in a Tart guest. Everything else runs on both.
 4. Do not install or change anything while certifying. A FAIL names the fix;
-   the fix is a separate step.
-5. `mise run certify:macos --allow-fail` runs every probe below and prints
+   the fix is a separate step. Run the task with mise's auto-install off:
+   a plain `mise run` installs any missing tool of this repository's config
+   before the task starts, so a check could PASS on a tool the Mac did not
+   have. The task refuses to start unless `MISE_AUTO_INSTALL=0` is set. It
+   cannot undo an install that a run without it made first; on a fresh Mac
+   or VM, the proof that nothing was installed is a listing of
+   `$MISE_DATA_DIR/installs` two levels deep from before and after the run
+   ([research note](../designs/level-1/research/mise-auto-install.md)).
+5. `MISE_AUTO_INSTALL=0 mise run certify:macos --allow-fail` runs every probe below and prints
    the report (the `macos-certify` skill explains it). The host reports
    are in `reports/`, next to this file: the first is
    `macos-host-2026-11-14.txt`, the latest `macos-host-2026-11-15.txt`.
@@ -43,7 +50,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | Area | State | Workaround until fixed |
 |---|---|---|
 | clang-p2996 `562409c7`: reflection, `import std` through CMake, ASan, TSan, libc++ hardening `extensive`, assertions | PASS | none needed |
-| GCC 16.2.0, the D33 source build (`~/.local/share/gcc-d33/current`): `-freflection`, `import std` through CMake, Xcode SDK sysroot | PASS (G1, G2, G3) | none needed; it loads Homebrew's `gmp`, `mpfr`, `libmpc`, `isl` and `zstd`, so a `brew upgrade` that changes their library versions needs a rebuild (G1) |
+| GCC 16.2.0, the D33 source build (`~/.local/share/gcc-d33/current`): `-freflection`, `import std` through CMake, Xcode SDK sysroot | PASS (G1, G2, G3) | none needed; it loads Homebrew's `gmp`, `mpfr`, `libmpc`, `isl` and `zstd`, so a `brew upgrade` that changes their library versions needs a rebuild (G1); programs it builds load `libstdc++` from the build's own hashed folder, so keep that folder or link with `-static-libstdc++ -static-libgcc` (G1) |
 | GCC 16.2.0: TSan, LSan | not on macOS (G4): not built for aarch64 Darwin | use p2996 or clang for TSan |
 | GCC with Homebrew C++ libraries (Boost and others) | FAIL: crashes at run time | build C++ dependencies with vcpkg, one triplet per compiler (K1) |
 | clang 23.1.5, the LLVM release tarball (D38): config file, its own libc++, `import std`, sanitizers, both linkers, lldb | PASS (C1–C9, DB2) | none needed; `clang`, `clang++` and `lldb` are the tarball's only inside this repository (C9) |
@@ -51,9 +58,9 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | GCC 16.2.0: `-g` with `-fsanitize=address` or `undefined` | PASS (G4, G6) through `.mise/apple-bin/dsymutil` (Apple's); Homebrew's and the tarball's `dsymutil` die with SIGILL | run builds through mise in this repository, or name `/usr/bin/dsymutil` in the CMake toolchain |
 | `lldb-p2996`, `lldb-dap-p2996` | PASS since the rebuild with #159849 and the Python rpath (DB3, DB4, DB5 blocker): both load and debug programs, using the in-tree debugserver (DB5) | none needed |
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
-| p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed; the next p2996 build sets it |
+| p2996 LLVM utilities (FileCheck and others) | PASS (P6) since `-d688c1d4bd0f`, built with `LLVM_INSTALL_UTILS` | none needed |
 | include-what-you-use for p2996 | PASS (P8): IWYU 0.25 (`791e69e`) installed into the current p2996 build | pass `-Xiwyu --mapping_file=$P2996/include/c++/v1/libcxx.imp`; IWYU does not model reflection |
-| In-tree code-signed debugserver | PASS (DB5) on `current` (`-9f4a6fe02298`, built with the `lldb_codesign` key limited to `/usr/bin/codesign`), with Developer mode enabled (A6) | none needed; `-37f3cecb1624` used Xcode's debugserver |
+| In-tree code-signed debugserver | PASS (DB5) on `current` (`-d688c1d4bd0f`; first on `-9f4a6fe02298`, built with the `lldb_codesign` key limited to `/usr/bin/codesign`), with Developer mode enabled (A6) | none needed; `-37f3cecb1624` used Xcode's debugserver |
 | p2996 with `-fuse-ld=lld` | FAIL, known upstream (P10; does not fail strict mode): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
 | Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode enabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept`; `sudo DevToolsSecurity -enable` (DB5 step 5) |
@@ -287,7 +294,15 @@ Expected: `16.2.0`, built by cpp-standard (D33). The certify task uses
 its `cc1plus` links Homebrew's `gmp`, `mpfr`, `libmpc`, `isl` and `zstd`
 dynamically (`otool -L`), so a `brew upgrade` that changes one of their
 library versions (for example `libisl.23`) breaks the compiler until it is
-rebuilt with a new inputs hash.
+rebuilt with a new inputs hash. Second caveat: a program it links loads
+`libstdc++.6.dylib` through `@rpath`, and the rpaths it records are the
+build's hashed folder (`~/.local/share/gcc-d33/16.2.0-9f99e2b94d93/lib` and
+its `lib/gcc/aarch64-apple-darwin27/16`), not `current` (`otool -l`,
+`LC_RPATH`, 2026-11-15). Removing that folder after a rebuild breaks every
+program built with it. Keep old build folders while programs built with
+them are in use, or link with `-static-libstdc++ -static-libgcc`: the
+program then depends only on `/usr/lib/libSystem.B.dylib` (`otool -L`) and
+runs (checked 2026-11-15).
 
 **G2. Reflection and `import std`.** Probe: compile `refl.cpp` from
 [Appendix: reflection probe](#appendix-reflection-probe) with
@@ -365,8 +380,9 @@ Expected: `15` and `polly-ok`. Not expected after the D136 rebuild: `flang`,
 build longer).
 
 **P6. LLVM utilities.** Probe: `ls "$P2996/bin" | grep -E '^(FileCheck|not|count|yaml2obj)'`.
-PASS if all four (with or without the `-p2996` suffix). Today: FAIL
-(`LLVM_INSTALL_UTILS` was off).
+PASS if all four (with or without the `-p2996` suffix). Today (2026-11-15):
+PASS on `-d688c1d4bd0f`, the first build with `LLVM_INSTALL_UTILS=ON`
+(`-9f4a6fe02298` FAILed: the option was off).
 
 **P7. Tools parse reflection.** Probe:
 
@@ -384,8 +400,9 @@ p2996 commit. Build: IWYU branch `clang_21`, CMake with
 `-DCMAKE_PREFIX_PATH=$P2996`. If it fails to compile against p2996, pin the
 IWYU commit nearest the date p2996 branched from LLVM main. Today
 (2026-11-15): PASS, `include-what-you-use 0.25 (git:791e69e)` on p2996
-`562409c`, installed by hand into the current p2996 build; the next p2996
-build installs it itself. Pass libc++'s own mapping,
+`562409c`. `-d688c1d4bd0f` installs it itself (`bin/include-what-you-use`,
+linked into `view/` as `include-what-you-use-p2996`); on `-9f4a6fe02298`
+it was installed by hand. Pass libc++'s own mapping,
 `-Xiwyu --mapping_file=$P2996/include/c++/v1/libcxx.imp`, or IWYU suggests
 private headers such as `<__vector/vector.h>`. IWYU does not model
 reflection; run it on files without `^^`.
@@ -529,8 +546,18 @@ disk` and `satisfies its Designated Requirement`, and
 as `bin/debugserver-p2996`; hence `'debugserver*'`. To check a build before
 it becomes `current`, set `P2996` to that build's `<prefix>/view`.
 
-Today: PASS on `current`, `-9f4a6fe02298` (2026-11-14, rerun after the
-build agent made it `current`; `previous` is now `-b6e46c1709ce`;
+Today (2026-11-15): PASS on `current`, `-d688c1d4bd0f` (`previous` is
+`-9f4a6fe02298`): `Authority=lldb_codesign`, `verify --strict` ok,
+`breakpoint 1.1`, and `ps` lists the build's own debugserver.
+
+Install order for a new p2996 build (the dotfiles p2996 `install` task):
+first `install --keep-current`, which assembles and verifies the build but
+leaves `current` where it is; then this probe with `P2996` set to the new
+build's `<prefix>/view`; then a plain `install`, which makes it `current`.
+A build whose debugserver fails DB5 then never becomes `current`.
+
+Earlier: PASS on `-9f4a6fe02298` (2026-11-14, rerun after the
+build agent made it `current`; `previous` was then `-b6e46c1709ce`;
 Developer mode enabled by the owner with `sudo DevToolsSecurity -enable`,
 A6): `$P2996/bin/debugserver-p2996`, `Authority=lldb_codesign`,
 `valid on disk`, `satisfies its Designated Requirement`, and

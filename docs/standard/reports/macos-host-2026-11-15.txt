@@ -28,7 +28,7 @@ P2    PASS arm64-apple-darwin-clang++.cfg; -isysroot /Applications/Xcode.app/Con
 P3    PASS _LIBCPP_HARDENING_MODE_DEFAULT 16 (extensive)
 P4    PASS members=2; import std ok; fired: asan tsan ubsan
 P5    PASS 15 tools; polly-ok
-P6    FAIL missing: FileCheck not count yaml2obj (LLVM_INSTALL_UTILS off)
+P6    PASS all four utilities
 P7    PASS clang-tidy, clang-format, clang-include-cleaner: exit 0, 0 errors
 P8    PASS include-what-you-use 0.25 (git:791e69e) based on clang version 21.0.0git (https://github.com/bloomberg/clang-p2996.git 562409c7942690d59ea470762515f88f24b16e23)
 P9    PASS File 'p.cpp' Lines executed:100.00% of 1
@@ -56,7 +56,7 @@ T5    PASS leaks heap vmmap malloc_history resolve
 T6    N/A  tier-2 tools (D19); installed: none
 T7    N/A  runs, writes no xray-log: the Darwin XRay runtime does not work (llvm/llvm-project#196848)
 R1    PASS all five templates
-R2    PASS CPU Counters trace: 14 counter sample rows
+R2    PASS CPU Counters trace: 11 counter sample rows
 R3    PASS sample exit 0
 R4    PASS Iterations 100 twice
 R5    PASS p.json written
@@ -64,11 +64,10 @@ R6    PASS hyperfine 2.0.0
 V1    FAIL tart not installed (want 2.41.1 or later)
 V2    FAIL not run: Tart not installed (V1)
 V3    N/A  VM check: run this task inside the guest
-Summary: 51 PASS, 5 FAIL, 8 N/A
+Summary: 52 PASS, 4 FAIL, 8 N/A
 Known upstream (do not fail strict mode): P10
 Missing or wrong:
   A3: sudo xcodebuild -runFirstLaunch; sudo xcodebuild -license accept
-  P6: rebuild p2996 with LLVM_INSTALL_UTILS=ON
   P10: known upstream: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK
   V1: install Tart 2.41.1+ (brew install openai/tools/tart)
   V2: tart pull the golden-gate-xcode image by its digest

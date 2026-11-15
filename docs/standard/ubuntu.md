@@ -31,7 +31,10 @@ this kernel, not what Ubuntu's own kernel would do.
 1. Build the image once, on the PC: `mise run certify:ubuntu-image`. It
    builds [`ubuntu-cert.Dockerfile`](ubuntu-cert.Dockerfile), which pins
    every package (see "The end state").
-2. Run `mise run certify:ubuntu --allow-fail` from the Mac. Both tasks reach
+2. Run `MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail` from the
+   Mac; the task refuses to start without `MISE_AUTO_INSTALL=0`, because a
+   plain `mise run` can install a missing tool of this repository's config
+   on the Mac first (rule 4). Both tasks reach
    the PC's Docker over ssh: set `CERT_UBUNTU_SSH` to the ssh destination of
    the PC (its tailnet name or an ssh alias for it). The `ubuntu-certify`
    skill explains the report. The first report is

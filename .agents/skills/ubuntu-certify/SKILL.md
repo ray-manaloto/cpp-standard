@@ -42,22 +42,23 @@ From the repository root, on the Mac:
 
 ```bash
 mise run certify:ubuntu-image                                  # once, or after an image change
-mise run certify:ubuntu --allow-fail                           # the full report, without V6
-mise run certify:ubuntu --allow-fail --ab                      # also V6, the host-vs-container A/B
-mise run certify:ubuntu --only DB,P4 --allow-fail              # one section or a few checks
-mise run certify:ubuntu --allow-fail --keep                    # keep the container and scratch dir
+MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail                           # the full report, without V6
+MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail --ab                      # also V6, the host-vs-container A/B
+MISE_AUTO_INSTALL=0 mise run certify:ubuntu --only DB,P4 --allow-fail              # one section or a few checks
+MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail --keep                    # keep the container and scratch dir
 ```
 
 Without `--allow-fail` the task exits 1 when any check fails. `--only` takes
 ids or prefixes (`DB` is DB1 to DB5). A full run with `--ab` takes about 15
-minutes; most of it is the timing checks. Other exit codes: 2 for an unset
-`CERT_UBUNTU_SSH`, an image that is not on the PC (`--image`), or an `--only`
+minutes; most of it is the timing checks. Other exit codes: 2 for a run
+without `MISE_AUTO_INSTALL=0` (a plain `mise run` can install a missing tool
+on the Mac before the task starts), an unset `CERT_UBUNTU_SSH`, an image that is not on the PC (`--image`), or an `--only`
 that matches no check.
 
 ## Refresh the baseline
 
 ```bash
-mise run certify:ubuntu --allow-fail --ab --out docs/standard/reports/ubuntu-pc-$(date +%F).txt
+MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail --ab --out docs/standard/reports/ubuntu-pc-$(date +%F).txt
 git diff --no-index docs/standard/reports/ubuntu-pc-2026-11-15.txt docs/standard/reports/ubuntu-pc-$(date +%F).txt
 ```
 

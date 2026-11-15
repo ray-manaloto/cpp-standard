@@ -22,6 +22,15 @@ doc="$root/docs/standard/macos.md"
   echo "certify: $doc not found" >&2
   exit 2
 }
+# Rule 4 needs mise's auto-install off for the whole run: by the time this
+# task starts, a plain `mise run` has already installed any missing tool of
+# this repository's config, and a shim the probes call can still install one.
+# The task cannot undo that, so it refuses to run and names the safe form
+# (docs/designs/level-1/research/mise-auto-install.md).
+if [[ "${MISE_AUTO_INSTALL:-}" != 0 ]]; then
+  echo "certify: run it as MISE_AUTO_INSTALL=0 mise run certify:macos ...; with auto-install on, mise can install a missing tool before or during the run (playbook rule 4)" >&2
+  exit 2
+fi
 
 only=",${usage_only:-},"
 out="${usage_out:-}"
