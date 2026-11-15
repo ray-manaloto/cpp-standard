@@ -1,0 +1,91 @@
+macOS certification  host  2026-11-14
+macOS 27.2.1  Xcode 27.2  SDK 27.2
+A1    PASS macOS 27.2.1
+A2    PASS /Applications/Xcode.app/Contents/Developer; Xcode 27.2
+A3    FAIL checkFirstLaunchStatus exit 69
+A4    PASS CLT 27.2.0.0.1792721180
+A5    PASS /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk (27.2)
+B1    PASS all eight print a version; cmake 4.5
+B2    FAIL g++: Apple clang version 21.0.0 (clang-2100.4.1.1); ccache (exit 1): mise ERROR No version is set for shim: ccache. Run `mise use -g ccache@4.14.2` to set a default, or `mise x ccache@4.14.2 -- ccache` to run it once.
+B3    PASS sccache --show-stats prints statistics
+C1    FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+C2    FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+C3    FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+C4    FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+C5    FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+C6    FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+C7    FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+C8    FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+G1    FAIL g++-16 (Homebrew GCC 16.2.0) 16.2.0 --with-pkgversion='Homebrew GCC 16.2.0' (want the cpp-standard source build, D33)
+G2    PASS members=2; import std ok
+G3    FAIL /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk (SDK 26.5, macOS 27.2.1)
+G4    FAIL asan=no-link ubsan=no-link tsan=no-link (the -g link runs a dsymutil that crashes, G6; with /usr/bin first: asan=yes ubsan=yes)
+G6    FAIL dsymutil /opt/homebrew/opt/llvm/bin/dsymutil; compilation terminated.
+G5    N/A  rule, no probe: C++ dependencies for GCC come from vcpkg (K1)
+P1    PASS commit 562409c79426; +assertions
+P2    PASS arm64-apple-darwin-clang++.cfg; -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk (27.2)
+P3    PASS _LIBCPP_HARDENING_MODE_DEFAULT 16 (extensive)
+P4    PASS members=2; import std ok; fired: asan tsan ubsan
+P5    PASS 15 tools; polly-ok
+P6    FAIL missing: FileCheck not count yaml2obj (LLVM_INSTALL_UTILS off)
+P7    PASS clang-tidy, clang-format, clang-include-cleaner: exit 0, 0 errors
+P8    FAIL no include-what-you-use in $P2996/bin (not built)
+P9    PASS File 'p.cpp' Lines executed:100.00% of 1
+P10   FAIL ld64.lld: error: could not load TAPI file at /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libSystem.tbd: malformed file
+DB1   PASS lldb-2103.0.34.407; script 2
+DB2   FAIL LLVM 23 tarball not installed (mise where github:llvm/llvm-project is empty)
+DB3   PASS script 42; rpath ~/.local/share/mise/installs/python/3.15/lib; libpython3.15.dylib present
+DB4   PASS usage ok; dap session PASS
+DB5   PASS debugserver-p2996: Authority=lldb_codesign, verify --strict ok, breakpoint 1.1, ps: build's own debugserver, target create exit 0
+A6    PASS DevToolsSecurity enabled
+L1    FAIL failed: clang23:not-installed (checked: p2996 gcc16)
+L2    FAIL differs or not checked: clang23:not-installed
+L3    PASS the two-part guard matches on GCC 16 and p2996
+H1    N/A  per-project rule, no probe
+H2    PASS exit=133 (extensive mode traps)
+K1    N/A  project check (triplets/arm64-osx-*.cmake); no C++ project in this repo yet
+K2    PASS vcpkg package management program version 2026-10-29-139f2e53438b1529e178f6295bc563f4e0de734f
+E1    N/A  project check (compile_commands.json after configure); no C++ project in this repo yet
+E2    PASS clangd-p2996: All checks completed, 0 errors
+T1    N/A  rule: $LLVM23 tools for plain projects, -p2996 tools for reflection projects (P7)
+T2    PASS USAGE: scan-build [options] <build command> [build options]
+T3    FAIL clang 23 IWYU (exit 0): include-what-you-use 0.27 based on Homebrew clang version 23.1.5; p2996 IWYU: P8 not PASS
+T4    PASS realtime type fuzzer link
+T5    PASS leaks heap vmmap malloc_history resolve
+T6    N/A  tier-2 tools (D19); installed: none
+T7    N/A  runs, writes no xray-log: the Darwin XRay runtime does not work (llvm/llvm-project#196848)
+R1    PASS all five templates
+R2    PASS CPU Counters trace: 13 counter sample rows
+R3    PASS sample exit 0
+R4    FAIL clang23: LLVM 23 not installed; p2996 (ELF): Iterations: 100
+R5    PASS p.json written
+R6    PASS hyperfine 2.0.0
+V1    FAIL tart not installed (want 2.41.1 or later)
+V2    FAIL not run: Tart not installed (V1)
+V3    N/A  VM check: run this task inside the guest
+Summary: 31 PASS, 24 FAIL, 8 N/A
+Missing or wrong:
+  A3: sudo xcodebuild -runFirstLaunch; sudo xcodebuild -license accept
+  B2: drop or pin the mise g++ and ccache shims
+  C1: install the LLVM 23 tarball with mise (D38)
+  C2: install the LLVM 23 tarball with mise (D38)
+  C3: install the LLVM 23 tarball with mise (D38)
+  C4: install the LLVM 23 tarball with mise (D38)
+  C5: install the LLVM 23 tarball with mise (D38)
+  C6: install the LLVM 23 tarball with mise (D38)
+  C7: install the LLVM 23 tarball with mise (D38)
+  C8: install the LLVM 23 tarball with mise (D38)
+  G1: the GCC 16.2 source build (D33)
+  G3: the GCC 16.2 source build (D33)
+  G4: put /usr/bin before Homebrew LLVM on PATH for GCC builds (G6)
+  G6: put /usr/bin before Homebrew LLVM on PATH for GCC builds (G6)
+  P6: rebuild p2996 with LLVM_INSTALL_UTILS=ON
+  P8: build IWYU (branch clang_21) against p2996
+  P10: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK
+  DB2: install the LLVM 23 tarball with mise (D38)
+  L1: see the check; clang 23 parts need the LLVM 23 tarball
+  L2: see the check; clang 23 parts need the LLVM 23 tarball
+  T3: build IWYU (branch clang_21) against p2996
+  R4: see the check; clang 23 parts need the LLVM 23 tarball
+  V1: install Tart 2.41.1+ (brew install openai/tools/tart)
+  V2: tart pull the golden-gate-xcode image by its digest

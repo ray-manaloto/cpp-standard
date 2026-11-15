@@ -22,6 +22,9 @@ D88 and D136). The design is
    **(VM)** runs only in a Tart guest. Everything else runs on both.
 4. Do not install or change anything while certifying. A FAIL names the fix;
    the fix is a separate step.
+5. `mise run certify:macos --allow-fail` runs every probe below and prints
+   the report (the `macos-certify` skill explains it). The first host
+   report is `reports/macos-host-2026-11-14.txt`, next to this file.
 
 Set these first. Each later probe uses them.
 
