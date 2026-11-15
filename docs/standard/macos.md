@@ -867,9 +867,10 @@ def wait(pred, timeout=60):
     end = time.monotonic() + timeout
     while True:
         try:
-            if time.monotonic() >= end:  # also when other messages keep coming
+            left = end - time.monotonic()  # read the clock once per pass
+            if left <= 0:  # also when other messages keep coming
                 raise queue.Empty
-            m = inbox.get(timeout=end - time.monotonic())
+            m = inbox.get(timeout=left)
         except queue.Empty:
             sys.exit(f"FAIL: lldb-dap sent nothing the probe was waiting for in {timeout}s")
         if isinstance(m, str):  # the reader stopped
