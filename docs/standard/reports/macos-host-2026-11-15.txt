@@ -2,7 +2,7 @@ macOS certification  host  2026-11-15
 macOS 27.2.1  Xcode 27.2  SDK 27.2
 A1    PASS macOS 27.2.1
 A2    PASS /Applications/Xcode.app/Contents/Developer; Xcode 27.2
-A3    FAIL checkFirstLaunchStatus exit 69
+A3    PASS checkFirstLaunchStatus exit 0
 A4    PASS CLT 27.2.0.0.1792721180
 A5    PASS /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk (27.2)
 B1    PASS all eight print a version; cmake 4.5
@@ -64,10 +64,9 @@ R6    PASS hyperfine 2.0.0
 V1    FAIL tart not installed (want 2.41.1 or later)
 V2    FAIL not run: Tart not installed (V1)
 V3    N/A  VM check: run this task inside the guest
-Summary: 52 PASS, 4 FAIL, 8 N/A
+Summary: 53 PASS, 3 FAIL, 8 N/A
 Known upstream (do not fail strict mode): P10
 Missing or wrong:
-  A3: sudo xcodebuild -runFirstLaunch; sudo xcodebuild -license accept
   P10: known upstream: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK
   V1: install Tart 2.41.1+ (brew install openai/tools/tart)
   V2: tart pull the golden-gate-xcode image by its digest
