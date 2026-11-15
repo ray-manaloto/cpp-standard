@@ -490,6 +490,21 @@ breakpoint. On `current` it lists the same `bin/debugserver`; on
 `previous`, it lists Xcode's. No password dialog appeared, and no debugserver was
 left running.
 
+Also PASS on `-9f4a6fe02298` (2026-11-14, not `current`), built and
+installed by the build agent after the owner limited the `lldb_codesign`
+key to `/usr/bin/codesign` (step 2). The build agent reports that its
+three signing steps (the `build.py` preflight, CMake's `llvm_codesign`,
+the `install.py` re-sign) ran with no keychain dialog; step 2 records the
+check of the CMake-signed copy. With `P2996` set
+to its `view/`: `bin/debugserver-p2996`, `Authority=lldb_codesign`,
+`valid on disk`, `satisfies its Designated Requirement`, the
+`com.apple.security.cs.debugger` entitlement kept, `--version` exits 0,
+and `stop reason = breakpoint 1.1`. `ps` in the stopped session lists the
+build's own `bin/debugserver`. The lldb-dap probe with the `ps` line also
+passes and lists the same debugserver. No debugserver was left running.
+It has the same p2996 commit as `-b6e46c1709ce`; the build agent reports
+that a build input changed, so the ID changed.
+
 Earlier results:
 
 - `-b6e46c1709ce`, first install (2026-11-14): FAIL.
@@ -572,10 +587,18 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    commands that `build.py`'s preflight and `install.py`'s re-sign run were
    run by hand on scratch copies. Both finished with rc 0 and no prompt.
    A breakpoint session through the re-signed debugserver copy
-   (`LLDB_DEBUGSERVER_PATH`) stopped at the breakpoint. Not yet run with
-   the limit: a full p2996 build and install, including the CMake signing
-   step. Whether other apps are now refused is untested, because that test
-   opens a dialog.
+   (`LLDB_DEBUGSERVER_PATH`) stopped at the breakpoint. Later that day the
+   build agent ran a full p2996 build and install with the limit in place
+   (`-9f4a6fe02298`). It reports that the preflight, the CMake signing
+   step and the re-sign all ran with no dialog, and that it reuses one
+   build tree, configured with `--fresh`, where ninja re-linked and
+   re-signed debugserver during this build. Checked here: that build-tree
+   `bin/debugserver` shows `Authority=lldb_codesign` and
+   `Signed Time` 21:06:17 local, after the limit and before the installed
+   copy's re-sign (21:13:08), so the CMake step signed under the limit.
+   DB5 passes on that build (the "Also PASS" paragraph above). Whether
+   other apps are now refused is untested, because that test opens a
+   dialog.
 3. Configure p2996 with `-DLLDB_USE_SYSTEM_DEBUGSERVER=OFF` and
    `-DLLDB_CODESIGN_IDENTITY=lldb_codesign`, and stop the build before
    configure if step 2 finds no certificate. CMake does not stop on its
