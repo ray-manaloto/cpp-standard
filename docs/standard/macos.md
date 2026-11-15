@@ -444,8 +444,11 @@ in [Appendix: lldb-dap probe](#appendix-lldb-dap-probe). It launches the
 program, sets a breakpoint, reads `v` and `s` from the locals, continues,
 and checks the exit code. PASS if it ends with `PASS` and exits 0: the
 breakpoint is `verified`, the stop reason is `breakpoint`, `v` has children
-`1 2 3`, `s` is `"p2996"`, and the program exits 0. Today: PASS (2026-11-14,
-run twice). With line 100, past the end of the file, it prints
+`1 2 3`, `s` is `"p2996"`, and the program exits 0. On any failure it prints
+one `FAIL: <reason>` line and exits 1. This includes a reply that lacks a
+field the probe needs, a wrong `lldb-dap` path, and 60 seconds without the
+message the probe is waiting for. Today:
+PASS (2026-11-14, run twice). With line 100, past the end of the file, it prints
 `breakpoint verified: False` and `FAIL: program exited without stopping at
 line 100`, and exits 1. An earlier hand-run session also showed `evaluate`
 of `pt.x + v.size()` giving `10`.
@@ -821,11 +824,15 @@ python3 -I dap_probe.py "$P2996/bin/lldb-dap-p2996" dapd dap.cpp 10
 ```python
 # dap_probe.py: drive lldb-dap over stdio the way an editor does.
 # Usage: python3 -I dap_probe.py <lldb-dap> <program> <source> <line>
-import json, subprocess, sys, time
+# Prints PASS and exits 0, or prints one "FAIL: <reason>" line and exits 1.
+import json, queue, subprocess, sys, threading, time
 
-dap, prog, src, line = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
-p = subprocess.Popen([dap], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-seq, pending = 0, []
+try:
+    dap, prog, src, line = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+    p = subprocess.Popen([dap], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+except (IndexError, ValueError, OSError) as e:  # bad arguments or lldb-dap path
+    sys.exit(f"FAIL: {type(e).__name__}: {e}")
+seq, pending, inbox = 0, [], queue.Queue()
 
 def send(cmd, args=None):
     global seq
@@ -836,27 +843,40 @@ def send(cmd, args=None):
     p.stdin.flush()
     return seq
 
-def read():
-    hdr = b""
-    while not hdr.endswith(b"\r\n\r\n"):
-        c = p.stdout.read(1)
-        if not c:
-            sys.exit("FAIL: lldb-dap exited")
-        hdr += c
-    n = int(hdr.decode().lower().split("content-length:")[1].split("\r\n")[0])
-    return json.loads(p.stdout.read(n))
+def reader():  # runs in a thread, so wait() can time out while lldb-dap is silent
+    try:
+        while True:
+            hdr = b""
+            while not hdr.endswith(b"\r\n\r\n"):
+                c = p.stdout.read(1)
+                if not c:
+                    inbox.put("lldb-dap exited")
+                    return
+                hdr += c
+            n = int(hdr.decode().lower().split("content-length:")[1].split("\r\n")[0])
+            inbox.put(json.loads(p.stdout.read(n)))
+    except Exception as e:
+        inbox.put(f"bad message from lldb-dap: {e!r}")
+
+threading.Thread(target=reader, daemon=True).start()
 
 def wait(pred, timeout=60):
     for i, m in enumerate(pending):  # messages that arrived out of order
         if pred(m):
             return pending.pop(i)
-    end = time.time() + timeout
-    while time.time() < end:
-        m = read()
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            if time.monotonic() >= end:  # also when other messages keep coming
+                raise queue.Empty
+            m = inbox.get(timeout=end - time.monotonic())
+        except queue.Empty:
+            sys.exit(f"FAIL: lldb-dap sent nothing the probe was waiting for in {timeout}s")
+        if isinstance(m, str):  # the reader stopped
+            sys.exit(f"FAIL: {m}")
         if pred(m):
             return m
         pending.append(m)
-    sys.exit("FAIL: timed out")
 
 def req(cmd, args=None):
     s = send(cmd, args)
@@ -869,39 +889,57 @@ def req(cmd, args=None):
 def event(*names):
     return lambda m: m.get("type") == "event" and m.get("event") in names
 
-req("initialize", {"clientID": "probe", "adapterID": "lldb-dap",
-                   "linesStartAt1": True, "columnsStartAt1": True,
-                   "pathFormat": "path"})
-launch = send("launch", {"program": prog})
-wait(event("initialized"))
-bp = req("setBreakpoints", {"source": {"path": src},
-                            "breakpoints": [{"line": line}]})["breakpoints"][0]
-print("breakpoint verified:", bp.get("verified"))
-req("configurationDone")
-wait(lambda m: m.get("type") == "response" and m.get("request_seq") == launch)
-stop = wait(event("stopped", "exited", "terminated"))
-reason = stop.get("body", {}).get("reason")
-print("stopped:", reason)
-if stop["event"] != "stopped":
-    sys.exit(f"FAIL: program {stop['event']} without stopping at line {line}")
-tid = stop["body"]["threadId"]
-frame = req("stackTrace", {"threadId": tid, "levels": 1})["stackFrames"][0]
-scopes = req("scopes", {"frameId": frame["id"]})["scopes"]
-local = next(s for s in scopes if s["name"].lower().startswith("local"))
-vars_ = {v["name"]: v for v in req("variables", {"variablesReference":
-                                                 local["variablesReference"]})["variables"]}
-kids = [k["value"] for k in req("variables", {"variablesReference":
-                                              vars_["v"]["variablesReference"]})["variables"]]
-print("v =", vars_["v"]["value"], kids, "| s =", vars_["s"]["value"])
-req("continue", {"threadId": tid})
-code = wait(event("exited"))["body"]["exitCode"]
-print("exit code:", code)
-req("disconnect", {"terminateDebuggee": True})
-p.wait(timeout=20)
-ok = (bp.get("verified") and reason == "breakpoint" and kids == ["1", "2", "3"]
-      and vars_["s"]["value"] == '"p2996"' and code == 0)
-print("PASS" if ok else "FAIL")
-sys.exit(0 if ok else 1)
+def probe():  # returns the list of failed checks; empty means PASS
+    req("initialize", {"clientID": "probe", "adapterID": "lldb-dap",
+                       "linesStartAt1": True, "columnsStartAt1": True,
+                       "pathFormat": "path"})
+    launch = send("launch", {"program": prog})
+    wait(event("initialized"))
+    bp = req("setBreakpoints", {"source": {"path": src},
+                                "breakpoints": [{"line": line}]})["breakpoints"][0]
+    print("breakpoint verified:", bp.get("verified"))
+    req("configurationDone")
+    wait(lambda m: m.get("type") == "response" and m.get("request_seq") == launch)
+    stop = wait(event("stopped", "exited", "terminated"))
+    reason = stop.get("body", {}).get("reason")
+    print("stopped:", reason)
+    if stop["event"] != "stopped":
+        sys.exit(f"FAIL: program {stop['event']} without stopping at line {line}")
+    tid = stop["body"]["threadId"]
+    frame = req("stackTrace", {"threadId": tid, "levels": 1})["stackFrames"][0]
+    scopes = req("scopes", {"frameId": frame["id"]})["scopes"]
+    local = next(s for s in scopes if s["name"].lower().startswith("local"))
+    vars_ = {v["name"]: v for v in req("variables", {"variablesReference":
+                                                     local["variablesReference"]})["variables"]}
+    kids = [k["value"] for k in req("variables", {"variablesReference":
+                                                  vars_["v"]["variablesReference"]})["variables"]]
+    s = vars_["s"]["value"]
+    print("v =", vars_["v"]["value"], kids, "| s =", s)
+    req("continue", {"threadId": tid})
+    end = wait(event("exited", "stopped", "terminated"))
+    if end["event"] != "exited":
+        sys.exit(f"FAIL: program {end['event']} after continue, not exited")
+    code = end["body"]["exitCode"]
+    print("exit code:", code)
+    req("disconnect", {"terminateDebuggee": True})
+    p.wait(timeout=20)
+    checks = [("breakpoint not verified", bp.get("verified")),
+              (f"stop reason {reason!r}", reason == "breakpoint"),
+              (f"v children {kids}", kids == ["1", "2", "3"]),
+              (f"s is {s}", s == '"p2996"'),
+              (f"exit code {code}", code == 0)]
+    return [name for name, good in checks if not good]
+
+try:
+    failed = probe()
+except Exception as e:  # a reply without a field the probe needs, or a slow exit
+    sys.exit(f"FAIL: {type(e).__name__}: {e}")
+finally:
+    if p.poll() is None:
+        p.kill()
+if failed:
+    sys.exit("FAIL: " + "; ".join(failed))
+print("PASS")
 ```
 
 ## Sources
