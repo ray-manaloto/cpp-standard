@@ -23,8 +23,9 @@ D88 and D136). The design is
 4. Do not install or change anything while certifying. A FAIL names the fix;
    the fix is a separate step.
 5. `mise run certify:macos --allow-fail` runs every probe below and prints
-   the report (the `macos-certify` skill explains it). The first host
-   report is `reports/macos-host-2026-11-14.txt`, next to this file.
+   the report (the `macos-certify` skill explains it). The host reports
+   are in `reports/`, next to this file: the first is
+   `macos-host-2026-11-14.txt`, the latest `macos-host-2026-11-15.txt`.
 
 Set these first. Each later probe uses them.
 
@@ -34,7 +35,7 @@ export LLVM23="$(mise where github:llvm/llvm-project 2>/dev/null)"  # the LLVM 2
 export PROBE="$(mktemp -d)"; cd "$PROBE"
 ```
 
-## Usable today (this host, 2026-11-14)
+## Usable today (this host, 2026-11-15)
 
 You can start a C++26 static reflection project on this Mac now. These
 results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
@@ -42,24 +43,23 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | Area | State | Workaround until fixed |
 |---|---|---|
 | clang-p2996 `562409c7`: reflection, `import std` through CMake, ASan, TSan, libc++ hardening `extensive`, assertions | PASS | none needed |
-| GCC 16.2.0 (Homebrew): `-freflection`, `import std` through CMake | PASS | none needed |
+| GCC 16.2.0, the D33 source build (`~/.local/share/gcc-d33/current`): `-freflection`, `import std` through CMake, Xcode SDK sysroot | PASS (G1, G2, G3) | none needed; it loads Homebrew's `gmp`, `mpfr`, `libmpc`, `isl` and `zstd`, so a `brew upgrade` that changes their library versions needs a rebuild (G1) |
 | GCC 16.2.0: TSan, LSan | not on macOS (G4): not built for aarch64 Darwin | use p2996 or clang for TSan |
-| GCC 16.2.0: sysroot is the Command Line Tools `MacOSX26.sdk` | FAIL (G3) | builds work; the D33 source build fixes it |
 | GCC with Homebrew C++ libraries (Boost and others) | FAIL: crashes at run time | build C++ dependencies with vcpkg, one triplet per compiler (K1) |
-| clang 23.1.5 (Homebrew): `import std` through CMake | FAIL (C4) | `-DCMAKE_CXX_STDLIB_MODULES_JSON=/opt/homebrew/opt/llvm/lib/c++/libc++.modules.json` |
+| clang 23.1.5, the LLVM release tarball (D38): config file, its own libc++, `import std`, sanitizers, both linkers, lldb | PASS (C1–C9, DB2) | none needed; `clang`, `clang++` and `lldb` are the tarball's only inside this repository (C9) |
 | clang 23: reflection | no (upstream clang has no P2996) | use p2996 or GCC |
-| GCC 16.2.0: `-g` with `-fsanitize=address` or `undefined` | FAIL (G6): the link runs Homebrew LLVM's `dsymutil`, which dies with SIGILL | put `/usr/bin` before `/opt/homebrew/opt/llvm/bin` for GCC builds, or build without `-g` |
+| GCC 16.2.0: `-g` with `-fsanitize=address` or `undefined` | PASS (G4, G6) through `.mise/apple-bin/dsymutil` (Apple's); Homebrew's and the tarball's `dsymutil` die with SIGILL | run builds through mise in this repository, or name `/usr/bin/dsymutil` in the CMake toolchain |
 | `lldb-p2996`, `lldb-dap-p2996` | PASS since the rebuild with #159849 and the Python rpath (DB3, DB4, DB5 blocker): both load and debug programs, using the in-tree debugserver (DB5) | none needed |
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
-| p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
-| include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
+| p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed; the next p2996 build sets it |
+| include-what-you-use for p2996 | PASS (P8): IWYU 0.25 (`791e69e`) installed into the current p2996 build | pass `-Xiwyu --mapping_file=$P2996/include/c++/v1/libcxx.imp`; IWYU does not model reflection |
 | In-tree code-signed debugserver | PASS (DB5) on `current` (`-9f4a6fe02298`, built with the `lldb_codesign` key limited to `/usr/bin/codesign`), with Developer mode enabled (A6) | none needed; `-37f3cecb1624` used Xcode's debugserver |
-| p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
+| p2996 with `-fuse-ld=lld` | FAIL, known upstream (P10; does not fail strict mode): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
 | Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode enabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept`; `sudo DevToolsSecurity -enable` (DB5 step 5) |
 | p2996 coverage | PASS with the matching tools | use `llvm-cov-p2996 gcov`, never another LLVM's |
-| `g++` / `gcc` on `PATH` | Apple clang: `gcc` is `/usr/bin/gcc`, and `g++` is a mise shim with no active version, which falls through to `/usr/bin/g++` | call `g++-16` by name |
-| `ccache` on `PATH` | mise shim with no version set; it exits with an error | use sccache (D9); ccache does not cache C++20 modules |
+| `g++` / `gcc` on `PATH` | Apple clang (`/usr/bin/g++`, `/usr/bin/gcc`); no stray mise shims (B2 PASS) | call `g++-16` by name |
+| `ccache` on `PATH` | not installed (B2 PASS) | use sccache (D9); ccache does not cache C++20 modules |
 | Tart | not installed | V checks wait for the install |
 
 ## The end state
@@ -173,9 +173,14 @@ and `CMAKE_CXX_STDLIB_MODULES_JSON` overrides where it looks.
 g++ --version 2>&1 | head -1; ccache --version 2>&1 | head -1
 ```
 
-PASS if `g++` is GCC 16 (or absent) and `ccache` is absent or works. Today:
-FAIL (`g++` is a mise shim with no active version that falls through to
-Apple clang; `ccache` is a mise shim with no version set, so it errors).
+PASS if no mise shim on `PATH` for `g++`, `c++`, `clang++` or `ccache` lacks an
+active version (`mise which <name>` fails), `g++` is GCC 16, Apple's
+`/usr/bin/g++` or absent, and `ccache` is absent or works. Apple's `g++` is
+allowed because our builds call `g++-16` by name (DL-591 in dotfiles). Today
+(2026-11-15): PASS, after the inactive mise tools `ccache`, `conda:gxx` and
+`conda:clangxx` were uninstalled: their `g++`, `c++`, `clang++` and `ccache`
+shims errored or fell through to Apple clang (FAIL on 2026-11-14). Fix, if
+it comes back: `mise uninstall` the tool behind the shim, then `mise reshim`.
 
 **B3. sccache is the launcher.** Why: ccache does not cache C++20 modules
 (D9). Probe: `sccache --show-stats | head -3`. PASS if it prints statistics.
@@ -189,7 +194,8 @@ Apple clang; `ccache` is a mise shim with no version set, so it errors).
 ```
 
 Expected: `clang version 23.x.y` (not `Homebrew clang`). PASS if the path is
-the mise install and the version is 23. Today: FAIL (Homebrew 23.1.5).
+the mise install and the version is 23. Today (2026-11-15): PASS, 23.1.5
+(`392dfff`) from the mise install.
 
 **C2. Config file finds the SDK and the tarball's libc++.** Why: the tarball
 has no config file and no `xcselect`, so without one clang finds no SDK and
@@ -203,7 +209,13 @@ link-only (`$` prefix), `-L<prefix>/lib`, `-rpath <prefix>/lib` and
 "$LLVM23/bin/clang++" -### -x c++ /dev/null 2>&1 | grep -m1 'Configuration file'
 ```
 
-PASS if it names `arm64-apple-darwin-clang++.cfg`.
+PASS if it names `arm64-apple-darwin-clang++.cfg` and the `-isysroot` that
+clang really passes (the `"-isysroot" "<path>"` pair in the same `-###`
+output) is the SDK `xcrun --show-sdk-path` prints now. Reading `-###`, not
+the config file, also catches a config that stops including
+`@arm64-apple-darwin.cfg`. The install writes that path once; it follows Xcode updates in place (it is the
+unversioned `MacOSX.sdk` link inside Xcode.app), but not an `xcode-select`
+switch or a moved Xcode. Fix then: `mise install --force github:llvm/llvm-project`.
 
 **C3. Links its own libc++.** Probe:
 
@@ -213,13 +225,18 @@ printf '#include <print>\nint main(){std::println("ok");}\n' > p.cpp
 ```
 
 Expected: `ok`, and `libc++.1.dylib` from the tarball's `lib`, not
-`/usr/lib`. PASS if both.
+`/usr/lib`. PASS if both. `otool -L` prints `@rpath/libc++.1.dylib` (the
+config file adds an rpath to the tarball's `lib`), so check the file dyld
+really loads: `DYLD_PRINT_LIBRARIES=1 ./p 2>&1 | grep -m1 libc++.1`, and
+compare real paths, because the mise install directory is reached through a
+link.
 
 **C4. `import std` through CMake.** Why: `-print-file-name=libc++.modules.json`
 must resolve, or CMake stops with "Could not find `libc++.modules.json`".
 Use the CMake project in [Appendix: CMake probe](#appendix-cmake-probe) with
 `-DCMAKE_CXX_COMPILER="$LLVM23/bin/clang++"`. Expected: `import std ok`.
-Today (Homebrew): FAIL, because Homebrew installs the file at `lib/c++/`.
+Today (2026-11-15): PASS on the tarball. Homebrew's clang fails it,
+because Homebrew installs the file at `lib/c++/`.
 
 **C5. Runtimes.** Probe: `ls "$("$LLVM23/bin/clang++" -print-resource-dir)/lib/darwin"`.
 Expected, at least: `asan_osx_dynamic`, `ubsan_osx_dynamic`,
@@ -250,13 +267,27 @@ for link-time comparisons (D136). Probe:
 "$LLVM23/bin/clang++" -std=c++26 -fuse-ld=lld p.cpp -o pl && ./pl
 ```
 
-Expected: `ok` twice. Verified with Homebrew clang 23.1.5.
+Expected: `ok` twice. Today (2026-11-15): PASS on the tarball.
+
+**C9. Plain names are the tarball's.** Why: D38 makes the tarball this
+project's LLVM, but the global mise path puts Homebrew LLVM first.
+`.mise/conf.d/llvm.toml` puts the tarball's `bin` ahead of it inside this
+repository. Probe, from the repository root:
+`for t in clang clang++ lldb; do command -v $t; done`. PASS if each resolves,
+by real path, into the tarball's `bin`. Today (2026-11-15): PASS.
 
 ## G. GCC 16.2 (source build)
 
 **G1. Version and origin.** Probe: `g++-16 --version | head -1; g++-16 -v 2>&1 | grep -o -- "--with-pkgversion='[^']*'"`.
-Expected: `16.2.0`, built by cpp-standard (D33). Today: Homebrew GCC 16.2.0,
-which is the right version but not the pinned build.
+Expected: `16.2.0`, built by cpp-standard (D33). The certify task uses
+`~/.local/share/gcc-d33/current/bin/g++-16` when it exists, else the
+`g++-16` on `PATH`. Today (2026-11-15): PASS on the D33 build
+`16.2.0-9f99e2b94d93` (pkgversion `cpp-standard GCC 16.2.0 (D33
+9f99e2b94d93)`), installed beside Homebrew GCC, which is untouched. Caveat:
+its `cc1plus` links Homebrew's `gmp`, `mpfr`, `libmpc`, `isl` and `zstd`
+dynamically (`otool -L`), so a `brew upgrade` that changes one of their
+library versions (for example `libisl.23`) breaks the compiler until it is
+rebuilt with a new inputs hash.
 
 **G2. Reflection and `import std`.** Probe: compile `refl.cpp` from
 [Appendix: reflection probe](#appendix-reflection-probe) with
@@ -266,7 +297,8 @@ which is the right version but not the pinned build.
 **G3. Sysroot matches the SDK.** Why: GCC was configured with a fixed
 `--with-sysroot`; an old SDK hides new APIs and can mismatch the OS headers.
 Probe: `g++-16 -v 2>&1 | grep -o -- '--with-sysroot=[^ ]*'`. PASS if the path
-exists and its SDK major equals A1. Today: FAIL
+exists and its SDK major equals A1. Today (2026-11-15): PASS on the D33 build
+(Xcode's `MacOSX.sdk`, 27.2). Homebrew GCC fails it
 (`/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk`).
 
 **G4. Sanitizers.** Expected: ASan and UBSan fire (C6 loop with `g++-16`);
@@ -288,10 +320,17 @@ command -v dsymutil
 g++-16 -std=c++26 -g -fsanitize=address san.cpp -o g_a && echo link-ok
 ```
 
-Expected: `/usr/bin/dsymutil` (or Xcode's) and `link-ok`. Today: FAIL, the
-first `dsymutil` is Homebrew LLVM's, and the link stops with
-`dsymutil terminated with signal 4 [Illegal instruction: 4]`. With
-`/usr/bin` first on `PATH` the same command links.
+Expected: Apple's `dsymutil` (`/usr/bin/dsymutil`, Xcode's, or a wrapper
+that runs it) and `link-ok`. Homebrew LLVM's and the LLVM 23 tarball's
+`dsymutil` (both 23.1.5) stop the link with
+`dsymutil terminated with signal 4 [Illegal instruction: 4]`. Fix: inside
+this repository, `.mise/conf.d/llvm.toml` puts `.mise/apple-bin/dsymutil`, a
+wrapper that execs `/usr/bin/dsymutil`, first on `PATH`. Today (2026-11-15):
+PASS through that wrapper. The fix holds only where mise sets `PATH`
+(`mise run`, `mise x`, or a shell with mise activated in this repository).
+An IDE started without mise, a bare `sh`, or a CMake run outside mise still
+finds Homebrew's and fails; run builds through mise, or name
+`/usr/bin/dsymutil` in the CMake toolchain.
 
 ## P. clang-p2996 (source build)
 
@@ -343,8 +382,13 @@ Expected: `0` (verified). Same for `clang-format-p2996 --dry-run` and
 Expected: `include-what-you-use 0.25` and `clang version 21.0.0git` with the
 p2996 commit. Build: IWYU branch `clang_21`, CMake with
 `-DCMAKE_PREFIX_PATH=$P2996`. If it fails to compile against p2996, pin the
-IWYU commit nearest the date p2996 branched from LLVM main. Today: FAIL (not
-built). IWYU does not model reflection; run it on files without `^^`.
+IWYU commit nearest the date p2996 branched from LLVM main. Today
+(2026-11-15): PASS, `include-what-you-use 0.25 (git:791e69e)` on p2996
+`562409c`, installed by hand into the current p2996 build; the next p2996
+build installs it itself. Pass libc++'s own mapping,
+`-Xiwyu --mapping_file=$P2996/include/c++/v1/libcxx.imp`, or IWYU suggests
+private headers such as `<__vector/vector.h>`. IWYU does not model
+reflection; run it on files without `^^`.
 
 **P9. Coverage tools match the compiler.** Why: a `.gcda` from p2996 must be
 read by p2996's own `llvm-cov`. Probe:
@@ -362,7 +406,12 @@ Expected: `ok`. Today: FAIL, `could not load TAPI file .../libSystem.tbd:
 malformed file ... unknown architecture`. The macOS 27 SDK lists a target
 `arm64e.x1-macos` that LLVM 21's TAPI reader does not know. Use Apple `ld`
 (the default) with p2996; the check passes again when p2996 moves to an LLVM
-base whose `lld` reads that SDK (LLVM 23's does, C8).
+base whose `lld` reads that SDK (LLVM 23's does, C8). **Known upstream:**
+the report prints it as FAIL and lists it under "Known upstream", but it does
+not fail strict mode or V3, because no change on this Mac can fix it. Only
+that exact cause is exempt: lld cannot load `libSystem.tbd` with `unknown
+architecture` at `arm64e.x1-macos`. Any other P10 failure (no p2996, another
+linker or TAPI error) is an ordinary FAIL.
 
 ## D. Debuggers
 
@@ -382,7 +431,8 @@ DB5 blocker (llvm/llvm-project #159849, in LLVM 22 and later), so its lldb
 should load programs on macOS 27. Load probe:
 `"$LLVM23/bin/lldb" -b -o 'target create /bin/ls'; echo $?`. PASS if it
 prints `Current executable set to '/bin/ls'` and exits 0; FAIL on any other
-exit code. Not yet run: the LLVM 23 tarball is not installed on this Mac today.
+exit code. Today (2026-11-15): PASS, `lldb version 23.1.5` and
+`target create` exit 0.
 
 **DB3. lldb-p2996 starts and runs Python.** Probe:
 
@@ -797,8 +847,11 @@ LLVM 23 (Homebrew's `include-what-you-use` is one today).
 **T4. Sanitizers.** C6, G4 and P4. Also present and expected to link:
 `-fsanitize=realtime` (RTSan), `-fsanitize=type` (TySan),
 `-fsanitize=fuzzer` (libFuzzer). Probe:
-`for f in realtime type fuzzer; do "$P2996/bin/clang++-p2996" -std=c++26 -fsanitize=$f p.cpp -o t_$f && echo $f-ok; done`.
-PASS if all three print `-ok` (verified).
+`for f in realtime type; do "$P2996/bin/clang++-p2996" -std=c++26 -fsanitize=$f p.cpp -o t_$f && echo $f-ok; done`,
+then build [the fuzz probe](#appendix-fuzz-probe) with `-fsanitize=fuzzer`
+and run it with `-runs=16`. PASS if both print `-ok` and the fuzzer exits 0
+after `Done 16 runs`. A program with its own `main` and no
+`LLVMFuzzerTestOneInput` is not a fuzz target, so it no longer counts.
 
 **T5. Apple memory tools.** Probe: `for t in leaks heap vmmap malloc_history; do xcrun -f $t; done`.
 PASS if all four resolve (Xcode's copies; macOS also ships them in
@@ -926,10 +979,24 @@ Run: `cmake -S . -B b -G Ninja -DCMAKE_CXX_COMPILER=<compiler> && cmake --build 
 #include <thread>
 int g;
 int main(int argc, char**) {
-  std::thread t([] { g++; }); g++; t.join();
+  // Many racing increments: a single one fired TSan only 19 of 20 runs.
+  std::thread t([] { for (int i = 0; i < 100000; ++i) g++; });
+  for (int i = 0; i < 100000; ++i) g++;
+  t.join();
   int* p = new int[2]; int r = p[argc + 1]; delete[] p;
   int big = INT_MAX; big += argc;
   return r + big;
+}
+```
+
+### Appendix: fuzz probe
+
+```cpp
+// fuzz.cpp: a libFuzzer target; -fsanitize=fuzzer supplies main.
+#include <cstddef>
+#include <cstdint>
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* d, size_t n) {
+  return n > 0 && d[0] == 0xff ? 0 : 0;
 }
 ```
 
