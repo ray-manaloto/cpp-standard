@@ -56,17 +56,15 @@ T5    PASS leaks heap vmmap malloc_history resolve
 T6    N/A  tier-2 tools (D19); installed: none
 T7    N/A  runs, writes no xray-log: the Darwin XRay runtime does not work (llvm/llvm-project#196848)
 R1    PASS all five templates
-R2    PASS CPU Counters trace: 11 counter sample rows
+R2    PASS CPU Counters trace: 12 counter sample rows
 R3    PASS sample exit 0
 R4    PASS Iterations 100 twice
 R5    PASS p.json written
 R6    PASS hyperfine 2.0.0
-V1    FAIL tart not installed (want 2.41.1 or later)
-V2    FAIL not run: Tart not installed (V1)
+V1    PASS tart 2.41.1 from mise (pin in .mise/conf.d/vm.toml)
+V2    PASS pulled by sha256:d7641b1d985fd53fbac071c663bf249007b9b387e16b7d576144588acb1d93f9
 V3    N/A  VM check: run this task inside the guest
-Summary: 53 PASS, 3 FAIL, 8 N/A
+Summary: 55 PASS, 1 FAIL, 8 N/A
 Known upstream (do not fail strict mode): P10
 Missing or wrong:
   P10: known upstream: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK
-  V1: install Tart 2.41.1+ (brew install openai/tools/tart)
-  V2: tart pull the golden-gate-xcode image by its digest
