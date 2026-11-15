@@ -529,11 +529,47 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    `sudo` fails: it empties `$TMPDIR`, so the script tries to write
    `/lldb_codesign.tmpl`. Running it without `sudo` should also work,
    since it calls `sudo` itself for the keychain steps, but that form is
-   untested here. It imports the private key with `-A`,
-   so any app on the Mac can sign with it without a prompt.
+   untested here.
    It creates a self-signed `lldb_codesign` identity in
    `/Library/Keychains/System.keychain` and trusts it for code signing. It
    needs an admin password; in a VM, run it while building the golden image.
+   It imports the private key with `-A`, so the key's sign entry lists no
+   application (`applications: <null>`); its partition list is
+   `apple-tool:`.
+
+   Optional hardening (done on this Mac, 2026-11-14): limit the key to
+   `/usr/bin/codesign`. The p2996 recipe signs in three places. Dotfiles'
+   `build.py` preflight and `install.py` re-sign call `codesign`. lldb's
+   CMake step signs debugserver through `llvm_codesign` in
+   `llvm/cmake/modules/AddLLVM.cmake`, whose `CMAKE_CODESIGN` defaults to
+   `xcrun codesign`. Here both `codesign` and `xcrun -f codesign` resolve
+   to `/usr/bin/codesign`. In Keychain
+   Access (`open "/System/Library/CoreServices/Applications/Keychain Access.app"`):
+   System Keychains, System, My Certificates, expand `lldb_codesign`,
+   double-click "Imported Private Key", Access Control. Choose "Confirm
+   before allowing access" and leave "Ask for Keychain password"
+   unchecked. Under "Always allow access by these applications" click
+   "+", press ⌘⇧G, type `/usr/bin/codesign`, and Add. Save Changes with an
+   admin password. Check (it reads the first "Imported Private Key" in the
+   System keychain; if that keychain holds other imported keys, confirm
+   the entry belongs to `lldb_codesign`):
+
+   ```sh
+   security dump-keychain -a /Library/Keychains/System.keychain 2>/dev/null |
+     awk '/"Imported Private Key"/{f=1} f&&/^access:/{a=1} a{print} a&&/^keychain:/{exit}' |
+     grep -A5 ' sign$'
+   ```
+
+   Expected: one application, `0: /usr/bin/codesign (OK)` with
+   `requirement: identifier "com.apple.security.codesign" and anchor apple`.
+   Then re-run DB5. On 2026-11-14, with the limit in place, the `codesign`
+   commands that `build.py`'s preflight and `install.py`'s re-sign run were
+   run by hand on scratch copies. Both finished with rc 0 and no prompt.
+   A breakpoint session through the re-signed debugserver copy
+   (`LLDB_DEBUGSERVER_PATH`) stopped at the breakpoint. Not yet run with
+   the limit: a full p2996 build and install, including the CMake signing
+   step. Whether other apps are now refused is untested, because that test
+   opens a dialog.
 2. Check it: `security find-certificate -c lldb_codesign /Library/Keychains/System.keychain`
    prints the certificate.
 3. Configure p2996 with `-DLLDB_USE_SYSTEM_DEBUGSERVER=OFF` and
