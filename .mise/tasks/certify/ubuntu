@@ -49,12 +49,24 @@ inst_list() {
   l="$(find "$inst_dir" -mindepth 2 -maxdepth 2)" || return 1
   [[ -z "$l" ]] || LC_ALL=C sort <<<"$l"
 }
-# Names alone miss a reinstall into an existing version folder, so a marker
-# file taken now also flags any file or folder under installs/ modified
-# during the run, at any depth (about 10 s for 1.5 million entries). The
-# cleanup handler set later removes the marker too.
+# Names alone miss a reinstall into an existing version folder, so at any
+# depth under installs/ a marker file taken now flags any file modified
+# during the run, and a walk of every path, taken now and at the end, names
+# any path added or removed (a few seconds per walk for 1.2 million paths).
+# Both skip installs/.mise, mise's own lock files, which every mise call
+# touches, and __pycache__, the compiled bytecode any Python run writes next
+# to its sources, which is not an install. The cleanup handler set later
+# removes the marker and the walks too.
 inst_mark="$(mktemp "${TMPDIR:-/tmp}/certify-mark.XXXXXX")" || exit 2
-trap 'rm -f "$inst_mark"' EXIT
+trap 'rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"' EXIT
+inst_walk() { # inst_walk [FIND-TESTS]: paths under installs/, relative and sorted
+  [[ -e "$inst_dir" ]] || return 0
+  (cd "$inst_dir" && find . -mindepth 1 \( -path ./.mise -o -name __pycache__ \) -prune -o "$@" -print) | LC_ALL=C sort
+}
+inst_walk >"$inst_mark.start" || {
+  echo "certify: cannot walk $inst_dir (rule 4 proof)" >&2
+  exit 2
+}
 inst_before="$(inst_list)" || {
   echo "certify: cannot list $inst_dir (rule 4 proof)" >&2
   exit 2
@@ -89,7 +101,7 @@ p2996_vol="cpp-standard-p2996-${pin:0:12}-$p2996_in"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/certify-ubuntu.XXXXXX")"
 cname="cpp-standard-cert-$$"
 cleanup() {
-  rm -f "$inst_mark"
+  rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"
   if [[ "${usage_keep:-false}" == true ]]; then
     echo "certify: kept container $cname and $scratch" >&2
   else
@@ -113,7 +125,11 @@ mask() { # mask the Mac's home and user, and the ssh destination
   s="$(cat)"
   s="${s//"$HOME"/$tilde}"
   s="${s//"$(id -un)"/<user>}"
-  s="${s//"$dest"/<pc>}"
+  # The destination only as a whole host name: a short alias such as `pc`
+  # must not hit `vpclmulqdq` or `cppcheck`. An alias equal to the machine
+  # label names nothing private, so it stays.
+  [[ "$dest" == "$label" ]] ||
+    s="$(D="$dest" perl -pe 's/(?<![\w.-])\Q$ENV{D}\E(?![\w.-])/<pc>/g' <<<"$s")"
   printf '%s\n' "$s"
 }
 
@@ -176,7 +192,7 @@ docker run -d --name "$cname" --label org.cpp-standard.cert=1 $RUN_FLAGS $p2996_
 tar -C "$scratch" -cf - probes 2>/dev/null | docker exec -i "$cname" tar -C /root -xf - 2>/dev/null
 
 run_inner() { # run_inner ONLY SKIP: one pass of the in-container script
-  docker exec -e usage_only="$1" -e SKIP="$2" -e PROBES=/root/probes -e PIN="$pin" -e EXPECT_DIGEST="$digest" \
+  docker exec -e MISE_AUTO_INSTALL=0 -e usage_only="$1" -e SKIP="$2" -e PROBES=/root/probes -e PIN="$pin" -e EXPECT_DIGEST="$digest" \
     -e IMAGE_BASE="$image_base" -e HOST_BINFMT_X86="$host_binfmt" -e HOST_THREADS="$host_threads" \
     -e BUILD_DIR=/build "$cname" bash /root/probes/ubuntu-probes 2>/dev/null
 }
@@ -265,18 +281,19 @@ if want V6; then
     envs="$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$image" |
       awk -F= 'NF > 1 { k = $1; sub(/^[^=]*=/, ""); printf " --setenv %s %s", k, $0 }')"
     bw="bwrap --unshare-user --uid 0 --gid 0 --bind $ab/rootfs / --proc /proc --dev /dev --tmpfs /tmp --ro-bind /sys /sys \
-      --setenv HOME /root$envs --chdir /ab"
+      --setenv HOME /root$envs --setenv MISE_AUTO_INSTALL 0 --chdir /ab"
     s0="$(others_cpu)"
     : >"$scratch/ab_c" && : >"$scratch/ab_h"
     for _ in 1 2 3; do # alternate the two sides
-      docker exec "$cname" bash -c "$meas" | tr '\n' ' ' >>"$scratch/ab_c" && echo >>"$scratch/ab_c"
+      docker exec -e MISE_AUTO_INSTALL=0 "$cname" bash -c "$meas" | tr '\n' ' ' >>"$scratch/ab_c" && echo >>"$scratch/ab_c"
       hostsh "$bw bash -c '$meas'" | tr '\n' ' ' >>"$scratch/ab_h" && echo >>"$scratch/ab_h"
     done
     s1="$(others_cpu)"
     hostsh "rm -rf $ab; test -e $ab && echo still-there || echo removed" >"$scratch/ab_rm"
     cpu_trust "$s0" "$s1"
     # Best (minimum) wall time per side over 3 rounds; overhead in % of the host's.
-    python3 -I - "$scratch/ab_c" "$scratch/ab_h" "$busy" "$(cat "$scratch/ab_size")" "$free_gb" "$(cat "$scratch/ab_rm")" "$why" \
+    # -B: no .pyc written into the Mac's mise python install (rule 4 proof).
+    python3 -I -B - "$scratch/ab_c" "$scratch/ab_h" "$busy" "$(cat "$scratch/ab_size")" "$free_gb" "$(cat "$scratch/ab_rm")" "$why" \
       >"$scratch/lines3.txt" <<'PY'
 import sys
 def rows(p):
@@ -326,7 +343,7 @@ fix_for() {
   case "$1" in
     A2) echo "rebuild the image from docs/standard/ubuntu-cert.Dockerfile (mise run certify:ubuntu-image)" ;;
     A3) echo "run on the amd64 PC; never under qemu" ;;
-    B2) echo "remove the archive clang (it comes with the archive iwyu; ubuntu-cert.Dockerfile leaves it out)" ;;
+    B2) echo "remove the archive clang (it comes with the archive iwyu; ubuntu-cert.Dockerfile leaves it out); for a stray mise shim, pin the tool in the image's tools layer (docs/standard/ubuntu-cert-tools) or drop it" ;;
     E2) echo "clangd matching clang-23 needs llvmorg-23.1.6 or an apt.llvm.org stonking suite (D25)" ;;
     P8) echo "rebuild p2996 with build-linux.sh (it builds IWYU 0.25 in the tree) into volume $p2996_vol (docs/standard/ubuntu.md, P8)" ;;
     P*) echo "build p2996 for amd64 and mount it as volume $p2996_vol (docs/standard/ubuntu.md, P)" ;;
@@ -360,13 +377,21 @@ if [[ $((npass + nfail + nna)) == 0 ]]; then
   exit 2
 fi
 inst_after="$(inst_list)" || inst_after="<cannot list $inst_dir>"
-if [[ -e "$inst_dir" ]]; then
-  # installs/.mise holds mise's own lock files, which every mise call touches.
-  inst_new="$(find "$inst_dir" -mindepth 1 -path "$inst_dir/.mise" -prune -o -newer "$inst_mark" -print | LC_ALL=C sort)" ||
-    inst_new="$inst_dir/<cannot check modification times>"
-  [[ -z "$inst_new" ]] || inst_after+=$'\n'"${inst_new//$'\n'/ (modified)$'\n'} (modified)"
+inst_diff() { # inst_diff COMM-FLAG FILE1 FILE2 LABEL: comm's lines as installs/ paths, labelled
+  LC_ALL=C comm "$1" "$2" "$3" | sed "s#^\./#$inst_dir/#; s#\$# ($4)#"
+}
+# Added and removed paths, then files modified in place (folders change only
+# by an entry added or removed, which the walks name). Any failed step makes
+# the result unknown, which counts as a change (exit 3), never as unchanged.
+if ! inst_walk >"$inst_mark.end" || ! inst_new="$(
+  inst_diff -13 "$inst_mark.start" "$inst_mark.end" added &&
+    inst_diff -23 "$inst_mark.start" "$inst_mark.end" removed &&
+    inst_walk ! -type d -newer "$inst_mark" | inst_diff -12 "$inst_mark.start" - modified
+)"; then
+  inst_new="$inst_dir/<cannot compare the walks> (unknown)"
 fi
-rm -f "$inst_mark"
+[[ -z "$inst_new" ]] || inst_after+=$'\n'"$inst_new"
+rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"
 if [[ "$inst_after" == "$inst_before" ]]; then
   inst_note="unchanged ($(grep -c . <<<"$inst_after") entries under installs/<tool>/)"
 else

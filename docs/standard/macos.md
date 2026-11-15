@@ -27,9 +27,12 @@ D88 and D136). The design is
    have. The task refuses to start unless `MISE_AUTO_INSTALL=0` is set. It
    cannot undo an install that a run without it made first. It lists
    `$MISE_DATA_DIR/installs` two levels deep when it starts and when it ends,
-   and flags any file or folder under it, at any depth, modified during the
-   run (a reinstall into an existing folder keeps the same names; mise's own
-   lock files in `installs/.mise` are skipped):
+   and names any path under it, at any depth, added, removed or modified
+   during the run, from a walk of every path at start and end and a marker
+   file for files changed in place (a reinstall into an existing folder keeps
+   the same names; mise's own lock files in `installs/.mise` and Python's
+   `__pycache__` folders, which hold compiled bytecode, not installs, are
+   skipped):
    the report's `mise installs:` line says `unchanged`, or names what changed
    and fails the run (exit 3, even with `--allow-fail`). The listing cannot
    tell this run from another process installing at the same time, so rerun

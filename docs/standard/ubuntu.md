@@ -34,16 +34,31 @@ this kernel, not what Ubuntu's own kernel would do.
 2. Run `MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail` from the
    Mac; the task refuses to start without `MISE_AUTO_INSTALL=0`, because a
    plain `mise run` can install a missing tool of this repository's config
-   on the Mac first (rule 4). It also lists the Mac's mise installs at start
-   and end; the report's `mise installs (this Mac):` line says `unchanged`,
+   on the Mac first (rule 4). It also lists the Mac's mise installs two
+   levels deep at start and end, and names any path under them, at any
+   depth, added, removed or modified during the run, from a walk of every
+   path at start and end and a marker file for files changed in place (a
+   reinstall into an existing folder keeps the same names; mise's own lock
+   files in `installs/.mise` and Python's `__pycache__` folders, which hold
+   compiled bytecode, not installs, are skipped). The report's
+   `mise installs (this Mac):` line says `unchanged`,
    or names the change and fails the run (exit 3; another process installing
    at the same time also trips it, so rerun then). Both tasks reach
    the PC's Docker over ssh: set `CERT_UBUNTU_SSH` to the ssh destination of
-   the PC (its tailnet name or an ssh alias for it). The `ubuntu-certify`
+   the PC (its tailnet name or an ssh alias for it). The Docker client they
+   run on the Mac is pinned in this repository (`.mise/conf.d/docker.toml`,
+   `docker-cli`), not taken from a user's global config. `docker build`
+   (`certify:ubuntu-image`) also needs the buildx plugin, which the Docker
+   client finds through the user's `~/.docker/config.json`; no repository
+   pin covers it yet. On the PC, Docker and (for `--ab`) `bwrap` are host
+   packages: reported, never changed (rule 4). The `ubuntu-certify`
    skill explains the report. The first report is
    `reports/ubuntu-pc-2026-11-15.txt`, next to this file.
 3. Write one report line per check: `<id> PASS|FAIL|N/A <one-line evidence>`.
-4. Do not install or change anything while certifying. A FAIL names the fix;
+4. Do not install or change anything while certifying. The image puts
+   mise's shims first on `PATH` and sets `MISE_YES=1`, so the probes run with
+   `MISE_AUTO_INSTALL=0` inside the container too: a shim for a tool the
+   image lacks then fails instead of installing it. A FAIL names the fix;
    the fix is a separate step. Never change the PC host's settings: report
    them (V5) and route any change through cpp-standard-lead to dotfiles-lead.
 5. Timing checks (U3, U4, V4, V6) count only when the PC's other containers
@@ -190,12 +205,16 @@ archive's `clang` package (clang 22). Installing it makes `cc`, `c++` and
 `cc` silently uses clang 22. Probe:
 
 ```sh
-for t in cc c++ gcc g++ clang clang++; do readlink -f "$(command -v $t)"; done
+for t in cc c++ gcc g++ clang clang++ lldb; do readlink -f "$(command -v $t)"; done
 dpkg-query -W 'llvm-[0-9]*' 'clang-[0-9]*' | grep -v -- '-23'
+for s in ~/.local/share/mise/shims/*; do mise which "${s##*/}" >/dev/null || echo "stray ${s##*/}"; done
 ```
 
-PASS if every name is absent or resolves to GCC 16 or LLVM 23, and no other
-LLVM major is installed. Seen while building the image by hand: FAIL
+PASS if every name is absent or resolves to GCC 16 or LLVM 23, no other
+LLVM major is installed, and every mise shim on `PATH` has an active version
+(`mise which <name>` succeeds). A stray shim, one with no active version,
+errors or falls through to another tool of that name; the macOS B2 found
+three on 2026-11-15. Seen while building the image by hand: FAIL
 (`cc -> /usr/lib/llvm-22/bin/clang`, `clang-22 1:22.1.8-1ubuntu1`), from
 `apt-get install iwyu`. The image leaves `iwyu` out.
 
@@ -337,6 +356,22 @@ lives in `$P2996/lib/x86_64-unknown-linux-gnu`; the binary must find it
 without `LD_LIBRARY_PATH`. Probe:
 `"$P2996/bin/clang++" -std=c++26 p.cpp -o p2 && ./p2 && ldd p2 | grep 'libc++'`.
 Expected: `ok` and a `libc++.so.1` under `$P2996`. PASS if both.
+
+Caveat (the Linux side of the macOS GCC and p2996 rpath caveat): the binary's
+`RUNPATH` is `/opt/p2996/bin/../lib/x86_64-unknown-linux-gnu`, the mount
+point, not the volume's name (`readelf -d`, 2026-11-15). So removing an old
+p2996 volume does not break a program built with it, unlike the Mac's hashed
+prefixes. Instead, a program on `/build` loads the libc++ of whichever p2996
+volume is mounted at `/opt/p2996` when it runs, with no check that it is the
+build it was linked against. With none mounted, the loader goes on past the
+`RUNPATH` to the system directories and can load the image's own apt
+`libc++.so.1` (clang 23, a different build), which may fail on a missing
+symbol or behave differently. Run
+it with the volume it was built with, or link the static archives
+(`-nostdlib++` with `$P2996/lib/x86_64-unknown-linux-gnu/libc++.a`,
+`libc++abi.a` and `libunwind.a`). GCC's `libstdc++` comes from the 26.10
+archive in `/usr/lib/x86_64-linux-gnu`, and GCC programs record no `RUNPATH`,
+so the macOS GCC caveat does not apply here.
 
 **P3. Hardening default.** Probe:
 `grep -rh _LIBCPP_HARDENING_MODE_DEFAULT "$P2996"/include/*/c++/v1/__config_site`.

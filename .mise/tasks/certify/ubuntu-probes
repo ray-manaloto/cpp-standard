@@ -17,6 +17,11 @@
 # `cond && res PASS ... || res FAIL ...` is safe here: res always returns 0.
 # shellcheck disable=SC2015
 set -uo pipefail
+# Rule 4 inside the container: the image puts mise's shims first on PATH and
+# sets MISE_YES=1, so a shim for a tool the image lacks could install it and
+# a check would PASS on a tool the image did not have. With auto-install off,
+# that shim fails instead. The launcher passes it too.
+export MISE_AUTO_INSTALL=0
 
 probes="${usage_probes:-${PROBES:-}}"
 [[ -d "$probes" ]] || {
@@ -172,15 +177,28 @@ if want B1; then
 fi
 if want B2; then
   bad=""
-  for t in cc c++ gcc g++ clang clang++; do
+  for t in cc c++ gcc g++ clang clang++ lldb; do
     c="$(command -v "$t")" p=""
     [[ -n "$c" ]] && p="$(readlink -f "$c")"
     [[ -z "$p" || "$p" == */gcc-16 || "$p" == */g++-16 || "$p" == */x86_64-linux-gnu-g*-16 || "$p" == /usr/lib/llvm-23/* ]] ||
       bad="$bad $t->$p"
   done
   others="$(dpkg-query -W -f '${Package}\n' 'llvm-[0-9]*' 'clang-[0-9]*' 2>/dev/null | grep -vE -- '-23(-|$)' | tr '\n' ' ')"
-  [[ -z "$bad" && -z "$others" ]] && res B2 PASS "no cc/c++/clang link to another compiler; no second LLVM major" ||
-    res B2 FAIL "links:${bad:- ok}; other LLVM packages: ${others:-none}"
+  # A stray shim is a mise shim on PATH with no active version: it errors, or
+  # falls through to another tool of that name (macOS B2, 2026-11-15).
+  stray="" nshim=0
+  IFS=: read -r -a pdirs <<<"$PATH"
+  for d in "${pdirs[@]}"; do
+    [[ "$d" == */mise/shims && -d "$d" ]] || continue
+    for s in "$d"/*; do
+      [[ -e "$s" ]] || continue
+      nshim=$((nshim + 1))
+      mise which "${s##*/}" >/dev/null 2>&1 || stray="$stray ${s##*/}"
+    done
+  done
+  [[ -z "$bad" && -z "$others" && -z "$stray" ]] &&
+    res B2 PASS "no cc/c++/clang/lldb link to another compiler; no second LLVM major; all $nshim mise shims have an active version" ||
+    res B2 FAIL "links:${bad:- ok}; other LLVM packages: ${others:-none}; stray mise shims:${stray:- none}"
 fi
 if want B3; then
   sccache --show-stats >/dev/null 2>&1 && res B3 PASS "sccache --show-stats prints statistics" || res B3 FAIL "sccache --show-stats failed"

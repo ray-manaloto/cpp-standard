@@ -53,7 +53,9 @@ ids or prefixes (`DB` is DB1 to DB5). A full run with `--ab` takes about 15
 minutes; most of it is the timing checks. Other exit codes: 2 for a run
 without `MISE_AUTO_INSTALL=0` (a plain `mise run` can install a missing tool
 on the Mac before the task starts), an unset `CERT_UBUNTU_SSH`, an image that is not on the PC (`--image`), or an `--only`
-that matches no check.
+that matches no check; 3 when the Mac's mise installs changed during the run
+(the report's `mise installs (this Mac):` line names the change), even with
+`--allow-fail`.
 
 ## Refresh the baseline
 

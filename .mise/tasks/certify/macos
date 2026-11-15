@@ -48,12 +48,24 @@ inst_list() {
   l="$(find "$inst_dir" -mindepth 2 -maxdepth 2)" || return 1
   [[ -z "$l" ]] || LC_ALL=C sort <<<"$l"
 }
-# Names alone miss a reinstall into an existing version folder, so a marker
-# file taken now also flags any file or folder under installs/ modified
-# during the run, at any depth (about 10 s for 1.5 million entries). The
-# cleanup handler set later removes the marker too.
+# Names alone miss a reinstall into an existing version folder, so at any
+# depth under installs/ a marker file taken now flags any file modified
+# during the run, and a walk of every path, taken now and at the end, names
+# any path added or removed (a few seconds per walk for 1.2 million paths).
+# Both skip installs/.mise, mise's own lock files, which every mise call
+# touches, and __pycache__, the compiled bytecode any Python run writes next
+# to its sources, which is not an install. The cleanup handler set later
+# removes the marker and the walks too.
 inst_mark="$(mktemp "${TMPDIR:-/tmp}/certify-mark.XXXXXX")" || exit 2
-trap 'rm -f "$inst_mark"' EXIT
+trap 'rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"' EXIT
+inst_walk() { # inst_walk [FIND-TESTS]: paths under installs/, relative and sorted
+  [[ -e "$inst_dir" ]] || return 0
+  (cd "$inst_dir" && find . -mindepth 1 \( -path ./.mise -o -name __pycache__ \) -prune -o "$@" -print) | LC_ALL=C sort
+}
+inst_walk >"$inst_mark.start" || {
+  echo "certify: cannot walk $inst_dir (rule 4 proof)" >&2
+  exit 2
+}
 inst_before="$(inst_list)" || {
   echo "certify: cannot list $inst_dir (rule 4 proof)" >&2
   exit 2
@@ -92,7 +104,7 @@ db5_stop=unrun p8_ok=no p8_msg=unset # results later checks reuse (A6, T3)
 user_name="$(id -un)"
 
 cleanup() {
-  rm -f "$inst_mark"
+  rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"
   [[ "${usage_keep:-false}" == true ]] || rm -rf "$PROBE"
 }
 trap cleanup EXIT
@@ -854,13 +866,21 @@ fix_for() {
 }
 
 inst_after="$(inst_list)" || inst_after="<cannot list $inst_dir>"
-if [[ -e "$inst_dir" ]]; then
-  # installs/.mise holds mise's own lock files, which every mise call touches.
-  inst_new="$(find "$inst_dir" -mindepth 1 -path "$inst_dir/.mise" -prune -o -newer "$inst_mark" -print | LC_ALL=C sort)" ||
-    inst_new="$inst_dir/<cannot check modification times>"
-  [[ -z "$inst_new" ]] || inst_after+=$'\n'"${inst_new//$'\n'/ (modified)$'\n'} (modified)"
+inst_diff() { # inst_diff COMM-FLAG FILE1 FILE2 LABEL: comm's lines as installs/ paths, labelled
+  LC_ALL=C comm "$1" "$2" "$3" | sed "s#^\./#$inst_dir/#; s#\$# ($4)#"
+}
+# Added and removed paths, then files modified in place (folders change only
+# by an entry added or removed, which the walks name). Any failed step makes
+# the result unknown, which counts as a change (exit 3), never as unchanged.
+if ! inst_walk >"$inst_mark.end" || ! inst_new="$(
+  inst_diff -13 "$inst_mark.start" "$inst_mark.end" added &&
+    inst_diff -23 "$inst_mark.start" "$inst_mark.end" removed &&
+    inst_walk ! -type d -newer "$inst_mark" | inst_diff -12 "$inst_mark.start" - modified
+)"; then
+  inst_new="$inst_dir/<cannot compare the walks> (unknown)"
 fi
-rm -f "$inst_mark"
+[[ -z "$inst_new" ]] || inst_after+=$'\n'"$inst_new"
+rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"
 if [[ "$inst_after" == "$inst_before" ]]; then
   inst_note="unchanged ($(grep -c . <<<"$inst_after") entries under installs/<tool>/)"
 else
