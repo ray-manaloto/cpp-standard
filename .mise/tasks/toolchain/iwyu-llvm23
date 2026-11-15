@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#MISE description="Build include-what-you-use 0.27 against this repository's LLVM 23 tarball (macOS, playbook T3)"
+#USAGE flag "--root <dir>" help="Install root (default: ~/.local/share/iwyu-llvm23)"
+#
+# IWYU for clang 23 projects on macOS, built from source against the LLVM
+# release tarball that mise installs (.mise/conf.d/llvm.toml, D38), at the same
+# IWYU commit the Ubuntu image uses (ubuntu-cert.Dockerfile, stage iwyu).
+# Homebrew's include-what-you-use is built against Homebrew's LLVM, not this
+# one. This is a setup step: certify:macos (T3) only uses the result.
+#
+# The install folder is named after a hash of every build input (the IWYU
+# commit, the tarball's clang version and folder, the SDK version and path,
+# and this script), so a new input never overwrites an old build. <root>/current links
+# to the newest build. The binary loads libc++ from the tarball's folder
+# (the tarball's clang config adds that rpath), so a reinstall of the tarball
+# into a new folder needs a rebuild; the folder is one of the hash inputs.
+set -euo pipefail
+
+IWYU_COMMIT=c9cbc836a1af631610266c53cf1671b1671a0fdc # tag 0.27, head of clang_23
+IWYU_URL=https://github.com/include-what-you-use/include-what-you-use
+
+[[ "$(uname -s)" == Darwin ]] || {
+  echo "toolchain:iwyu-llvm23: macOS only; the Ubuntu image builds its own (ubuntu-cert.Dockerfile)" >&2
+  exit 2
+}
+root_dir="${usage_root:-${XDG_DATA_HOME:-$HOME/.local/share}/iwyu-llvm23}"
+llvm="$(mise where github:llvm/llvm-project)"
+[[ -x "$llvm/bin/clang++" && -d "$llvm/lib/cmake/clang" ]] || {
+  echo "toolchain:iwyu-llvm23: the LLVM 23 tarball is not installed (mise install --locked)" >&2
+  exit 2
+}
+clang_ver="$("$llvm/bin/clang" --version | head -1)"
+[[ "$clang_ver" == *"clang version 23."* ]] || {
+  echo "toolchain:iwyu-llvm23: want clang 23 in $llvm, got: $clang_ver" >&2
+  exit 2
+}
+sdk_ver="$(xcrun --show-sdk-version)"
+sdk_path="$(xcrun --show-sdk-path)"
+id="$(printf '%s\n' "$IWYU_COMMIT" "$clang_ver" "$llvm" "$sdk_ver" "$sdk_path" | cat - "$0" | shasum -a 256 | cut -c1-12)"
+prefix="$root_dir/${IWYU_COMMIT:0:12}-$id"
+if [[ -x "$prefix/bin/include-what-you-use" ]]; then
+  echo "toolchain:iwyu-llvm23: already built: $prefix"
+else
+  work="$(mktemp -d "${TMPDIR:-/tmp}/iwyu-llvm23.XXXXXX")"
+  trap 'rm -rf "$work"' EXIT
+  git init -q "$work/src"
+  git -C "$work/src" fetch -q --depth 1 "$IWYU_URL" "$IWYU_COMMIT"
+  git -C "$work/src" checkout -q FETCH_HEAD
+  [[ "$(git -C "$work/src" rev-parse HEAD)" == "$IWYU_COMMIT" ]]
+  cmake -G Ninja -S "$work/src" -B "$work/build" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH="$llvm" \
+    -DCMAKE_C_COMPILER="$llvm/bin/clang" -DCMAKE_CXX_COMPILER="$llvm/bin/clang++" \
+    -DCMAKE_INSTALL_PREFIX="$work/stage"
+  ninja -C "$work/build" install
+  # IWYU runs clang's driver from its own folder, so it looks where clang
+  # would. Its resource dir (builtin headers) is the tarball's, set at build
+  # time. libc++'s headers: <bin>/../include/c++/v1, linked to the
+  # tarball's. The SDK: a config file next to the binary, as the tarball's
+  # clang has (playbook C2); without it IWYU finds neither <vector> nor the
+  # C headers.
+  mkdir -p "$work/stage/include"
+  ln -s "$llvm/include/c++" "$work/stage/include/c++"
+  sdk="$sdk_path"
+  [[ -d "$sdk" && "$sdk" != *[\"\\]* ]] || {
+    echo "toolchain:iwyu-llvm23: unusable SDK path: $sdk" >&2
+    exit 2
+  }
+  printf -- '-isysroot "%s"\n' "$sdk" >"$work/stage/bin/arm64-apple-darwin.cfg"
+  mkdir -p "$root_dir"
+  mv "$work/stage" "$prefix"
+  echo "toolchain:iwyu-llvm23: built $prefix"
+fi
+ln -sfn "$(basename "$prefix")" "$root_dir/current"
+"$root_dir/current/bin/include-what-you-use" --version
