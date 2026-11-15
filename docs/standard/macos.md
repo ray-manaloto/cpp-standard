@@ -796,7 +796,7 @@ host (macOS 27.2 with Xcode). It replaces D24's `-vanilla` image (D136).
 Digest on 2026-11-14:
 `sha256:d7641b1d985fd53fbac071c663bf249007b9b387e16b7d576144588acb1d93f9`.
 Probe: `tart list | grep golden-gate-xcode`. PASS if the local image was
-pulled by that digest.
+pulled by that digest. Today: not run; Tart is not installed (V1).
 
 **V3. Inside the guest (VM).** Run every section above inside the guest.
 Expected differences: R2 N/A; DB5 needs the certificate (step 1) and
