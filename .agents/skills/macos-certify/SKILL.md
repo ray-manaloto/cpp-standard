@@ -62,8 +62,9 @@ machine `host` (or `vm`), so it can be committed to this public repository.
 The task reads `kern.hv_vmm_present`. In a guest it reports R2, V1 and V2 as
 N/A. V3 is PASS only on a full run (no `--only`) with no FAIL above it other
 than a known-upstream one, FAIL
-otherwise, and N/A under `--only`. V1 and V2 pass on the host (2026-11-15);
-the guest path has not run yet.
+otherwise, and N/A under `--only`. V1 and V2 pass on the host (2026-11-15).
+The first guest run (2026-11-15) failed V3; macos.md V3 lists the guest
+setup and what is still missing.
 
 ## Reading the report
 

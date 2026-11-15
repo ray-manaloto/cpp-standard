@@ -78,7 +78,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | GCC 16.2.0 + libstdc++ | `gcc-16.2.0.tar.xz` + Iain Sandoe's Darwin patch, with Homebrew's `gcc.rb` as the template | **yes** | No package gives an exact, checksummed GCC for macOS 27 (D33). The build sets the sysroot to the current SDK. |
 | clang-p2996 + libc++ | `bloomberg/clang-p2996` at a pinned commit | **yes** | No prebuilt binary exists. It is the reflection reference compiler (D30). |
 | include-what-you-use for p2996 | IWYU `clang_21` branch, built out of tree against p2996 | **yes** | p2996 is based on LLVM 21. Homebrew's IWYU uses clang 23 and cannot parse `^^` (D136). |
-| CMake 4.5, Ninja, sccache, vcpkg, gcovr, Doxygen, hyperfine | mise | no | Build, cache, dependencies, coverage report, docs, timing. |
+| CMake 4.5, Ninja, sccache, vcpkg, gcovr, Doxygen, hyperfine | mise (`.mise/conf.d/build.toml`) | no | Build, cache, dependencies, coverage report, docs, timing. |
 | Tart | mise, `aqua:openai/tart` (pinned in `.mise/conf.d/vm.toml` and in the dotfiles global config) | no | VM host (host only). Never from Homebrew: every tool is mise-managed. |
 
 ### The p2996 build configuration
@@ -173,6 +173,11 @@ Expected: CMake `4.5.x`; every other tool prints a version. PASS if all
 eight print a version and CMake is 4.5 or later. Why CMake 4.5: it removed
 `CMAKE_CXX_MODULE_STD`; `import std` is used whenever module scanning is on,
 and `CMAKE_CXX_STDLIB_MODULES_JSON` overrides where it looks.
+Source: `.mise/conf.d/build.toml` pins all of them except mise (macOS only;
+gcovr also needs the Python and uv pinned there), so a guest or a fresh Mac
+gets them from this repository, not from a user's global config. The first
+guest run (2026-11-15) failed B1 because these came only from the host's
+global config.
 
 **B2. No stray shims.** Why: a `g++` that is really Apple clang, or a broken
 `ccache`, silently changes the build. Probe:
@@ -988,12 +993,25 @@ pulled by that digest. Today: PASS. `tart pull` by the digest above wrote a
 **V3. Inside the guest (VM).** Run every section above inside the guest.
 Expected differences: R2 N/A; DB5 needs the certificate (step 1) and
 Developer mode (step 5, also A6) set up while the golden image was built,
-and A3 needs `sudo xcodebuild -runFirstLaunch` there too, unless the base
-image already ran it (untested). These are one-time settings per Mac or
-VM: the host's A3 and A6 PASS says nothing about a guest.
-Today: not run. The pulled image has Xcode and none of this standard's
-other tools, so the guest is set up first; the certify run itself installs
-nothing (rule 4).
+and A3 needs `sudo xcodebuild -runFirstLaunch` there too. These are
+one-time settings per Mac or VM: the host's A3 and A6 PASS says nothing
+about a guest. The Cirrus `-xcode` image already has both (its build runs
+`xcodebuild -runFirstLaunch`; Developer mode is on), plus Homebrew (with
+mise, cmake and GCC 16.2.0) and passwordless sudo. So a V3 PASS proves the
+standard on that image, not on a fresh Mac; the fresh-Mac check starts
+from the `-vanilla` image (D46).
+Setup: `tart clone` the image by digest, `tart run --no-graphics`, and run
+every command with `tart exec` (the image has the Tart guest agent). Put
+mise first on PATH from its release tarball, checked against the release's
+`SHASUMS256.txt`, clone this repository, run `mise install --locked`, and
+build GCC (D33) and p2996 (D30) in the guest.
+Today: FAIL. First full guest run (2026-11-15, macOS 27.2 26B123,
+Xcode 27.2), with no source builds yet: 31 FAIL. A3 and A6 pass. B1, B3, C4,
+K2 and R6 failed because the build tools came only from the host's global
+config; they pass since `.mise/conf.d/build.toml`. G1 rejects the image's
+Homebrew GCC. P1-P10, L1-L3, E2, T2, H2, T4, R3-R5 wait for the p2996
+build, and T3 for an IWYU built against LLVM 23 (on the host it is
+Homebrew's, which no pin covers yet). The run installed nothing.
 
 ## Report
 
