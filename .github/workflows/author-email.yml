@@ -1,0 +1,55 @@
+# Every commit that lands on main must carry a GitHub noreply address as both
+# author and committer, never a personal email (owner ruling, 2026-11-15).
+# This automates the check that used to be done by hand after each merge.
+# It reads only the push event payload: no checkout, no actions, no token.
+# Advisory: it is not a required check, because merges reach main through
+# the merge queue and a push check can only report after the fact.
+name: author-email
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# One run per push; never cancel, so every push to main is checked.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  noreply:
+    name: noreply
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Check author and committer emails
+        run: |
+          # GitHub lists at most 2,048 commits in a push payload; a push that big
+          # cannot be checked from the payload, so it fails instead of passing.
+          n="$(jq '.commits | length' "$GITHUB_EVENT_PATH")"
+          if (( n >= 2048 )); then
+            echo "::error::push lists $n commits, the payload limit; check the range by hand"
+            exit 1
+          fi
+          # Allowed, as the whole string: <id>+<login>@users.noreply.github.com,
+          # <login>@users.noreply.github.com (login: letters, digits, hyphens;
+          # bots end in [bot]) and noreply@github.com (GitHub's own committer
+          # for web and merge-queue merges).
+          bad="$(jq -r '
+            .commits[]
+            | [.id[0:12], .author.email, .committer.email] as [$id, $a, $c]
+            | [$a, $c][]
+            | select(test("\\A(?:(?:[0-9]+\\+)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\[bot\\])?@users\\.noreply\\.github\\.com|noreply@github\\.com)\\z") | not)
+            | "\($id)"
+          ' "$GITHUB_EVENT_PATH" | sort -u)"
+          if [[ -n "$bad" ]]; then
+            echo "::error::commits with a non-noreply author or committer email (emails not printed): $(tr '\n' ' ' <<<"$bad")"
+            exit 1
+          fi
+          echo "all $n pushed commits use noreply author and committer emails"
