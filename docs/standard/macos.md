@@ -84,6 +84,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | GCC 16.2.0 + libstdc++ | `gcc-16.2.0.tar.xz` + Iain Sandoe's Darwin patch, with Homebrew's `gcc.rb` as the template | **yes** | No package gives an exact, checksummed GCC for macOS 27 (D33). The build sets the sysroot to the current SDK. |
 | clang-p2996 + libc++ | `bloomberg/clang-p2996` at a pinned commit | **yes** | No prebuilt binary exists. It is the reflection reference compiler (D30). |
 | include-what-you-use for p2996 | IWYU `clang_21` branch, built out of tree against p2996 | **yes** | p2996 is based on LLVM 21. Homebrew's IWYU uses clang 23 and cannot parse `^^` (D136). |
+| include-what-you-use for clang 23 | IWYU 0.27 (`c9cbc836a1af`), built out of tree against the LLVM 23 tarball by `mise run toolchain:iwyu-llvm23` | **yes** | Homebrew's IWYU is built against Homebrew's LLVM, not the tarball (T3). |
 | CMake 4.5, Ninja, sccache, vcpkg, gcovr, Doxygen, hyperfine | mise (`.mise/conf.d/build.toml`) | no | Build, cache, dependencies, coverage report, docs, timing. |
 | Tart | mise, `aqua:openai/tart` (pinned in `.mise/conf.d/vm.toml` and in the dotfiles global config) | no | VM host (host only). Never from Homebrew: every tool is mise-managed. |
 
@@ -895,8 +896,26 @@ plain-clang targets only (D19).
 **T2. Clang Static Analyzer.** Probe: `"$P2996/bin/scan-build-p2996" --help | head -1`.
 PASS if it prints usage.
 
-**T3. IWYU.** P8 for p2996; for clang 23 projects, an IWYU built against
-LLVM 23 (Homebrew's `include-what-you-use` is one today).
+**T3. IWYU.** P8 for p2996; for clang 23 projects, IWYU 0.27 built against
+the LLVM 23 tarball by `mise run toolchain:iwyu-llvm23`. It is the commit the
+Ubuntu image builds (`c9cbc836a1af`, tag 0.27, head of `clang_23`), compiled
+with the tarball's clang against its CMake packages, and installed in
+`~/.local/share/iwyu-llvm23/<inputs hash>` with a `current` link (`IWYU23`
+overrides the path). Like the tarball's clang (C2) it needs a config file
+next to the binary that sets the SDK, and the tarball's libc++ headers at
+`<bin>/../include/c++/v1`; the build writes both. Without them IWYU stops at
+`'vector' file not found`. Homebrew's `include-what-you-use` is built
+against Homebrew's LLVM, so it does not count. Probe:
+`$IWYU23 --version`, then
+`$IWYU23 -std=c++26 -Xiwyu --mapping_file=$LLVM23/include/c++/v1/libcxx.imp t3.cpp`
+on a file with an unused `<vector>`. Expected: `include-what-you-use 0.27`
+on the same `clang version` the tarball's `clang --version` prints, and the
+unused `<vector>` flagged with no `error:`. PASS if both, and P8 passes.
+On macOS IWYU names Apple's private `<_stdio.h>` for `puts`, where
+`<cstdio>` is meant; libc++'s mapping file does not cover the SDK's C
+headers. The report gives the p2996 half first, then the clang 23 half.
+Today (2026-11-15): PASS on the host; in the Tart guest the clang 23 half
+passes and the p2996 half waits for P8 (V3).
 
 **T4. Sanitizers.** C6, G4 and P4. Also present and expected to link:
 `-fsanitize=realtime` (RTSan), `-fsanitize=type` (TySan),
@@ -1016,8 +1035,9 @@ Xcode 27.2), with no source builds yet: 31 FAIL. A3 and A6 pass. B1, B3, C4,
 K2 and R6 failed because the build tools came only from the host's global
 config; they pass since `.mise/conf.d/build.toml`. G1 rejects the image's
 Homebrew GCC. P1-P10, L1-L3, E2, T2, H2, T4, R3-R5 wait for the p2996
-build, and T3 for an IWYU built against LLVM 23 (on the host it is
-Homebrew's, which no pin covers yet). The run installed nothing.
+build. The run installed nothing. T3's clang 23 half passes in the guest
+since `toolchain:iwyu-llvm23` (built there against the guest's tarball); its
+p2996 half waits for P8.
 
 ## Report
 

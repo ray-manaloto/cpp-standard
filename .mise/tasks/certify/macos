@@ -72,6 +72,8 @@ LLVM23="${LLVM23-$(mise where github:llvm/llvm-project 2>/dev/null || true)}"
 gcc_d33="$HOME/.local/share/gcc-d33/current/bin/g++-16"
 [[ -x "$gcc_d33" ]] || gcc_d33="g++-16"
 GXX="${GXX:-$gcc_d33}"
+# IWYU for clang 23 projects: the toolchain:iwyu-llvm23 output, through its stable link.
+IWYU23="${IWYU23:-${XDG_DATA_HOME:-$HOME/.local/share}/iwyu-llvm23/current/bin/include-what-you-use}"
 PROBE="$(mktemp -d "${TMPDIR:-/tmp}/certify-macos.XXXXXX")"
 if [[ -z "$PROBE" || ! -d "$PROBE" ]]; then
   echo "certify: cannot create a scratch directory under ${TMPDIR:-/tmp}" >&2
@@ -665,15 +667,31 @@ if want T2; then
   [[ $rc == 0 && "$o1" == "USAGE: scan-build"* ]] && res T2 PASS "$o1" || res T2 FAIL "exit $rc: $o1"
 fi
 if want T3; then
-  # clang 23 projects: an IWYU built against LLVM 23; reflection projects: P8's.
-  hv="$(tmo 30 include-what-you-use --version 2>&1)"
+  # clang 23 projects: IWYU 0.27 built against the LLVM 23 tarball
+  # (toolchain:iwyu-llvm23), on the tarball's exact clang version; it must flag
+  # an unused <vector> with no error. Reflection projects: P8's.
+  hv="$(tmo 30 "$IWYU23" --version 2>&1)"
   hrc=$?
   hv1="$(printf '%s\n' "$hv" | head -1)"
+  cv="$("$LLVM23/bin/clang" --version 2>/dev/null | head -1 | sed -E 's/^.*(clang version [^ ]+).*$/\1/')"
+  printf '#include <vector>\n#include <cstdio>\nint main(){std::puts("x");}\n' >t3.cpp
+  io="$(tmo 60 "$IWYU23" -std=c++26 -Xiwyu --mapping_file="$LLVM23/include/c++/v1/libcxx.imp" t3.cpp 2>&1)"
+  irc=$? # IWYU 0.27 exits 0 after printing its suggestions
   [[ "$p8_msg" == unset ]] && p8_eval
-  if [[ $hrc == 0 && "$hv" == *"clang version 23"* && $p8_ok == yes ]]; then
-    res T3 PASS "clang 23: $hv1; p2996: P8 PASS"
+  if [[ $hrc == 0 && "$hv" == *"include-what-you-use 0.27"* && -n "$cv" && "$hv" == *"$cv "* &&
+    $irc == 0 && "$io" == *"should remove these lines"*"#include <vector>"* && "$io" != *"error:"* ]]; then
+    t3_23="PASS (${hv1%% (http*}; unused <vector> flagged)"
+  elif [[ $hrc != 0 || "$hv" != *"include-what-you-use 0.27"* || -z "$cv" || "$hv" != *"$cv "* ]]; then
+    t3_23="FAIL: exit $hrc: ${hv1%% (http*} (want 0.27 on ${cv:-the tarball clang})"
   else
-    res T3 FAIL "clang 23 IWYU (exit $hrc): ${hv1:-none}; p2996 IWYU: P8 $([[ $p8_ok == yes ]] && echo PASS || echo 'not PASS')"
+    t3_23="FAIL: sample exit $irc: $(grep -m1 -E 'error:|should remove' <<<"$io" || echo no verdict)"
+  fi
+  # The p2996 half first: res cuts the evidence at 240 characters.
+  t3_p="p2996: P8 $([[ $p8_ok == yes ]] && echo PASS || echo 'not PASS')"
+  if [[ "$t3_23" == PASS* && $p8_ok == yes ]]; then
+    res T3 PASS "$t3_p; clang 23: $t3_23"
+  else
+    res T3 FAIL "$t3_p; clang 23: $t3_23"
   fi
 fi
 if want T4; then
@@ -825,7 +843,8 @@ fix_for() {
     G1 | G3) echo "the GCC 16.2 source build (D33)" ;;
     G4 | G6) echo "put /usr/bin before Homebrew LLVM on PATH for GCC builds (G6)" ;;
     P6) echo "rebuild p2996 with LLVM_INSTALL_UTILS=ON" ;;
-    P8 | T3) echo "build IWYU (branch clang_21) against p2996" ;;
+    P8) echo "build IWYU (branch clang_21) against p2996" ;;
+    T3) echo "mise run toolchain:iwyu-llvm23 (IWYU 0.27 against the LLVM 23 tarball); for the p2996 half, P8" ;;
     P10) echo "known upstream: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK" ;;
     L1 | L2 | R4) echo "see the check; clang 23 parts need the LLVM 23 tarball" ;;
     V1) echo "install Tart with mise (mise install tart; pinned in .mise/conf.d/vm.toml and in the dotfiles global config); remove any Homebrew tart" ;;
