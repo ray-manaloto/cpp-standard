@@ -34,13 +34,15 @@ this kernel, not what Ubuntu's own kernel would do.
 2. Run `MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail` from the
    Mac; the task refuses to start without `MISE_AUTO_INSTALL=0`, because a
    plain `mise run` can install a missing tool of this repository's config
-   on the Mac first (rule 4). It also lists the Mac's mise installs two
-   levels deep at start and end, and names any path under them, at any
-   depth, added, removed or modified during the run, from a walk of every
-   path at start and end and a marker file for files changed in place (a
-   reinstall into an existing folder keeps the same names; mise's own lock
-   files in `installs/.mise` and Python's `__pycache__` folders, which hold
-   compiled bytecode, not installs, are skipped). The report's
+   on the Mac first (rule 4). It also watches, on the Mac, the install
+   folders of the tools this repository pins (`mise ls --current` entries
+   whose config file is in this repository), not all of mise's installs,
+   because other sessions on a shared Mac install unrelated tools. It names
+   any path inside them, at any depth, added, removed or modified during the
+   run, from a walk of every path at start and end and a marker file for
+   files changed in place; a pinned tool's folder that appears during the
+   run counts as added. Python's `__pycache__` folders, which hold compiled
+   bytecode, not installs, are skipped. The report's
    `mise installs (this Mac):` line says `unchanged`,
    or names the change and fails the run (exit 3; another process installing
    at the same time also trips it, so rerun then). Both tasks reach

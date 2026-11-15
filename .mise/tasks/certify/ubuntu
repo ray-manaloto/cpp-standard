@@ -38,39 +38,48 @@ if [[ "${MISE_AUTO_INSTALL:-}" != 0 ]]; then
   echo "certify: run it as MISE_AUTO_INSTALL=0 mise run certify:ubuntu ...; with auto-install on, mise can install a missing tool before or during the run (playbook rule 4)" >&2
   exit 2
 fi
-# Rule 4 proof for this Mac-side launcher: list mise's installs (every tool
-# folder and version) now and after the run. The report gives the result, and
-# any change fails the run, --allow-fail or not.
+# Rule 4 proof for this Mac-side launcher: watch the install folders of the
+# tools this repository pins, now and after the run. The report gives the
+# result, and any change fails the run, --allow-fail or not.
 inst_dir="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs"
-# No installs folder yet lists as empty; a folder that cannot be read fails.
-inst_list() {
-  [[ -e "$inst_dir" ]] || return 0
-  local l
-  l="$(find "$inst_dir" -mindepth 2 -maxdepth 2)" || return 1
-  [[ -z "$l" ]] || LC_ALL=C sort <<<"$l"
+# Only the tools this repository pins are watched: mise's current tools whose
+# config file is in this repository, by their install folders. Other sessions
+# on a shared Mac install unrelated tools (a Claude Code update into mise's
+# node, another project's linters), and rule 4 is that no check passes on a
+# tool the run installed. installs/.mise, mise's own lock files, is outside
+# every watched folder.
+inst_watch="$(mise -C "$root" ls --current --json |
+  jq -r --arg r "$root/" '[.[][] | select((.source.path // "") | startswith($r)) | .install_path] | unique[]')" &&
+  [[ -n "$inst_watch" ]] || {
+  echo "certify: cannot list this repository's pinned tools (rule 4 proof)" >&2
+  exit 2
 }
-# Names alone miss a reinstall into an existing version folder, so at any
-# depth under installs/ a marker file taken now flags any file modified
+inst_list() { # the watched folders that exist now
+  local d
+  while IFS= read -r d; do [[ ! -e "$d" ]] || printf '%s\n' "$d"; done <<<"$inst_watch"
+}
+# Names alone miss a reinstall into an existing folder, so inside the watched
+# folders, at any depth, a marker file taken now flags any file modified
 # during the run, and a walk of every path, taken now and at the end, names
-# any path added or removed (a few seconds per walk for 1.2 million paths).
-# Both skip installs/.mise, mise's own lock files, which every mise call
-# touches, and __pycache__, the compiled bytecode any Python run writes next
-# to its sources, which is not an install. The cleanup handler set later
-# removes the marker and the walks too.
+# any path added or removed (a folder missing at the start and present at
+# the end shows as added). Both skip __pycache__, the compiled bytecode any
+# Python run writes next to its sources, which is not an install. The
+# cleanup handler set later removes the marker and the walks too.
 inst_mark="$(mktemp "${TMPDIR:-/tmp}/certify-mark.XXXXXX")" || exit 2
 trap 'rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"' EXIT
-inst_walk() { # inst_walk [FIND-TESTS]: paths under installs/, relative and sorted
-  [[ -e "$inst_dir" ]] || return 0
-  (cd "$inst_dir" && find . -mindepth 1 \( -path ./.mise -o -name __pycache__ \) -prune -o "$@" -print) | LC_ALL=C sort
+inst_walk() { # inst_walk [FIND-TESTS]: every path in the watched folders, sorted
+  (
+    while IFS= read -r d; do
+      [[ -e "$d" ]] || continue
+      find -H "$d" -name __pycache__ -prune -o "$@" -print || exit 1
+    done <<<"$inst_watch"
+  ) | LC_ALL=C sort
 }
 inst_walk >"$inst_mark.start" || {
-  echo "certify: cannot walk $inst_dir (rule 4 proof)" >&2
+  echo "certify: cannot walk the pinned tools' install folders (rule 4 proof)" >&2
   exit 2
 }
-inst_before="$(inst_list)" || {
-  echo "certify: cannot list $inst_dir (rule 4 proof)" >&2
-  exit 2
-}
+inst_before="$(inst_list)"
 dest="${CERT_UBUNTU_SSH:-}"
 [[ -n "$dest" ]] || {
   echo "certify: set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC)" >&2
@@ -376,9 +385,9 @@ if [[ $((npass + nfail + nna)) == 0 ]]; then
   echo "certify: --only '$only' matched no check" >&2
   exit 2
 fi
-inst_after="$(inst_list)" || inst_after="<cannot list $inst_dir>"
-inst_diff() { # inst_diff COMM-FLAG FILE1 FILE2 LABEL: comm's lines as installs/ paths, labelled
-  LC_ALL=C comm "$1" "$2" "$3" | sed "s#^\./#$inst_dir/#; s#\$# ($4)#"
+inst_after="$(inst_list)"
+inst_diff() { # inst_diff COMM-FLAG FILE1 FILE2 LABEL: comm's lines, labelled
+  LC_ALL=C comm "$1" "$2" "$3" | sed "s#\$# ($4)#"
 }
 # Added and removed paths, then files modified in place (folders change only
 # by an entry added or removed, which the walks name). Any failed step makes
@@ -388,12 +397,12 @@ if ! inst_walk >"$inst_mark.end" || ! inst_new="$(
     inst_diff -23 "$inst_mark.start" "$inst_mark.end" removed &&
     inst_walk ! -type d -newer "$inst_mark" | inst_diff -12 "$inst_mark.start" - modified
 )"; then
-  inst_new="$inst_dir/<cannot compare the walks> (unknown)"
+  inst_new="$inst_dir/<cannot compare the walks of the pinned tools> (unknown)"
 fi
 [[ -z "$inst_new" ]] || inst_after+=$'\n'"$inst_new"
 rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"
 if [[ "$inst_after" == "$inst_before" ]]; then
-  inst_note="unchanged ($(grep -c . <<<"$inst_after") entries under installs/<tool>/)"
+  inst_note="unchanged ($(grep -c . <<<"$inst_after") pinned tool folders)"
 else
   inst_note="CHANGED during the run (by this run or another process; rerun when nothing else installs): $(diff <(printf '%s\n' "$inst_before") <(printf '%s\n' "$inst_after") | sed -n "s#^\([<>]\) $inst_dir/#\1 #p" | tr '\n' ' ')"
 fi
