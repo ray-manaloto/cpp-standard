@@ -8,3 +8,5 @@ extend-ignore-re = ["\\b[0-9a-f]{7,64}\\b"]
 aleady = "aleady"
 # A build directory name in research notes.
 ba = "ba"
+# gpg's fingerprint record ("fpr" in --with-colons output), used by the Ubuntu image.
+fpr = "fpr"

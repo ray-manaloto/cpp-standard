@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+#MISE description="Run the Ubuntu 26.10 amd64 certification checks in docs/standard/ubuntu.md on the PC's Docker and print the report"
+#USAGE flag "--out <file>" help="Also write the report to this file"
+#USAGE flag "--only <ids>" help="Run only these checks: comma-separated ids or section prefixes (A3,DB,C)"
+#USAGE flag "--name <label>" help="Machine label in the report header (default: pc)"
+#USAGE flag "--allow-fail" help="Exit 0 even when a check fails (for writing a baseline)"
+#USAGE flag "--keep" help="Keep the container and the scratch directory with the probe files"
+#USAGE flag "--ab" help="Also run V6, the host-vs-container A/B (writes a rootfs under /var/tmp on the Docker host, deleted after)"
+#USAGE flag "--image <ref>" help="The image to certify (default: cpp-standard-cert-ubuntu:26.10, built by certify:ubuntu-image)"
+#
+# The launcher half of the Ubuntu certification (docs/standard/ubuntu.md).
+# It runs on the Mac and reaches the Docker host over ssh: set
+# CERT_UBUNTU_SSH to the ssh destination of the PC (an ssh alias on the
+# tailnet). It starts one container with the playbook's docker run flags
+# (RUN_FLAGS below), copies in the probe sources from the playbook's
+# appendix and the in-container script (certify/ubuntu-probes), runs it,
+# and assembles the report. Timing checks run in a second pass bracketed by
+# samples of every other container's CPU usage on the host; if any of them
+# used CPU, those lines become N/A "timing untrusted". It installs nothing,
+# changes nothing on the host, and removes the container on exit (playbook
+# rule 4). Bash 3.2 compatible: macOS /bin/bash.
+# shellcheck disable=SC2015
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+doc="$root/docs/standard/ubuntu.md"
+inner="$root/.mise/tasks/certify/ubuntu-probes"
+[[ -f "$doc" && -f "$inner" ]] || {
+  echo "certify: $doc or $inner not found" >&2
+  exit 2
+}
+dest="${CERT_UBUNTU_SSH:-}"
+[[ -n "$dest" ]] || {
+  echo "certify: set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC)" >&2
+  exit 2
+}
+export DOCKER_HOST="ssh://$dest"
+only="${usage_only:-}"
+out="${usage_out:-}"
+[[ -z "$out" || "$out" == /* ]] || out="$PWD/$out"
+label="${usage_name:-pc}"
+image="${usage_image:-cpp-standard-cert-ubuntu:26.10}"
+
+# The docker run flags the playbook certifies (section V). --privileged, by the
+# owner's choice (D137: "get it to work, it is always easier to tune down"):
+# perf, and lldb's default launch with ASLR off, work without workarounds. The
+# narrowest flag measured for perf alone is --cap-add PERFMON (V2's table).
+# No cgroup limits (V1), build trees on a volume (V4).
+build_vol=cpp-standard-cert-build # labelled org.cpp-standard.cert=1
+RUN_FLAGS="--privileged --hostname cert -v $build_vol:/build"
+TIMING_IDS="U3 U4 V4"
+
+pin="$(grep -oE 'pinned commit \(today `[0-9a-f]{40}' "$doc" | grep -oE '[0-9a-f]{40}' | head -1)"
+digest="$(grep -oE 'ubuntu:26\.10@sha256:[0-9a-f]{64}' "$doc" | head -1 | sed 's/^ubuntu:26\.10@//')"
+# The p2996 install volume is named after its whole build input: the commit and
+# the hash of the build script and patches, so a new input never overwrites it.
+p2996_in="$(cat "$root"/docs/standard/ubuntu-p2996/build-linux.sh "$root"/docs/standard/ubuntu-p2996/*.patch | shasum -a 256 | cut -c1-12)"
+p2996_vol="cpp-standard-p2996-${pin:0:12}-$p2996_in"
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/certify-ubuntu.XXXXXX")"
+cname="cpp-standard-cert-$$"
+cleanup() {
+  if [[ "${usage_keep:-false}" == true ]]; then
+    echo "certify: kept container $cname and $scratch" >&2
+  else
+    docker rm -f "$cname" >/dev/null 2>&1
+    rm -rf "$scratch"
+  fi
+}
+trap cleanup EXIT
+
+want() { # want ID: is this check selected by --only?
+  [[ -z "$only" ]] && return 0
+  local IFS=, tok
+  for tok in $only; do
+    [[ "$1" == "$tok" || "$1" == "$tok"[0-9]* ]] && return 0
+  done
+  return 1
+}
+hostsh() { ssh -o BatchMode=yes "$dest" "$@"; }
+mask() { # mask the Mac's home and user, and the ssh destination
+  local tilde='~' s
+  s="$(cat)"
+  s="${s//"$HOME"/$tilde}"
+  s="${s//"$(id -un)"/<user>}"
+  s="${s//"$dest"/<pc>}"
+  printf '%s\n' "$s"
+}
+
+# --- probe sources from the playbook appendix ---------------------------------
+
+mkdir -p "$scratch/probes/cmake"
+awk -v dir="$scratch/probes" '
+  /^## Appendix: probe sources/ { app = 1 }
+  !app { next }
+  /^```/ {
+    if (inb) { inb = 0; if (out != "") close(out); out = "" } else { inb = 1; first = 1 }
+    next
+  }
+  inb && first {
+    first = 0
+    if (match($0, /^(\/\/|#) (refl\.cpp|san\.cpp|fuzz\.cpp|dap\.cpp|dap_probe\.py|bench\.cpp|heavy\.cpp|CMakeLists\.txt)/)) {
+      name = substr($0, RSTART, RLENGTH); sub(/^(\/\/|#) /, "", name)
+      out = dir "/" name
+    }
+  }
+  inb && out != "" { print > out }
+' "$doc"
+mv "$scratch/probes/CMakeLists.txt" "$scratch/probes/cmake/" 2>/dev/null
+sed -n 's/^# CMakeLists.txt, next to m.cpp: //p' "$doc" | head -1 |
+  perl -pe 's/^import std; */import std;\n/' >"$scratch/probes/cmake/m.cpp"
+for f in refl.cpp san.cpp fuzz.cpp dap.cpp dap_probe.py bench.cpp heavy.cpp cmake/m.cpp cmake/CMakeLists.txt; do
+  [[ -s "$scratch/probes/$f" ]] || {
+    echo "certify: could not extract $f from the playbook appendix" >&2
+    exit 2
+  }
+done
+cp "$inner" "$scratch/probes/ubuntu-probes"
+# hf_best.py FILE: the fastest wall time of each command in a hyperfine 2.x
+# --export-json file, in ms (results[].measurements[].time_wall_clock, seconds).
+cat >"$scratch/probes/hf_best.py" <<'PY'
+import json, sys
+for r in json.load(open(sys.argv[1]))["results"]:
+    w = [m["time_wall_clock"] for m in r["measurements"] if m.get("exit_code") == 0]
+    assert w and all(x["unit"] == "second" for x in w), "no successful run, or unit not seconds"
+    print(round(min(x["value"] for x in w) * 1000), end=" ")
+print()
+PY
+
+# --- the container ---------------------------------------------------------------
+
+docker image inspect "$image" >/dev/null 2>&1 || {
+  echo "certify: image $image not found on the Docker host; run mise run certify:ubuntu-image" >&2
+  exit 2
+}
+image_id="$(docker image inspect -f '{{.Id}}' "$image")"
+image_base="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.base.digest"}}' "$image")"
+p2996_mount=""
+docker volume inspect "$p2996_vol" >/dev/null 2>&1 && p2996_mount="-v $p2996_vol:/opt/p2996:ro"
+host_threads="$(hostsh nproc)"
+host_binfmt="$(hostsh 'test -e /proc/sys/fs/binfmt_misc/qemu-x86_64 && echo yes || echo no')"
+docker_ver="$(docker version -f '{{.Server.Version}}' 2>/dev/null)"
+docker volume inspect "$build_vol" >/dev/null 2>&1 || docker volume create --label org.cpp-standard.cert=1 "$build_vol" >/dev/null
+# shellcheck disable=SC2086
+docker run -d --name "$cname" --label org.cpp-standard.cert=1 $RUN_FLAGS $p2996_mount "$image" sleep infinity >/dev/null || exit 2
+tar -C "$scratch" -cf - probes 2>/dev/null | docker exec -i "$cname" tar -C /root -xf - 2>/dev/null
+
+run_inner() { # run_inner ONLY SKIP: one pass of the in-container script
+  docker exec -e usage_only="$1" -e SKIP="$2" -e PROBES=/root/probes -e PIN="$pin" -e EXPECT_DIGEST="$digest" \
+    -e IMAGE_BASE="$image_base" -e HOST_BINFMT_X86="$host_binfmt" -e HOST_THREADS="$host_threads" \
+    -e BUILD_DIR=/build "$cname" bash /root/probes/ubuntu-probes 2>/dev/null
+}
+# The other running containers on the host: "<ids> <usec> <unreadable>", with ids
+# sorted and comma-joined, usec their total CPU time from cgroup v2, and
+# unreadable the number of them whose cpu.stat could not be read.
+others_cpu() {
+  local ids all self
+  # A failed listing is not "no other containers": print "? - -" (untrusted).
+  all="$(docker ps -q --no-trunc)" && self="$(docker inspect -f '{{.Id}}' "$cname")" && [[ -n "$self" ]] || {
+    echo "? - -"
+    return
+  }
+  ids="$(grep -v "$self" <<<"$all" | sort | tr '\n' ' ')"
+  [[ -z "${ids// /}" ]] && {
+    echo "- 0 0"
+    return
+  }
+  printf '%s ' "$(tr ' ' , <<<"${ids% }")"
+  hostsh "s=0 m=0; for i in $ids; do f=/sys/fs/cgroup/system.slice/docker-\$i.scope/cpu.stat; \
+    u=\$(awk '/^usage_usec/ {print \$2}' \$f 2>/dev/null); \
+    if [ -n \"\$u\" ]; then s=\$((s + u)); else m=\$((m + 1)); fi; done; echo \$s \$m"
+}
+# cpu_trust BEFORE AFTER (two others_cpu snapshots): sets busy (ms of CPU the
+# other containers used in between) and why (empty when the timings can be
+# trusted: the same containers, every one accounted for, at most one CPU-second).
+cpu_trust() {
+  local c0 u0 m0 c1 u1 m1
+  read -r c0 u0 m0 <<<"$1"
+  read -r c1 u1 m1 <<<"$2"
+  why=""
+  [[ "$u0" =~ ^[0-9]+$ && "$u1" =~ ^[0-9]+$ && "$m0" == 0 && "$m1" == 0 ]] ||
+    why="the CPU time of some containers could not be read"
+  [[ "$c0" != "?" && "$c1" != "?" ]] || why="${why:+$why; }the container list could not be read"
+  [[ "$c0" == "$c1" ]] || why="${why:+$why; }the set of other containers changed"
+  [[ "$u0" =~ ^[0-9]+$ && "$u1" =~ ^[0-9]+$ && $u1 -lt $u0 ]] && why="${why:+$why; }a CPU counter went backwards"
+  busy=0
+  [[ "$u0" =~ ^[0-9]+$ && "$u1" =~ ^[0-9]+$ ]] && busy=$(((u1 - u0) / 1000))
+  [[ $busy -gt 1000 ]] && why="${why:+$why; }over one CPU-second elsewhere"
+  return 0
+}
+
+pass1_skip="$(echo "$TIMING_IDS" | tr ' ' ',')"
+rc_inner=""
+run_inner "$only" "$pass1_skip" >"$scratch/lines1.txt" || rc_inner="$rc_inner pass1:$?"
+timing_only=""
+for id in $TIMING_IDS; do want "$id" && timing_only="$timing_only,$id"; done
+: >"$scratch/lines2.txt"
+busy_note=""
+if [[ -n "$timing_only" ]]; then
+  s0="$(others_cpu)" l0="$(hostsh 'cut -d" " -f1 /proc/loadavg')"
+  run_inner "${timing_only#,}" "" >"$scratch/lines2.txt" || rc_inner="$rc_inner pass2:$?"
+  s1="$(others_cpu)" l1="$(hostsh 'cut -d" " -f1 /proc/loadavg')"
+  cpu_trust "$s0" "$s1"
+  busy_note="other containers used ${busy} ms CPU during the timing pass; host load ${l0} -> ${l1}${why:+ (untrusted: $why)}"
+  if [[ -n "$why" ]]; then
+    # Busy, or not fully accounted for: the timings are not trusted.
+    awk '/^[A-Z][A-Z0-9]* +(PASS|FAIL|N\/A) +\[timing\]/ { id = $1; sub(/^[A-Z][A-Z0-9]* +(PASS|FAIL|N\/A) +\[timing\]/, "")
+      printf "%-5s %-4s [timing untrusted: see the Timing pass line]%s\n", id, "N/A", $0; next } { print }' \
+      "$scratch/lines2.txt" >"$scratch/lines2b.txt" && mv "$scratch/lines2b.txt" "$scratch/lines2.txt"
+  fi
+fi
+
+# --- V6. host vs container A/B ------------------------------------------------------
+
+: >"$scratch/lines3.txt"
+if want V6; then
+  if [[ "${usage_ab:-false}" != true ]]; then
+    printf '%-5s %-4s %s\n' V6 N/A "not run: pass --ab (writes a rootfs under /var/tmp on the Docker host)" >"$scratch/lines3.txt"
+  else
+    ab=/var/tmp/cpp-standard-cert-ab
+    free_gb="$(hostsh "df -BG --output=avail /var/tmp | tail -1 | tr -dc 0-9")"
+    # The workload: compile heavy.cpp, run bench (both from the appendix), on cores 2-5.
+    docker exec "$cname" bash -c 'mkdir -p /ab && cp /root/probes/heavy.cpp /root/probes/bench.cpp /root/probes/hf_best.py /ab/ &&
+      g++-16 -std=c++26 -O2 -march=x86-64-v3 /ab/bench.cpp -o /ab/bench' || exit 2
+    cid="$(docker inspect -f '{{.Id}}' "$cname")"
+    hostsh "rm -rf $ab && mkdir -p $ab/rootfs && docker export $cid | tar -C $ab/rootfs -xf - --exclude='./dev/*' 2>/dev/null; du -sm $ab | cut -f1" \
+      >"$scratch/ab_size" || true
+    meas='cd /ab && hyperfine -N -w 1 -r 5 --export-json /tmp/hf.json \
+      "taskset -c 2-5 g++-16 -std=c++26 -O2 -c heavy.cpp -o /tmp/h.o" "taskset -c 2-5 ./bench" >/dev/null 2>&1 &&
+      python3 -I hf_best.py /tmp/hf.json &&
+      perf stat -x, -e instructions:u -- taskset -c 2-5 g++-16 -std=c++26 -O2 -c heavy.cpp -o /tmp/h.o 2>&1 >/dev/null | cut -d, -f1 &&
+      perf stat -x, -e instructions:u -- taskset -c 2-5 ./bench 2>&1 >/dev/null | cut -d, -f1'
+    # The host side gets the image's own environment (PATH, the mise config), so both
+    # sides run the same binaries with the same settings.
+    envs="$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$image" |
+      awk -F= 'NF > 1 { k = $1; sub(/^[^=]*=/, ""); printf " --setenv %s %s", k, $0 }')"
+    bw="bwrap --unshare-user --uid 0 --gid 0 --bind $ab/rootfs / --proc /proc --dev /dev --tmpfs /tmp --ro-bind /sys /sys \
+      --setenv HOME /root$envs --chdir /ab"
+    s0="$(others_cpu)"
+    : >"$scratch/ab_c" && : >"$scratch/ab_h"
+    for _ in 1 2 3; do # alternate the two sides
+      docker exec "$cname" bash -c "$meas" | tr '\n' ' ' >>"$scratch/ab_c" && echo >>"$scratch/ab_c"
+      hostsh "$bw bash -c '$meas'" | tr '\n' ' ' >>"$scratch/ab_h" && echo >>"$scratch/ab_h"
+    done
+    s1="$(others_cpu)"
+    hostsh "rm -rf $ab; test -e $ab && echo still-there || echo removed" >"$scratch/ab_rm"
+    cpu_trust "$s0" "$s1"
+    # Best (minimum) wall time per side over 3 rounds; overhead in % of the host's.
+    python3 -I - "$scratch/ab_c" "$scratch/ab_h" "$busy" "$(cat "$scratch/ab_size")" "$free_gb" "$(cat "$scratch/ab_rm")" "$why" \
+      >"$scratch/lines3.txt" <<'PY'
+import sys
+def rows(p):
+    return [list(map(int, l.split())) for l in open(p) if len(l.split()) == 4]
+c, h = rows(sys.argv[1]), rows(sys.argv[2])
+busy, size, free, rm, why = int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]
+if len(c) < 3 or len(h) < 3:
+    print(f"V6    FAIL [timing] incomplete A/B: container {len(c)} rounds, host {len(h)}; rootfs {rm}")
+    sys.exit()
+cc, cb = min(r[0] for r in c), min(r[1] for r in c)
+hc, hb = min(r[0] for r in h), min(r[1] for r in h)
+oc, ob = (cc - hc) / hc * 100, (cb - hb) / hb * 100
+ic = "same" if c[0][2] == h[0][2] else f"{c[0][2]} vs {h[0][2]}"
+ib = "same" if c[0][3] == h[0][3] else f"{c[0][3]} vs {h[0][3]}"
+ev = (f"[timing] compile {cc} vs {hc} ms ({oc:+.1f}%), bench {cb} vs {hb} ms ({ob:+.1f}%) container vs host, best of 3x5; "
+      f"instructions:u compile {ic}, bench {ib}; rootfs {size} MB of {free} GB free, {rm}; others {busy} ms CPU")
+status = "PASS" if oc <= 2.0 and ob <= 2.0 and rm == "removed" else "FAIL"
+if why:
+    status, ev = "N/A ", f"[timing untrusted: {why}] " + ev
+print(f"V6    {status} {ev}"[:250].rstrip())
+PY
+  fi
+fi
+
+# --- Report ---------------------------------------------------------------------
+
+order="$(grep -oE '^\*\*[A-Z]+[0-9]+\.' "$doc" | tr -d '*.' | tr '\n' ' ')"
+cat "$scratch/lines1.txt" "$scratch/lines2.txt" "$scratch/lines3.txt" | grep -v '^HDR ' >"$scratch/all.txt"
+: >"$scratch/body.txt"
+# Exactly one result per selected check: a probe pass that died early, or a
+# check that printed twice, is a FAIL, never a shorter report.
+for id in $order; do
+  want "$id" || continue
+  n="$(grep -cE "^$id +" "$scratch/all.txt")"
+  if [[ $n == 1 ]]; then
+    grep -E "^$id +" "$scratch/all.txt" >>"$scratch/body.txt"
+  else
+    printf '%-5s %-4s %s\n' "$id" FAIL "$n results (want 1): the probe pass ended early or repeated a check${rc_inner:+; exit status$rc_inner}" >>"$scratch/body.txt"
+  fi
+done
+hdr() { grep -m1 "^HDR $1=" "$scratch/lines1.txt" | cut -d= -f2-; }
+npass="$(grep -cE '^[A-Z0-9]+ +PASS' "$scratch/body.txt")"
+nfail="$(grep -cE '^[A-Z0-9]+ +FAIL' "$scratch/body.txt")"
+nna="$(grep -cE '^[A-Z0-9]+ +N/A' "$scratch/body.txt")"
+
+fix_for() {
+  case "$1" in
+    A2) echo "rebuild the image from docs/standard/ubuntu-cert.Dockerfile (mise run certify:ubuntu-image)" ;;
+    A3) echo "run on the amd64 PC; never under qemu" ;;
+    B2) echo "remove the archive clang (it comes with the archive iwyu; ubuntu-cert.Dockerfile leaves it out)" ;;
+    E2) echo "clangd matching clang-23 needs llvmorg-23.1.6 or an apt.llvm.org stonking suite (D25)" ;;
+    P8) echo "build IWYU branch clang_21 against \$P2996 and install it into the p2996 prefix (docs/standard/ubuntu.md, P8)" ;;
+    P*) echo "build p2996 for amd64 and mount it as volume $p2996_vol (docs/standard/ubuntu.md, P)" ;;
+    DB4 | DB5) echo "the p2996 install (P)" ;;
+    T3) echo "build IWYU against LLVM 23 (the archive iwyu is IWYU 0.23 on clang 19)" ;;
+    V2) echo "run the container with --privileged (certify:ubuntu does)" ;;
+    *) echo "see $1 in docs/standard/ubuntu.md" ;;
+  esac
+}
+report() {
+  printf 'Ubuntu certification  %s  %s\n' "$label" "$(date +%F)"
+  printf '%s  kernel %s (container on the PC'"'"'s Omarchy kernel)  glibc %s\n' "$(hdr os)" "$(hdr kernel)" "$(hdr glibc)"
+  printf 'CPU %s  Docker %s  image %s\n' "$(hdr cpu)" "$docker_ver" "${image_id:7:12}"
+  printf 'docker run flags: %s%s\n' "$RUN_FLAGS" "${p2996_mount:+ -v $p2996_vol:/opt/p2996:ro}"
+  [[ -n "$busy_note" ]] && printf 'Timing pass: %s\n' "$busy_note"
+  [[ -n "$rc_inner" ]] && printf 'Probe passes exited non-zero:%s (the report is incomplete)\n' "$rc_inner"
+  printf '[host kernel] marks a kernel-dependent check: it ran in a container on the PC'"'"'s Omarchy kernel, not Ubuntu'"'"'s.\n'
+  cat "$scratch/body.txt"
+  printf 'Summary: %d PASS, %d FAIL, %d N/A\n' "$npass" "$nfail" "$nna"
+  printf 'Missing or wrong:'
+  ids="$(grep -E '^[A-Z0-9]+ +FAIL' "$scratch/body.txt" | awk '{print $1}')"
+  if [[ -z "$ids" ]]; then printf ' none\n'; else
+    printf '\n'
+    for id in $ids; do printf '  %s: %s\n' "$id" "$(fix_for "$id")"; done
+  fi
+}
+
+if [[ $((npass + nfail + nna)) == 0 ]]; then
+  echo "certify: --only '$only' matched no check" >&2
+  exit 2
+fi
+report | mask
+[[ -n "$out" ]] && report | mask >"$out"
+[[ -z "$rc_inner" ]] || exit 1
+[[ $nfail == 0 || "${usage_allow_fail:-false}" == true ]]

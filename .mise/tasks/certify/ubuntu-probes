@@ -1,0 +1,688 @@
+#!/usr/bin/env bash
+#MISE description="The in-container half of certify:ubuntu: run the probes in docs/standard/ubuntu.md and print one line per check"
+#MISE hide=true
+#USAGE flag "--only <ids>" help="Run only these checks: comma-separated ids or section prefixes (A3,DB,C)"
+#USAGE flag "--probes <dir>" help="Directory with the probe sources extracted from the playbook appendix"
+#
+# Runs inside the Ubuntu 26.10 amd64 container. `certify:ubuntu` (the
+# launcher) starts the container with the playbook's docker run flags, copies
+# this script and the probe sources in, and assembles the report. This script
+# prints only check lines, `<id> PASS|FAIL|N/A <evidence>`, plus `HDR key=value`
+# lines for the report header. Lines whose evidence starts with `[timing]` are
+# wall-clock results: the launcher marks them untrusted when the PC's runner
+# containers used CPU during the run. Kernel-dependent checks end with
+# `[host kernel]`: the container runs on the PC's Omarchy kernel, not
+# Ubuntu's. It installs nothing and writes only under its scratch directory
+# and $BUILD_DIR (playbook rule 4). Bash 5 (Ubuntu's /bin/bash).
+# `cond && res PASS ... || res FAIL ...` is safe here: res always returns 0.
+# shellcheck disable=SC2015
+set -uo pipefail
+
+probes="${usage_probes:-${PROBES:-}}"
+[[ -d "$probes" ]] || {
+  echo "certify: --probes <dir> with the appendix sources is required" >&2
+  exit 2
+}
+only=",${usage_only:-},"
+P2996="${P2996:-/opt/p2996}"
+CLANGD="${CLANGD:-/opt/LLVM-23.1.5-Linux-X64/bin/clangd}"
+BUILD_DIR="${BUILD_DIR:-/build}"
+EXPECT_DIGEST="${EXPECT_DIGEST:-}"            # the base digest the playbook names (A2)
+IMAGE_BASE="${IMAGE_BASE:-}"                  # the image's org.opencontainers.image.base.digest label
+HOST_BINFMT_X86="${HOST_BINFMT_X86:-unknown}" # yes/no: qemu-x86_64 registered on the host
+HOST_THREADS="${HOST_THREADS:-}"              # nproc on the host
+PIN="${PIN:-}"                                # the p2996 commit the playbook pins
+L=clang++-23 G=g++-16 P="$P2996/bin/clang++"
+HK='[host kernel]'
+PROBE="$(mktemp -d /tmp/certify-ubuntu.XXXXXX)"
+trap 'rm -rf "$PROBE"' EXIT
+cp -r "$probes"/. "$PROBE"/
+cd "$PROBE" || exit 2
+
+want() { # want ID: is this check selected by --only (and not in $SKIP)?
+  [[ ",${SKIP:-}," == *",$1,"* ]] && return 1
+  [[ "$only" == ",," ]] && return 0
+  local IFS=, tok
+  for tok in ${usage_only:-}; do
+    [[ "$1" == "$tok" || "$1" == "$tok"[0-9]* ]] && return 0
+  done
+  return 1
+}
+res() { # res ID PASS|FAIL|N/A EVIDENCE
+  local ev
+  ev="$(printf '%s' "$3" | tr '\n\t' '  ' | tr -s ' ' | cut -c1-240)"
+  printf '%-5s %-4s %s\n' "$1" "$2" "$ev"
+}
+ver_ge() { [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]]; } # ver_ge A B: A >= B
+cmake_probe() {                                                                  # cmake_probe CXX TAG [CXXFLAGS]: build and run the appendix CMake probe
+  local b="$PROBE/cm_$2"
+  rm -rf "$b"
+  timeout 300 cmake -S "$PROBE/cmake" -B "$b" -G Ninja -DCMAKE_CXX_COMPILER="$1" -DCMAKE_CXX_FLAGS="${3:-}" >"$b.log" 2>&1 &&
+    timeout 300 cmake --build "$b" >>"$b.log" 2>&1 && timeout 30 "$b/m" 2>&1
+}
+san_fires() { # san_fires CXX SANITIZER TEXT TAG [FLAGS]: 0 fired, 1 ran without it, 2 no link
+  local exe="$PROBE/s_${2}_$4" src="$PROBE/san.cpp"
+  # shellcheck disable=SC2086
+  "$1" -g -std=c++26 ${5:-} -fsanitize="$2" "$src" -o "$exe" >"$exe.log" 2>&1 || return 2
+  local o i n=1 # not a pipeline: under pipefail the program's own nonzero exit would hide the match
+  # TSan's detection depends on thread timing: up to 3 runs, PASS on the first report (C6).
+  [[ "$2" == thread ]] && n=3
+  for ((i = 1; i <= n; i++)); do
+    o="$(ASAN_OPTIONS=detect_leaks=0 timeout 60 "$exe" 2>&1)"
+    [[ "$o" == *"$3"* ]] && return 0
+  done
+  return 1
+}
+san_set() { # san_set CXX TAG FLAGS SAN...: prints the sanitizers that fired
+  local cxx="$1" tag="$2" flags="$3" s fired=""
+  shift 3
+  for s in "$@"; do
+    case $s in
+      address) san_fires "$cxx" address 'heap-buffer-overflow' "$tag" "$flags" && fired="$fired asan" ;;
+      thread) san_fires "$cxx" thread 'data race' "$tag" "$flags" && fired="$fired tsan" ;;
+      undefined) san_fires "$cxx" undefined 'runtime error' "$tag" "$flags" && fired="$fired ubsan" ;;
+      memory) san_fires "$cxx" memory 'use-of-uninitialized-value' "$tag" "$flags" && fired="$fired msan" ;;
+    esac
+  done
+  printf '%s' "${fired# }"
+}
+lsan_fires() { # lsan_fires CXX TAG: LeakSanitizer reports the appendix leak
+  "$1" -g -fsanitize=leak leak.cpp -o "lsan_$2" >/dev/null 2>&1 || return 2
+  local o
+  o="$(timeout 60 "./lsan_$2" 2>&1)"
+  [[ "$o" == *"detected memory leaks"* ]]
+}
+dap_probe() { # dap_probe LLDB-DAP PROGRAM: the appendix probe (it launches with ASLR on, DB2)
+  timeout 120 python3 -I dap_probe.py "$1" "$2" dap.cpp 10 2>&1 | tail -1
+}
+best_ms() { # best_ms CMD...: the fastest of 5 runs on cores 2-5, in ms (hyperfine)
+  hyperfine -N -w 1 -r 5 --export-json "$PROBE/hf.json" -- "taskset -c 2-5 $*" >/dev/null 2>&1 &&
+    python3 -I "$PROBE/hf_best.py" "$PROBE/hf.json" | tr -d " "
+}
+instr_u() { # instr_u CMD...: user-space instructions retired (perf stat)
+  perf stat -x, -e instructions:u -- "$@" 2>&1 >/dev/null | awk -F, '/instructions/ {print $1; exit}'
+}
+
+printf '#include <print>\nint main(){std::println("ok");}\n' >p.cpp
+printf 'int* p;\nint main(){ p = new int[4]; p = nullptr; }\n' >leak.cpp
+
+# --- A. Host and OS -----------------------------------------------------------
+
+# shellcheck source=/dev/null
+. /etc/os-release
+printf 'HDR os=%s\nHDR kernel=%s\n' "$PRETTY_NAME" "$(uname -r)"
+printf 'HDR glibc=%s\n' "$(ldd --version | head -1 | awk '{print $NF}')"
+printf 'HDR cpu=%s\n' "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
+
+if want A1; then
+  [[ "$VERSION_ID" == 26.10 && "$VERSION_CODENAME" == stonking ]] && res A1 PASS "$PRETTY_NAME ($VERSION_CODENAME)" ||
+    res A1 FAIL "$PRETTY_NAME ($VERSION_CODENAME); want 26.10 stonking"
+fi
+if want A2; then
+  [[ -n "$EXPECT_DIGEST" && "$IMAGE_BASE" == "$EXPECT_DIGEST" ]] && res A2 PASS "base ubuntu:26.10@${IMAGE_BASE:0:19}..." ||
+    res A2 FAIL "image base label '${IMAGE_BASE:-none}', playbook digest '${EXPECT_DIGEST:-none}'"
+fi
+if want A3; then
+  a="$(dpkg --print-architecture) $(uname -m)"
+  [[ "$a" == "amd64 x86_64" && "$HOST_BINFMT_X86" == no ]] && res A3 PASS "$a; no qemu-x86_64 in the host's binfmt_misc: native" ||
+    res A3 FAIL "$a; qemu-x86_64 registered on the host: $HOST_BINFMT_X86"
+fi
+want A4 && res A4 N/A "kernel $(uname -r), shared with the host; recorded, not certified $HK"
+if want A5; then
+  g="$(ldd --version | head -1)"
+  [[ "$g" == *" 2.44" ]] && res A5 PASS "$g" || res A5 FAIL "$g (want 2.44)"
+fi
+if want A6; then
+  hw="$(/lib64/ld-linux-x86-64.so.2 --help | sed -n 's/^ *\(x86-64-v[0-9]\) (supported, searched)/\1/p' | tr '\n' ' ')"
+  miss="" extra=""
+  for f in avx2 bmi2 fma adx sha_ni vaes vpclmulqdq; do grep -qw "$f" /proc/cpuinfo || miss="$miss $f"; done
+  grep -qw avx512f /proc/cpuinfo && extra=" avx512f"
+  if [[ "$hw" == *x86-64-v3* && -z "$miss" && -z "$extra" ]]; then
+    res A6 PASS "glibc-hwcaps: ${hw% }; avx2 bmi2 fma adx sha_ni vaes vpclmulqdq present; no avx512f"
+  else res A6 FAIL "glibc-hwcaps: ${hw:-none}; missing:${miss:- none}; unexpected:${extra:- none}"; fi
+fi
+if want A7; then
+  src="$(cat /etc/apt/sources.list.d/llvm.list 2>/dev/null)"
+  fpr="$(gpg --show-keys --with-colons /usr/share/keyrings/apt-llvm.gpg 2>/dev/null | awk -F: '/^fpr/ {print $10; exit}')"
+  [[ "$src" == *"llvm-toolchain-resolute-23 main"* && "$fpr" == 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421 ]] &&
+    res A7 PASS "resolute-23; key $fpr" || res A7 FAIL "source '${src:-none}'; key ${fpr:-none}"
+fi
+
+# --- B. Build tools -----------------------------------------------------------
+
+if want B1; then
+  miss=""
+  for t in mise cmake ninja sccache vcpkg gcovr doxygen hyperfine mold; do
+    "$t" --version >/dev/null 2>&1 || miss="$miss $t"
+  done
+  cm="$(cmake --version 2>/dev/null | head -1 | awk '{print $3}')"
+  if [[ -z "$miss" ]] && ver_ge "$cm" 4.5; then res B1 PASS "all nine print a version; cmake $cm; mold $(mold --version | awk '{print $2}')"; else
+    res B1 FAIL "missing:${miss:- none}; cmake ${cm:-none} (want >= 4.5)"
+  fi
+fi
+if want B2; then
+  bad=""
+  for t in cc c++ gcc g++ clang clang++; do
+    c="$(command -v "$t")" p=""
+    [[ -n "$c" ]] && p="$(readlink -f "$c")"
+    [[ -z "$p" || "$p" == */gcc-16 || "$p" == */g++-16 || "$p" == */x86_64-linux-gnu-g*-16 || "$p" == /usr/lib/llvm-23/* ]] ||
+      bad="$bad $t->$p"
+  done
+  others="$(dpkg-query -W -f '${Package}\n' 'llvm-[0-9]*' 'clang-[0-9]*' 2>/dev/null | grep -vE -- '-23(-|$)' | tr '\n' ' ')"
+  [[ -z "$bad" && -z "$others" ]] && res B2 PASS "no cc/c++/clang link to another compiler; no second LLVM major" ||
+    res B2 FAIL "links:${bad:- ok}; other LLVM packages: ${others:-none}"
+fi
+if want B3; then
+  sccache --show-stats >/dev/null 2>&1 && res B3 PASS "sccache --show-stats prints statistics" || res B3 FAIL "sccache --show-stats failed"
+fi
+if want B4; then
+  b="$(dpkg-query -W -f '${Version}' binutils)" m="$(dpkg-query -W -f '${Version}' make)"
+  [[ "$b" == 2.47-6ubuntu1 && "$m" == 4.4.1-3 ]] && res B4 PASS "binutils $b; make $m (D105)" || res B4 FAIL "binutils $b; make $m"
+fi
+
+# --- C. LLVM / clang 23 (apt.llvm.org) ----------------------------------------
+
+if ! command -v $L >/dev/null; then
+  for id in C1 C2 C3 C4 C5 C6 C7 C8 C9; do want $id && res $id FAIL "$L not found"; done
+else
+  if want C1; then
+    v="$($L --version | head -1)"
+    # The apt lists are removed in the image, so the origin is read from the version:
+    # apt.llvm.org snapshots carry "~++<date><hash>-1~exp1~<date>"; the archive does not.
+    o="$(dpkg-query -W -f '${Version}' clang-23)"
+    [[ "$v" == *"clang version 23."* && "$o" == *"~++"*"~exp1~"* ]] && res C1 PASS "$v; apt.llvm.org snapshot $o" || res C1 FAIL "$v; package $o"
+  fi
+  if want C2; then
+    d="$($L -### -x c++ /dev/null -o /dev/null 2>&1 | grep -oE -- '-lstdc\+\+|-lc\+\+' | head -1)"
+    mj="$($L -stdlib=libc++ -print-file-name=libc++.modules.json)"
+    [[ "$d" == "-lstdc++" && -f "$mj" ]] && res C2 PASS "default libstdc++; -stdlib=libc++ finds $mj" ||
+      res C2 FAIL "default '${d:-none}'; libc++.modules.json '$mj'"
+  fi
+  if want C3; then
+    o="$($L -std=c++26 -stdlib=libc++ p.cpp -o c3 2>&1 && ./c3)"
+    lib="$(readlink -f "$(ldd c3 | awk '/libc\+\+\.so/ {print $3; exit}')")"
+    pk="$(dpkg -S "$lib" 2>/dev/null | cut -d: -f1)"
+    pv="$([[ -n "$pk" ]] && dpkg-query -W -f '${Version}' "$pk")"
+    [[ "$o" == ok && -n "$pv" && "$pv" == "$(dpkg-query -W -f '${Version}' clang-23)" ]] &&
+      res C3 PASS "ok; $lib from $pk $pv, the same build as clang-23" || res C3 FAIL "out '$o'; libc++ '${lib:-none}' from ${pk:-?} ${pv:-?}"
+  fi
+  if want C4; then
+    a="$(cmake_probe $L c4 -stdlib=libc++)" b="$(cmake_probe $L c4b)"
+    [[ "$a" == *"import std ok"* && "$b" == *"import std ok"* ]] && res C4 PASS "import std ok with libc++ and with libstdc++" ||
+      res C4 FAIL "libc++: ${a:-$(tail -1 cm_c4.log)}; libstdc++: ${b:-$(tail -1 cm_c4b.log)}"
+  fi
+  if want C5; then
+    d="$($L -print-resource-dir)/lib/x86_64-pc-linux-gnu"
+    [[ -d "$d" ]] || d="$($L -print-resource-dir)/lib/linux"
+    miss=""
+    for r in asan tsan msan lsan ubsan_standalone dfsan hwasan memprof nsan rtsan tysan scudo_standalone \
+      gwp_asan safestack cfi fuzzer profile xray; do
+      compgen -G "$d/libclang_rt.$r*x86_64*" >/dev/null || compgen -G "$d/libclang_rt.$r.a" >/dev/null || miss="$miss $r"
+    done
+    [[ -z "$miss" ]] && res C5 PASS "all 18 runtimes incl. Linux-only msan dfsan hwasan memprof nsan scudo gwp_asan safestack" ||
+      res C5 FAIL "missing:$miss"
+  fi
+  if want C6; then
+    f="$(san_set $L c6 -stdlib=libc++ address thread undefined memory)"
+    # MSan is reported, not required: it needs an MSan-built standard library (C6).
+    [[ "$f" == "asan tsan ubsan"* ]] && res C6 PASS "fired: $f $HK" || res C6 FAIL "fired: ${f:-none} $HK"
+  fi
+  if want C7; then
+    miss=""
+    for t in clang-tidy-23 clang-format-23 llvm-mca-23 llvm-cov-23 llvm-profdata-23 ld.lld-23 lldb-23 lldb-dap-23 \
+      scan-build-23 llvm-bolt-23; do
+      command -v "$t" >/dev/null || miss="$miss $t"
+    done
+    [[ -x "$CLANGD" ]] || miss="$miss clangd"
+    [[ -z "$miss" ]] && res C7 PASS "all eleven tools (clangd from the release tarball, E2)" || res C7 FAIL "missing:$miss"
+  fi
+  if want C8; then
+    out=""
+    for ld in bfd lld mold; do
+      o="$($L -std=c++26 -fuse-ld=$ld p.cpp -o c8_$ld 2>&1 && ./c8_$ld)"
+      out="$out $ld:${o:0:20}"
+    done
+    [[ "$out" == " bfd:ok lld:ok mold:ok" ]] && res C8 PASS "GNU ld, ld.lld and mold link and run" || res C8 FAIL "$out"
+  fi
+  if want C9; then
+    o="$($L -std=c++26 -O2 -Wl,--emit-relocs p.cpp -o c9 2>&1 && llvm-bolt-23 c9 -o c9.bolt >c9.log 2>&1 && ./c9.bolt)"
+    [[ "$o" == ok ]] && res C9 PASS "llvm-bolt-23 rewrote the binary; it runs" || res C9 FAIL "${o:-$(tail -1 c9.log)}"
+  fi
+fi
+
+# --- G. GCC 16.2 (26.10 archive) ----------------------------------------------
+
+if ! command -v $G >/dev/null; then
+  for id in G1 G2 G4 G6; do want $id && res $id FAIL "$G not found"; done
+else
+  if want G1; then
+    v="$($G --version | head -1)" pv="$(dpkg-query -W -f '${Version}' g++-16)"
+    [[ "$v" == *" 16.2.0" && "$pv" == 16.2.0-3ubuntu1 ]] && res G1 PASS "$v; package $pv (D25)" || res G1 FAIL "$v; package $pv"
+  fi
+  if want G2; then
+    r="$($G -std=c++26 -freflection refl.cpp -o g2 2>&1 && ./g2)"
+    m="$(cmake_probe $G g2)"
+    [[ "$r" == members=2 && "$m" == *"import std ok"* ]] && res G2 PASS "members=2; import std ok" ||
+      res G2 FAIL "refl: $r; cmake: ${m:-$(tail -1 cm_g2.log)}"
+  fi
+  if want G4; then
+    f="$(san_set $G g4 '' address thread undefined)"
+    lsan_fires $G g4 && f="$f lsan"
+    [[ "$f" == "asan tsan ubsan lsan" ]] && res G4 PASS "fired: $f $HK" || res G4 FAIL "fired: ${f:-none} $HK"
+  fi
+  if want G6; then
+    o="$($G -std=c++26 -g -fsanitize=address san.cpp -o g6 2>&1 && echo link-ok)"
+    [[ "$o" == *link-ok* ]] && res G6 PASS "-g -fsanitize=address links" || res G6 FAIL "$(printf '%s' "$o" | tail -1)"
+  fi
+fi
+want G5 && res G5 N/A "rule, no probe: C++ dependencies for GCC come from vcpkg with the GCC triplet (K1)"
+
+# --- P. clang-p2996 (source build) --------------------------------------------
+
+if [[ ! -x "$P" ]]; then
+  for id in P1 P2 P3 P4 P5 P6 P7 P8 P9 P10; do want $id && res $id FAIL "$P not found (mount the p2996 install at \$P2996)"; done
+else
+  pv="$("$P" --version 2>&1)"
+  if want P1; then
+    [[ -n "$PIN" && "$pv" == *"$PIN"* && "$pv" == *"+assertions"* ]] && res P1 PASS "commit ${PIN:0:12}; +assertions" ||
+      res P1 FAIL "$(printf '%s' "$pv" | head -1) (pin ${PIN:-unknown})"
+  fi
+  if want P2; then
+    # Default libc++ and its rpath: a plain compile must run with no -stdlib and no LD_LIBRARY_PATH.
+    o="$("$P" -std=c++26 p.cpp -o p2 2>&1 && env -u LD_LIBRARY_PATH ./p2)"
+    lib="$(readlink -f "$(ldd p2 | awk '/libc\+\+\.so/ {print $3; exit}')")"
+    [[ "$o" == ok && "$lib" == "$(readlink -f "$P2996")"/* ]] && res P2 PASS "default libc++ $lib; runs without LD_LIBRARY_PATH" ||
+      res P2 FAIL "out '${o:0:80}'; libc++ '${lib:-none}'"
+  fi
+  if want P3; then
+    h="$(grep -rh 'define _LIBCPP_HARDENING_MODE_DEFAULT' "$P2996"/include/*/c++/v1/__config_site "$P2996"/include/c++/v1/__config_site 2>/dev/null | awk '{print $3}' | head -1)"
+    [[ "$h" == 16 ]] && res P3 PASS "_LIBCPP_HARDENING_MODE_DEFAULT 16 (extensive)" || res P3 FAIL "default ${h:-missing}"
+  fi
+  if want P4; then
+    r="$("$P" -std=c++26 -freflection-latest refl.cpp -o p4 2>&1 && ./p4)"
+    m="$(cmake_probe "$P" p4)"
+    f="$(san_set "$P" p4 '' address thread undefined memory)"
+    if [[ "$r" == members=2 && "$m" == *"import std ok"* && "$f" == "asan tsan ubsan"* ]]; then
+      res P4 PASS "members=2; import std ok; fired: $f $HK"
+    else res P4 FAIL "refl: ${r:0:60}; cmake: ${m:-$(tail -1 cm_p4.log)}; fired: ${f:-none} $HK"; fi
+  fi
+  if want P5; then
+    n=0 miss=""
+    for t in clangd clang-tidy clang-format clang-include-cleaner clang-query clang-doc scan-build ld.lld llvm-mca \
+      llvm-cov llvm-profdata llvm-xray lldb lldb-dap mlir-opt; do
+      [[ -e "$P2996/bin/$t" ]] && n=$((n + 1)) || miss="$miss $t"
+    done
+    po="$("$P" -O2 -mllvm -polly -c -x c++ /dev/null -o /dev/null 2>&1 && echo polly-ok)"
+    [[ "$n" == 15 && "$po" == polly-ok ]] && res P5 PASS "15 tools; polly-ok" || res P5 FAIL "$n tools (missing:$miss); ${po:-polly fail}"
+  fi
+  if want P6; then
+    miss=""
+    for t in FileCheck not count yaml2obj; do [[ -e "$P2996/bin/$t" ]] || miss="$miss $t"; done
+    [[ -z "$miss" ]] && res P6 PASS "all four utilities" || res P6 FAIL "missing:$miss (LLVM_INSTALL_UTILS off)"
+  fi
+  if want P7; then
+    o1="$(timeout 120 "$P2996/bin/clang-tidy" refl.cpp -- -std=c++26 -freflection-latest 2>&1)"
+    r1=$?
+    e1="$(grep -c 'error:' <<<"$o1")"
+    timeout 60 "$P2996/bin/clang-format" --dry-run refl.cpp >/dev/null 2>&1
+    r2=$?
+    o3="$(timeout 120 "$P2996/bin/clang-include-cleaner" refl.cpp -- -std=c++26 -freflection-latest 2>&1)"
+    r3=$?
+    e3="$(grep -c 'error:' <<<"$o3")"
+    if [[ $r1 == 0 && "$e1" == 0 && $r2 == 0 && $r3 == 0 && "$e3" == 0 ]]; then
+      res P7 PASS "clang-tidy, clang-format, clang-include-cleaner: exit 0, 0 errors"
+    else res P7 FAIL "tidy exit $r1, $e1 errors; format exit $r2; include-cleaner exit $r3, $e3 errors"; fi
+  fi
+  if want P8; then
+    iw="$P2996/bin/include-what-you-use"
+    if [[ ! -e "$iw" ]]; then
+      res P8 FAIL "no include-what-you-use in \$P2996/bin (not built)"
+    else
+      o="$("$iw" --version 2>&1)"
+      r=$?
+      [[ $r == 0 && -n "$PIN" && "$o" == *"include-what-you-use 0.25"* && "$o" == *"$PIN"* ]] &&
+        res P8 PASS "$(head -1 <<<"$o")" || res P8 FAIL "exit $r: $(tr '\n' ' ' <<<"$o" | cut -c1-120) (want 0.25 on p2996 ${PIN:0:12})"
+    fi
+  fi
+  if want P9; then
+    o="$("$P" --coverage -std=c++26 p.cpp -o pc 2>&1 && ./pc >/dev/null && "$P2996/bin/llvm-cov" gcov -n pc-p.gcda 2>&1 | head -2)"
+    [[ "$o" == *"File 'p.cpp'"* && "$o" == *"100.00%"* ]] && res P9 PASS "$o" || res P9 FAIL "$o"
+  fi
+  if want P10; then
+    o="$("$P" -std=c++26 -fuse-ld=lld p.cpp -o p10 2>&1 && ./p10)"
+    [[ "$o" == ok ]] && res P10 PASS "ok with ld.lld" || res P10 FAIL "$(printf '%s' "$o" | head -1)"
+  fi
+fi
+
+# --- D. Debuggers ---------------------------------------------------------------
+
+if want DB1; then
+  v="$(gdb --version | head -1)"
+  $G -g -std=c++26 dap.cpp -o dapg >/dev/null 2>&1
+  o="$(timeout 120 gdb -batch -ex 'break 10' -ex run -ex 'print v' -ex 'print s' -ex kill ./dapg 2>&1)"
+  py="$(timeout 60 gdb -batch -ex 'python print(40+2)' 2>&1 | tail -1)"
+  if [[ "$o" == *"Breakpoint 1, main"* && "$o" == *"std::vector of length 3"*"{1, 2, 3}"* && "$o" == *'"p2996"'* && "$py" == 42 ]]; then
+    res DB1 PASS "$v; breakpoint, libstdc++ printers (vector, string), python 42 $HK"
+  else res DB1 FAIL "$v; breakpoint/printers: $(grep -m1 -E 'warning|error' <<<"$o"); python '$py' $HK"; fi
+fi
+if want DB2; then
+  v="$(lldb-23 --version 2>&1 | head -1)"
+  $L -g -std=c++26 dap.cpp -o dapd >/dev/null 2>&1
+  o="$(timeout 120 lldb-23 -b -o 'b dap.cpp:10' -o run -o 'frame variable s' -o kill ./dapd 2>&1)"
+  py="$(timeout 60 lldb-23 -b -o 'script print(40+2)' 2>&1 | tail -1)"
+  if [[ "$o" == *"stop reason = breakpoint 1.1"* && "$o" == *'"p2996"'* && "$py" == 42 ]]; then
+    res DB2 PASS "$v; breakpoint (default launch, ASLR off), std::string, python 42 $HK"
+  else res DB2 FAIL "$v; $(grep -m1 -E 'error|stop reason' <<<"$o"); python '$py' $HK"; fi
+fi
+if want DB3; then
+  [[ -x dapd ]] || $L -g -std=c++26 dap.cpp -o dapd >/dev/null 2>&1
+  s="$(dap_probe /usr/lib/llvm-23/bin/lldb-dap dapd)"
+  [[ "$s" == PASS ]] && res DB3 PASS "lldb-dap-23 session: breakpoint, locals, exit 0 $HK" || res DB3 FAIL "$s $HK"
+fi
+if [[ -x "$P2996/bin/lldb" ]]; then
+  if want DB4; then
+    "$P" -g -std=c++26 dap.cpp -o dapp >/dev/null 2>&1
+    o="$(timeout 120 "$P2996/bin/lldb" -b -o 'b dap.cpp:10' -o run -o 'frame variable s' -o kill ./dapp 2>&1)"
+    py="$(timeout 60 "$P2996/bin/lldb" -b -o 'script print(40+2)' 2>&1 | tail -1)"
+    [[ "$o" == *"stop reason = breakpoint 1.1"* && "$o" == *'"p2996"'* && "$py" == 42 ]] &&
+      res DB4 PASS "lldb (p2996): breakpoint, libc++ string, python 42 $HK" ||
+      res DB4 FAIL "$(grep -m1 -E 'error|stop reason' <<<"$o"); python '$py' $HK"
+  fi
+  if want DB5; then
+    [[ -x dapp ]] || "$P" -g -std=c++26 dap.cpp -o dapp >/dev/null 2>&1
+    s="$(dap_probe "$P2996/bin/lldb-dap" dapp)"
+    [[ "$s" == PASS ]] && res DB5 PASS "lldb-dap (p2996) session PASS $HK" || res DB5 FAIL "$s $HK"
+  fi
+else
+  for id in DB4 DB5; do want $id && res $id FAIL "$P2996/bin/lldb not found"; done
+fi
+
+# --- L. Library features ------------------------------------------------------
+
+compilers="" missing_cxx=""
+command -v $L >/dev/null && compilers="$compilers clang23-libcxx clang23-libstdcxx" || missing_cxx="$missing_cxx clang23"
+[[ -x "$P" ]] && compilers="$compilers p2996" || missing_cxx="$missing_cxx p2996"
+command -v $G >/dev/null && compilers="$compilers gcc16" || missing_cxx="$missing_cxx gcc16"
+cxx_of() { case "$1" in clang23-libcxx) echo "$L -stdlib=libc++" ;; clang23-libstdcxx) echo "$L" ;; p2996) echo "$P" ;; gcc16) echo "$G" ;; esac }
+
+if want L1; then
+  bad=""
+  for c in $compilers; do
+    for h in expected flat_map format mdspan print ranges; do
+      # shellcheck disable=SC2046
+      printf '#include <%s>\n' "$h" | $(cxx_of "$c") -std=c++26 -fsyntax-only -x c++ - >/dev/null 2>&1 || bad="$bad $c:<$h>"
+    done
+  done
+  for c in $missing_cxx; do bad="$bad $c:not-installed"; done
+  [[ -z "$bad" ]] && res L1 PASS "all six headers on:$compilers" || res L1 FAIL "failed:$bad"
+fi
+if want L2; then
+  printf '#include <version>\n__cpp_lib_generator __cpp_lib_stacktrace\n' >v.cpp
+  bad=""
+  for c in $compilers; do
+    o="$($(cxx_of "$c") -std=c++26 -E -P v.cpp 2>/dev/null | tail -1 | tr -s ' ')"
+    case $c in gcc16 | clang23-libstdcxx) e="202207L 202011L" ;; *) e="__cpp_lib_generator __cpp_lib_stacktrace" ;; esac
+    [[ "$o" == "$e" ]] || bad="$bad $c='$o'"
+  done
+  for c in $missing_cxx; do bad="$bad $c:not-installed"; done
+  [[ -z "$bad" ]] && res L2 PASS "matches the table on:$compilers" || res L2 FAIL "differs or not checked:$bad"
+fi
+if want L3; then
+  printf '#include <version>\n#if defined(__cpp_impl_reflection) || __has_feature(reflection)\nREFL_YES\n#else\nREFL_NO\n#endif\n' >l3.cpp
+  gp="$($G -std=c++26 -freflection -E -P l3.cpp 2>/dev/null | tail -1)"
+  pp="$("$P" -std=c++26 -freflection-latest -E -P l3.cpp 2>/dev/null | tail -1)"
+  [[ "$gp" == REFL_YES && "$pp" == REFL_YES ]] && res L3 PASS "the two-part guard matches on GCC 16 and p2996" || res L3 FAIL "gcc16 ${gp:-none}; p2996 ${pp:-none}"
+fi
+if want L4; then
+  printf '#include <stacktrace>\n#include <print>\nint main(){ std::println("frames={}", std::stacktrace::current().size() > 0); }\n' >st.cpp
+  a="$($G -std=c++26 -g st.cpp -o st0 >/dev/null 2>&1 && echo links || echo no-link)"
+  b="$($G -std=c++26 -g st.cpp -o st1 -lstdc++exp 2>&1 && ./st1)"
+  [[ "$a" == no-link && "$b" == "frames=true" ]] && res L4 PASS "<stacktrace> needs -lstdc++exp: without it the link fails; with it frames=true" ||
+    res L4 FAIL "without -lstdc++exp: $a; with: ${b:0:80}"
+fi
+
+# --- H. Hardening ---------------------------------------------------------------
+
+want H1 && res H1 N/A "per-project rule: apt libc++ defaults to NONE (H2), so every libc++ preset sets _LIBCPP_HARDENING_MODE"
+if want H2; then
+  printf '#include <vector>\nint main(){std::vector<int> v(1); return v[5];}\n' >h.cpp
+  run() {
+    ./"$1" >/dev/null 2>&1
+    echo $?
+  }
+  def="$(grep -h 'define _LIBCPP_HARDENING_MODE_DEFAULT' /usr/lib/llvm-23/include/c++/v1/__config_site | awk '{print $3}')"
+  cbad=""
+  $L -std=c++26 -stdlib=libc++ h.cpp -o h_none >/dev/null 2>&1 || cbad="$cbad h0"
+  $L -std=c++26 -stdlib=libc++ -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE h.cpp -o h_ext >/dev/null 2>&1 || cbad="$cbad h1"
+  $G -std=c++26 -D_GLIBCXX_ASSERTIONS h.cpp -o h_gcc >/dev/null 2>&1 || cbad="$cbad h2"
+  a="$(run h_none)" b="$(run h_ext)" c="$(run h_gcc)" d="no p2996"
+  if [[ -x "$P" ]]; then
+    "$P" -std=c++26 h.cpp -o h_p >/dev/null 2>&1 || cbad="$cbad h3"
+    d="$(run h_p)"
+  fi
+  # h0 must run and end normally: 0-125 (126/127: did not run; 128+: a signal).
+  if [[ -z "$cbad" && "$def" == 2 && "$a" -le 125 && "$b" == 132 && "$c" == 134 && "$d" == 132 ]]; then
+    res H2 PASS "apt libc++ default NONE (2): no trap; EXTENSIVE: exit 132 (SIGILL); _GLIBCXX_ASSERTIONS: 134 (SIGABRT); p2996 default: 132"
+  else res H2 FAIL "${cbad:+compile failed:$cbad; }apt default $def exit $a (want 0-125); extensive $b (want 132); glibcxx $c (want 134); p2996 $d (want 132)"; fi
+fi
+
+# --- K. Dependencies -------------------------------------------------------------
+
+want K1 && res K1 N/A "project check (triplets/x64-linux-*.cmake); no C++ project in this repo yet (D5)"
+if want K2; then
+  v="$(vcpkg version 2>&1 | head -1)"
+  [[ "$v" == *version* ]] && res K2 PASS "$v" || res K2 FAIL "${v:-vcpkg not found}"
+fi
+
+# --- E. Editor ----------------------------------------------------------------------
+
+want E1 && res E1 N/A "project check (compile_commands.json after configure); no C++ project in this repo yet"
+if want E2; then
+  cv="$("$CLANGD" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+  lv="$($L --version | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  mkdir -p e2 && printf '#include <vector>\n#include <print>\nint main(){std::vector<int> v{1}; std::println("{}", v[0]);}\n' >e2/e.cpp
+  printf '[{"directory":"%s","file":"e.cpp","arguments":["clang++-23","-std=c++26","-c","e.cpp"]}]\n' "$PROBE/e2" >e2/compile_commands.json
+  o="$(cd e2 && timeout 120 "$CLANGD" --check=e.cpp 2>&1)"
+  ok=no
+  [[ "$o" == *"All checks completed, 0 errors"* && "$o" == *"include/c++/16"* ]] && ok=yes
+  if [[ $ok == yes && -n "$cv" && "$cv" == "$lv" ]]; then res E2 PASS "clangd $cv = clang $lv; 0 errors on libstdc++ 16"; else
+    res E2 FAIL "clangd ${cv:-missing} vs clang-23 $lv (apt clangd-23 needs libabsl20260107, absent in 26.10); check: $ok"
+  fi
+fi
+if want E3; then
+  if [[ -x "$P2996/bin/clangd" ]]; then
+    mkdir -p e3 && cp refl.cpp e3/ && printf -- '-std=c++26\n-freflection-latest\n' >e3/compile_flags.txt
+    o="$(cd e3 && timeout 120 "$P2996/bin/clangd" --check=refl.cpp 2>&1 | tail -1)"
+    [[ "$o" == *"All checks completed, 0 errors"* ]] && res E3 PASS "clangd (p2996): 0 errors on reflection code" || res E3 FAIL "$o"
+  else res E3 FAIL "$P2996/bin/clangd not found"; fi
+fi
+
+# --- T. Analysis --------------------------------------------------------------------
+
+want T1 && res T1 N/A "rule: LLVM 23 tools for plain projects, p2996 tools for reflection projects (P7)"
+if want T2; then
+  o="$(timeout 30 scan-build-23 --help 2>&1 | head -1)"
+  [[ "$o" == "USAGE: scan-build"* ]] && res T2 PASS "$o" || res T2 FAIL "$o"
+fi
+if want T3; then
+  iw="$(command -v include-what-you-use iwyu 2>/dev/null | head -1)"
+  v="$([[ -n "$iw" ]] && "$iw" --version 2>&1 | head -1)"
+  [[ "$v" == *"clang version 23"* ]] && res T3 PASS "$v" ||
+    res T3 FAIL "no IWYU built against LLVM 23 (${v:-none installed}; the archive iwyu is 0.23 on clang 19)"
+fi
+if want T4; then
+  ok=""
+  for f in realtime type; do $L -std=c++26 -fsanitize=$f p.cpp -o t_$f >/dev/null 2>&1 && [[ "$(./t_$f)" == ok ]] && ok="$ok $f"; done
+  $L -fsanitize=fuzzer "$PROBE/fuzz.cpp" -o t_fz >/dev/null 2>&1 && ./t_fz -runs=16 >t_fz.log 2>&1 && grep -q 'Done 16 runs' t_fz.log && ok="$ok fuzzer"
+  [[ "$ok" == " realtime type fuzzer" ]] && res T4 PASS "rtsan, tysan run; libFuzzer fuzz.cpp: Done 16 runs, exit 0" || res T4 FAIL "passed:${ok:- none}"
+fi
+if want T5; then
+  v="$(valgrind --version)"
+  printf '#include <cstdio>\nint main(){int* p=new int[2]; int r=p[2]; delete[] p; std::printf("%%d\\n", r>0);}\n' >inv.cpp
+  $G -g -O0 leak.cpp -o vl >/dev/null 2>&1 && $G -g -O0 inv.cpp -o vi >/dev/null 2>&1 && $G -std=c++26 -O2 p.cpp -o vp >/dev/null 2>&1
+  a="$(valgrind --leak-check=full ./vl 2>&1 | grep -c 'definitely lost: 16 bytes')"
+  b="$(valgrind ./vi 2>&1 | grep -c 'Invalid read of size 4')"
+  c="$(valgrind --tool=callgrind --callgrind-out-file=cg.out ./vp 2>&1 | grep -c 'Collected')"
+  d="$(valgrind --tool=cachegrind --cache-sim=yes --cachegrind-out-file=cc.out ./vp 2>&1 | grep -c 'D1  miss rate')"
+  [[ "$a" -ge 1 && "$b" -ge 1 && "$c" -ge 1 && "$d" -ge 1 ]] && res T5 PASS "$v: memcheck leak and invalid read; callgrind; cachegrind" ||
+    res T5 FAIL "$v: leak $a, invalid read $b, callgrind $c, cachegrind $d"
+fi
+if want T6; then
+  have=""
+  for t in cppcheck ClangBuildAnalyzer clang-uml mrdocs; do command -v $t >/dev/null && have="$have $t"; done
+  res T6 N/A "tier-2 tools (D19); installed:${have:- none}"
+fi
+if want T7; then
+  rm -f xray-log.*
+  $L -std=c++26 -fxray-instrument -fxray-instruction-threshold=1 p.cpp -o px >/dev/null 2>&1 &&
+    XRAY_OPTIONS="patch_premain=true xray_mode=xray-basic" ./px >/dev/null 2>&1
+  ls xray-log.* >/dev/null 2>&1 && res T7 PASS "xray-log written (clang 23)" || res T7 FAIL "no xray-log"
+fi
+
+# --- R. Profiling -------------------------------------------------------------------
+
+$G -std=c++26 -O2 p.cpp -o rp >/dev/null 2>&1
+if want R1; then
+  v="$(perf --version 2>&1)"
+  [[ "$v" == "perf version"* ]] && res R1 PASS "$v (linux-perf $(dpkg-query -W -f '${Version}' linux-perf)) $HK" || res R1 FAIL "${v:-perf not found} $HK"
+fi
+if want R2; then
+  o="$(perf stat -x, -e cycles,instructions,cache-misses,branch-misses -- ./rp 2>&1 >/dev/null)"
+  n="$(grep -cE '^[0-9]+,' <<<"$o")"
+  [[ "$n" == 4 ]] && res R2 PASS "cycles, instructions, cache-misses, branch-misses counted (--privileged); outside the Level-1 gate (D46) $HK" ||
+    res R2 FAIL "$n of 4 counters: $(head -1 <<<"$o") $HK"
+fi
+if want R3; then
+  perf record -q -F 999 -g -o r3.data -- ./rp >/dev/null 2>&1
+  s="$(perf report -i r3.data --stdio 2>/dev/null | grep -c '%')"
+  [[ "$s" -ge 1 ]] && res R3 PASS "perf record + report: $s sample lines $HK" || res R3 FAIL "perf record wrote no samples $HK"
+fi
+if want R4; then
+  printf 'int dot(const int*a,const int*b,int n){int s=0;for(int i=0;i<n;++i)s+=a[i]*b[i];return s;}\n' >k.cpp
+  o="$($L -O2 -march=znver3 -S k.cpp -o k.s 2>&1 && llvm-mca-23 -mcpu=znver3 k.s 2>/dev/null | grep -m1 Iterations)"
+  q="$([[ -x "$P" ]] && "$P" -O2 -march=znver3 -S k.cpp -o kp.s 2>&1 && "$P2996/bin/llvm-mca" -mcpu=znver3 kp.s 2>/dev/null | grep -m1 Iterations)"
+  [[ "$o" == *100* && "$q" == *100* ]] && res R4 PASS "llvm-mca -mcpu=znver3: Iterations 100 (clang 23 and p2996)" || res R4 FAIL "clang23: ${o:-fail}; p2996: ${q:-fail}"
+fi
+if want R5; then
+  $L -std=c++26 -ftime-trace -c p.cpp -o p.o >/dev/null 2>&1
+  [[ -f p.json ]] && res R5 PASS "p.json written" || res R5 FAIL "no p.json"
+fi
+if want R6; then
+  v="$(hyperfine --version 2>&1 | head -1)"
+  [[ "$v" == hyperfine* ]] && res R6 PASS "$v" || res R6 FAIL "${v:-hyperfine not found}"
+fi
+if want R7; then
+  c() { valgrind --tool=callgrind --callgrind-out-file=/dev/null ./rp 2>&1 | awk '/Collected/ {print $4}'; }
+  a="$(c)" b="$(c)"
+  [[ -n "$a" && "$a" == "$b" ]] && res R7 PASS "callgrind instruction count $a, identical on two runs (D46 Level-1 metric)" || res R7 FAIL "runs: '$a' '$b'"
+fi
+
+# --- U. CPU target --------------------------------------------------------------------
+
+targets="x86-64 x86-64-v3 x86-64-v3+tune znver3"
+tflags() { case "$1" in x86-64) echo "-march=x86-64" ;; x86-64-v3) echo "-march=x86-64-v3" ;; x86-64-v3+tune) echo "-march=x86-64-v3 -mtune=znver3" ;; znver3) echo "-march=znver3" ;; esac }
+if want U1; then
+  bad=""
+  for t in $targets; do
+    # shellcheck disable=SC2046
+    $G -O2 $(tflags "$t") -c -x c++ /dev/null -o /dev/null 2>/dev/null || bad="$bad gcc:$t"
+    # shellcheck disable=SC2046
+    $L -O2 $(tflags "$t") -c -x c++ /dev/null -o /dev/null 2>/dev/null || bad="$bad clang:$t"
+  done
+  nat="$($G -march=native -Q --help=target 2>/dev/null | awk '$1=="-march=" {print $2; exit}')"
+  [[ -z "$bad" && "$nat" == znver3 ]] && res U1 PASS "both compilers accept x86-64, x86-64-v3, -mtune=znver3, znver3; gcc -march=native = $nat" ||
+    res U1 FAIL "rejected:${bad:- none}; -march=native = ${nat:-?}"
+fi
+if want U2; then
+  g="$(diff <($G -march=x86-64-v3 -Q --help=target | awk '$2=="[enabled]" && $1 ~ /^-m/ {print $1}' | sort) \
+    <($G -march=znver3 -Q --help=target | awk '$2=="[enabled]" && $1 ~ /^-m/ {print $1}' | sort) | sed -n 's/^> -m//p' | tr '\n' ' ')"
+  res U2 N/A "znver3 adds over x86-64-v3 (gcc): ${g% }; a -march=znver3 binary needs these on every machine that runs it"
+fi
+if want U3; then
+  out="" ref="" bad=""
+  for t in $targets; do
+    # shellcheck disable=SC2046
+    $G -std=c++26 -O2 $(tflags "$t") bench.cpp -o "b_$t" >/dev/null 2>&1 || {
+      bad="$bad $t:build"
+      continue
+    }
+    r="$("./b_$t")"
+    [[ -z "$ref" ]] && ref="$r"
+    [[ "$r" == "$ref" ]] || bad="$bad $t:output"
+    out="$out $t=$(best_ms "./b_$t")ms/$(instr_u "./b_$t")i"
+  done
+  [[ -z "$bad" ]] && res U3 N/A "[timing] gcc -O2 bench, best of 5 on cores 2-5:$out" || res U3 FAIL "[timing]$bad;$out"
+fi
+if want U4; then
+  # Link time: the same objects, each linker, best of 5.
+  mkdir -p u4 && for i in $(seq 1 64); do printf '#include <string>\n#include <vector>\nstd::string f%d(std::vector<int> v){ return std::to_string(v.size() + %d); }\n' "$i" "$i" >"u4/f$i.cpp"; done
+  printf '#include <print>\nint main(){ std::println("ok"); }\n' >u4/main.cpp
+  bad=""
+  for f in u4/*.cpp; do $G -std=c++26 -O2 -g -c "$f" -o "${f%.cpp}.o" || bad="$bad compile:${f#u4/}"; done
+  out=""
+  # clang drives all three links: it finds ld.lld beside itself, where g++-16 looks for an
+  # unversioned ld.lld that LLVM 23's packages do not install.
+  for ld in bfd lld mold; do
+    rm -f "u4/a_$ld"
+    ms="$(best_ms $L -fuse-ld=$ld u4/*.o -o u4/a_$ld)"
+    out="$out $ld=${ms:-?}ms"
+    [[ -n "$ms" && "$(./u4/a_$ld 2>&1)" == ok ]] || bad="$bad $ld"
+  done
+  [[ -z "$bad" ]] && res U4 N/A "[timing] link 65 objects with -g, best of 5:$out" || res U4 FAIL "[timing] failed:$bad;$out"
+fi
+if want U5; then
+  ref="$($G -std=c++26 -O2 bench.cpp -o u5r && ./u5r)" ok=""
+  [[ "$($G -std=c++26 -O2 -flto=auto bench.cpp -o u5a 2>&1 && ./u5a)" == "$ref" ]] && ok="$ok gcc-lto"
+  [[ "$($L -std=c++26 -O2 -flto=thin -fuse-ld=lld bench.cpp -o u5b 2>&1 && ./u5b)" == "$ref" ]] && ok="$ok clang-thinlto"
+  # GCC names the profile after the output file, so both builds use -o u5g.
+  $G -std=c++26 -O2 -fprofile-generate bench.cpp -o u5g >/dev/null 2>&1 && ./u5g >/dev/null &&
+    [[ "$($G -std=c++26 -O2 -fprofile-use -Werror=missing-profile bench.cpp -o u5g 2>&1 && ./u5g)" == "$ref" ]] && ok="$ok gcc-pgo"
+  $L -std=c++26 -O2 -fprofile-generate bench.cpp -o u5c >/dev/null 2>&1 && LLVM_PROFILE_FILE=u5.profraw ./u5c >/dev/null &&
+    llvm-profdata-23 merge -o u5.profdata u5.profraw &&
+    [[ "$($L -std=c++26 -O2 -fprofile-use=u5.profdata bench.cpp -o u5d 2>&1 && ./u5d)" == "$ref" ]] && ok="$ok clang-pgo"
+  [[ "$ok" == " gcc-lto clang-thinlto gcc-pgo clang-pgo" ]] && res U5 PASS "LTO and PGO build and give the same output:$ok" || res U5 FAIL "passed:${ok:- none}"
+fi
+
+# --- V. Container runtime ---------------------------------------------------------------
+
+if want V1; then
+  cm="$(cat /sys/fs/cgroup/cpu.max)" mm="$(cat /sys/fs/cgroup/memory.max)" n="$(nproc)"
+  [[ "$cm" == "max "* && "$mm" == max && -n "$HOST_THREADS" && "$n" == "$HOST_THREADS" ]] &&
+    res V1 PASS "cpu.max '$cm', memory.max $mm, nproc $n = host threads $HK" ||
+    res V1 FAIL "cpu.max '$cm', memory.max $mm, nproc $n, host ${HOST_THREADS:-unknown} $HK"
+fi
+if want V2; then
+  ce="$(awk '/^CapEff/ {print $2}' /proc/self/status)" sc="$(awk '/^Seccomp:/ {print $2}' /proc/self/status)"
+  perfmon=$(((16#$ce >> 38) & 1)) sysadmin=$(((16#$ce >> 21) & 1))
+  [[ $perfmon == 1 && $sysadmin == 1 && "$sc" == 0 ]] &&
+    res V2 PASS "CapEff $ce: all capabilities incl. PERFMON and SYS_ADMIN; no seccomp filter: --privileged (D137) $HK" ||
+    res V2 FAIL "CapEff $ce (perfmon $perfmon, sys_admin $sysadmin); seccomp $sc $HK"
+fi
+if want V3; then
+  pm="$(cat /sys/fs/cgroup/pids.max)"
+  ok=no
+  [[ "$pm" == max || "$pm" -ge 32768 ]] && ok=yes
+  ev="pids.max $pm; nofile $(ulimit -n); memlock $(ulimit -l); /dev/shm $(df -h /dev/shm | awk 'NR==2 {print $2}'); pid 1 $(cat /proc/1/comm)"
+  [[ $ok == yes ]] && res V3 PASS "$ev $HK" || res V3 FAIL "$ev (pids.max below the kernel's default pid_max 32768) $HK"
+fi
+if want V4; then
+  fs="$(stat -fc %T "$BUILD_DIR" 2>/dev/null)"
+  mkdir -p v4/src && for i in $(seq 1 192); do printf '#include <map>\n#include <string>\n#include <vector>\nint f%d(){ std::map<std::string,std::vector<int>> m; m["a"].push_back(%d); return int(m.size()); }\n' "$i" "$i" >"v4/src/f$i.cpp"; done
+  # shellcheck disable=SC2016 # ${s} is CMake syntax, written literally
+  printf 'cmake_minimum_required(VERSION 4.5)\nproject(v4 LANGUAGES CXX)\nfile(GLOB s src/*.cpp)\nadd_library(v4 STATIC ${s})\n' >v4/CMakeLists.txt
+  t() { # t BUILD-DIR: configure, then time a full -j build (best of 3, cleaned each time)
+    rm -rf "$1" && cmake -S v4 -B "$1" -G Ninja -DCMAKE_CXX_COMPILER=$G >/dev/null 2>&1 &&
+      hyperfine -N -r 3 -p "ninja -C $1 -t clean" --export-json hf4.json -- "ninja -C $1 -j$(nproc)" >/dev/null 2>&1 &&
+      python3 -I "$PROBE/hf_best.py" hf4.json | tr -d " "
+  }
+  o="$(t "$PROBE/v4b")" v="$(t "$BUILD_DIR/v4b")"
+  rm -rf "$BUILD_DIR/v4b"
+  if [[ "$fs" != overlay* && -n "$o" && -n "$v" ]]; then
+    res V4 PASS "[timing] \$BUILD_DIR on $fs, not overlayfs; 192-file build: overlayfs ${o}ms, $fs ${v}ms"
+  else res V4 FAIL "[timing] \$BUILD_DIR '$BUILD_DIR' on ${fs:-missing}; overlayfs ${o:-?}ms, volume ${v:-?}ms"; fi
+fi
+if want V5; then
+  c=/sys/devices/system/cpu
+  res V5 N/A "host settings, reported only: governor $(cat $c/cpu0/cpufreq/scaling_governor 2>/dev/null), driver $(cat $c/cpu0/cpufreq/scaling_driver 2>/dev/null), EPP $(cat $c/cpu0/cpufreq/energy_performance_preference 2>/dev/null), boost $(cat $c/cpufreq/boost 2>/dev/null), SMT $(cat $c/smt/control 2>/dev/null), THP $(sed 's/.*\[\(.*\)\].*/\1/' /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null) $HK"
+fi
+exit 0
