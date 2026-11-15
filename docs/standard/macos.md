@@ -437,13 +437,18 @@ breaks lldb-p2996 again. Re-run DB3 after any Python change.
 **DB4. lldb-dap.** Probe: `"$P2996/bin/lldb-dap-p2996" --help | head -1`.
 PASS if it prints usage (`OVERVIEW: LLDB DAP`). Today: PASS on the
 build that carries DB3 fix 1; a build without it fails with the same missing
-`libpython3.15.dylib` as DB3. A full session also works (2026-11-14, driven
-by a small DAP client over stdio, the way an editor does): `launch` of a
-p2996-built program, a breakpoint that reports `verified` and stops with
-reason `breakpoint`, `variables` showing `v = size=3` with children `1 2 3`,
-`s = "p2996"` and a struct, `evaluate` of `pt.x + v.size()` giving `10`, then
-`continue` to `exitCode 0`. A breakpoint on a line past the end of the file
-reports `verified: false`.
+`libpython3.15.dylib` as DB3.
+
+DB4 session probe: debug a program through `lldb-dap-p2996` with the client
+in [Appendix: lldb-dap probe](#appendix-lldb-dap-probe). It launches the
+program, sets a breakpoint, reads `v` and `s` from the locals, continues,
+and checks the exit code. PASS if it ends with `PASS` and exits 0: the
+breakpoint is `verified`, the stop reason is `breakpoint`, `v` has children
+`1 2 3`, `s` is `"p2996"`, and the program exits 0. Today: PASS (2026-11-14,
+run twice). With line 100, past the end of the file, it prints
+`breakpoint verified: False` and `FAIL: program exited without stopping at
+line 100`, and exits 1. An earlier hand-run session also showed `evaluate`
+of `pt.x + v.size()` giving `10`.
 
 **DB5. In-tree debugserver, code-signed.** Why: `LLDB_USE_SYSTEM_DEBUGSERVER=OFF`
 makes the debugserver match lldb-p2996 exactly; macOS refuses to let an
@@ -785,6 +790,118 @@ int main(int argc, char**) {
   int big = INT_MAX; big += argc;
   return r + big;
 }
+```
+
+### Appendix: lldb-dap probe
+
+Two files: the program it debugs, and a small client that speaks the Debug Adapter Protocol to `lldb-dap` over stdio, the way an editor does. It needs only the Python standard library.
+
+```cpp
+// dap.cpp: the program the lldb-dap probe debugs.
+#include <cstdio>
+#include <string>
+#include <vector>
+struct Point { int x; double y; };
+int main() {
+  std::vector<int> v{1, 2, 3};
+  std::string s = "p2996";
+  Point pt{7, 2.5};
+  std::printf("%zu %s %d\n", v.size(), s.c_str(), pt.x);  // breakpoint line: 10
+  return 0;
+}
+```
+
+Run (exit 0 and a last line `PASS` on success; line 10 is the `printf` line):
+
+```sh
+"$P2996/bin/clang++-p2996" -g -std=c++26 dap.cpp -o dapd
+python3 -I dap_probe.py "$P2996/bin/lldb-dap-p2996" dapd dap.cpp 10
+```
+
+```python
+# dap_probe.py: drive lldb-dap over stdio the way an editor does.
+# Usage: python3 -I dap_probe.py <lldb-dap> <program> <source> <line>
+import json, subprocess, sys, time
+
+dap, prog, src, line = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+p = subprocess.Popen([dap], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+seq, pending = 0, []
+
+def send(cmd, args=None):
+    global seq
+    seq += 1
+    body = json.dumps({"seq": seq, "type": "request", "command": cmd,
+                       "arguments": args or {}}).encode()
+    p.stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    p.stdin.flush()
+    return seq
+
+def read():
+    hdr = b""
+    while not hdr.endswith(b"\r\n\r\n"):
+        c = p.stdout.read(1)
+        if not c:
+            sys.exit("FAIL: lldb-dap exited")
+        hdr += c
+    n = int(hdr.decode().lower().split("content-length:")[1].split("\r\n")[0])
+    return json.loads(p.stdout.read(n))
+
+def wait(pred, timeout=60):
+    for i, m in enumerate(pending):  # messages that arrived out of order
+        if pred(m):
+            return pending.pop(i)
+    end = time.time() + timeout
+    while time.time() < end:
+        m = read()
+        if pred(m):
+            return m
+        pending.append(m)
+    sys.exit("FAIL: timed out")
+
+def req(cmd, args=None):
+    s = send(cmd, args)
+    r = wait(lambda m: m.get("type") == "response" and m.get("request_seq") == s)
+    if not r.get("success"):
+        err = (r.get("body") or {}).get("error", {}).get("format")
+        sys.exit(f"FAIL: {cmd}: {r.get('message') or err}")
+    return r.get("body") or {}
+
+def event(*names):
+    return lambda m: m.get("type") == "event" and m.get("event") in names
+
+req("initialize", {"clientID": "probe", "adapterID": "lldb-dap",
+                   "linesStartAt1": True, "columnsStartAt1": True,
+                   "pathFormat": "path"})
+launch = send("launch", {"program": prog})
+wait(event("initialized"))
+bp = req("setBreakpoints", {"source": {"path": src},
+                            "breakpoints": [{"line": line}]})["breakpoints"][0]
+print("breakpoint verified:", bp.get("verified"))
+req("configurationDone")
+wait(lambda m: m.get("type") == "response" and m.get("request_seq") == launch)
+stop = wait(event("stopped", "exited", "terminated"))
+reason = stop.get("body", {}).get("reason")
+print("stopped:", reason)
+if stop["event"] != "stopped":
+    sys.exit(f"FAIL: program {stop['event']} without stopping at line {line}")
+tid = stop["body"]["threadId"]
+frame = req("stackTrace", {"threadId": tid, "levels": 1})["stackFrames"][0]
+scopes = req("scopes", {"frameId": frame["id"]})["scopes"]
+local = next(s for s in scopes if s["name"].lower().startswith("local"))
+vars_ = {v["name"]: v for v in req("variables", {"variablesReference":
+                                                 local["variablesReference"]})["variables"]}
+kids = [k["value"] for k in req("variables", {"variablesReference":
+                                              vars_["v"]["variablesReference"]})["variables"]]
+print("v =", vars_["v"]["value"], kids, "| s =", vars_["s"]["value"])
+req("continue", {"threadId": tid})
+code = wait(event("exited"))["body"]["exitCode"]
+print("exit code:", code)
+req("disconnect", {"terminateDebuggee": True})
+p.wait(timeout=20)
+ok = (bp.get("verified") and reason == "breakpoint" and kids == ["1", "2", "3"]
+      and vars_["s"]["value"] == '"p2996"' and code == 0)
+print("PASS" if ok else "FAIL")
+sys.exit(0 if ok else 1)
 ```
 
 ## Sources
