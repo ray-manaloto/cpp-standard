@@ -29,6 +29,15 @@ inner="$root/.mise/tasks/certify/ubuntu-probes"
   echo "certify: $doc or $inner not found" >&2
   exit 2
 }
+# Rule 4 needs mise's auto-install off for the whole run: by the time this
+# task starts, a plain `mise run` has already installed any missing tool of
+# this repository's config on the Mac, and a shim this launcher calls can still install one.
+# The task cannot undo that, so it refuses to run and names the safe form
+# (docs/designs/level-1/research/mise-auto-install.md).
+if [[ "${MISE_AUTO_INSTALL:-}" != 0 ]]; then
+  echo "certify: run it as MISE_AUTO_INSTALL=0 mise run certify:ubuntu ...; with auto-install on, mise can install a missing tool before or during the run (playbook rule 4)" >&2
+  exit 2
+fi
 dest="${CERT_UBUNTU_SSH:-}"
 [[ -n "$dest" ]] || {
   echo "certify: set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC)" >&2

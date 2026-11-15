@@ -14,16 +14,19 @@ dap.cpp, dap_probe.py, the CMake probe) from the playbook's appendix at run
 time, so edit them there, not in the task.
 
 It installs nothing and changes nothing outside a temporary scratch
-directory (playbook rule 4). A full host run takes about a minute.
+directory (playbook rule 4). A full host run takes about a minute. It
+refuses to start (exit 2) unless `MISE_AUTO_INSTALL=0` is set: without it,
+`mise run` installs any missing tool of this repository's config before the
+task starts, so a check could PASS on a tool the Mac did not have.
 
 ## Run it
 
 From the repository root:
 
 ```bash
-mise run certify:macos --allow-fail                 # the full report on stdout
-mise run certify:macos --only DB,P4 --allow-fail    # one section or a few checks
-mise run certify:macos --allow-fail --keep          # keep the scratch dir and its logs
+MISE_AUTO_INSTALL=0 mise run certify:macos --allow-fail                 # the full report on stdout
+MISE_AUTO_INSTALL=0 mise run certify:macos --only DB,P4 --allow-fail    # one section or a few checks
+MISE_AUTO_INSTALL=0 mise run certify:macos --allow-fail --keep          # keep the scratch dir and its logs
 ```
 
 Without `--allow-fail` the task exits 1 when any check fails, except the
@@ -42,7 +45,7 @@ The committed baseline is `docs/standard/reports/macos-host-<date>.txt`.
 After a toolchain change, write a new one and compare:
 
 ```bash
-mise run certify:macos --allow-fail --out docs/standard/reports/macos-host-$(date +%F).txt
+MISE_AUTO_INSTALL=0 mise run certify:macos --allow-fail --out docs/standard/reports/macos-host-$(date +%F).txt
 git diff --no-index docs/standard/reports/macos-host-2026-11-15.txt docs/standard/reports/macos-host-$(date +%F).txt
 ```
 
