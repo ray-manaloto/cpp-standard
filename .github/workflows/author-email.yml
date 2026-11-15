@@ -2,6 +2,11 @@
 # author and committer, never a personal email (owner ruling, 2026-11-15).
 # This automates the check that used to be done by hand after each merge.
 # It reads only the push event payload: no checkout, no actions, no token.
+# The payload is complete for this repository: the merge queue squashes
+# (.github/rulesets/main.json, merge_method SQUASH), so a PR's own commits
+# never reach main; each PR lands as one squash commit (a queue push can
+# carry several PRs, one commit each, all in the payload). If the merge
+# method changes, check git log before..after instead.
 # Advisory: it is not a required check, because merges reach main through
 # the merge queue and a push check can only report after the fact.
 name: author-email
