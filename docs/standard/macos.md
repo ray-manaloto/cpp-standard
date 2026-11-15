@@ -67,7 +67,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | p2996 coverage | PASS with the matching tools | use `llvm-cov-p2996 gcov`, never another LLVM's |
 | `g++` / `gcc` on `PATH` | Apple clang (`/usr/bin/g++`, `/usr/bin/gcc`); no stray mise shims (B2 PASS) | call `g++-16` by name |
 | `ccache` on `PATH` | not installed (B2 PASS) | use sccache (D9); ccache does not cache C++20 modules |
-| Tart 2.41.1 | PASS (V1), from mise | none needed; V2 and V3 wait for the image pull and a guest run |
+| Tart 2.41.1 | PASS (V1, V2), from mise | none needed; V3 waits for a guest run |
 
 ## The end state
 
@@ -982,7 +982,8 @@ host (macOS 27.2 with Xcode). It replaces D24's `-vanilla` image (D136).
 Digest on 2026-11-14:
 `sha256:d7641b1d985fd53fbac071c663bf249007b9b387e16b7d576144588acb1d93f9`.
 Probe: `tart list | grep golden-gate-xcode`. PASS if the local image was
-pulled by that digest. Today: not run; Tart is not installed (V1).
+pulled by that digest. Today: PASS. `tart pull` by the digest above wrote a
+90 GB image (140 GB disk) on 2026-11-15.
 
 **V3. Inside the guest (VM).** Run every section above inside the guest.
 Expected differences: R2 N/A; DB5 needs the certificate (step 1) and
@@ -990,7 +991,9 @@ Developer mode (step 5, also A6) set up while the golden image was built,
 and A3 needs `sudo xcodebuild -runFirstLaunch` there too, unless the base
 image already ran it (untested). These are one-time settings per Mac or
 VM: the host's A3 and A6 PASS says nothing about a guest.
-Today: not run; Tart is not installed (V1).
+Today: not run. The pulled image has Xcode and none of this standard's
+other tools, so the guest is set up first; the certify run itself installs
+nothing (rule 4).
 
 ## Report
 
