@@ -548,8 +548,8 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    `llvm_codesign` in `llvm/cmake/modules/AddLLVM.cmake`, whose
    `CMAKE_CODESIGN` defaults to `xcrun codesign` (read in the p2996
    source at `562409c79`, not run). Here both `codesign` and
-   `xcrun -f codesign` resolve to `/usr/bin/codesign`. Open Keychain
-   Access:
+   `xcrun -f codesign` resolve to `/usr/bin/codesign`.
+   Open Keychain Access:
    `open "/System/Library/CoreServices/Applications/Keychain Access.app"`.
    Then System Keychains, System, My Certificates, expand `lldb_codesign`,
    double-click "Imported Private Key", Access Control. Choose "Confirm
