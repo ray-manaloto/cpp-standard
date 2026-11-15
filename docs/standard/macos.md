@@ -483,12 +483,12 @@ A6): `$P2996/bin/debugserver-p2996`, `Authority=lldb_codesign`,
 `valid on disk`, `satisfies its Designated Requirement`, and
 `stop reason = breakpoint 1.1`. `ps`, run inside the stopped session
 (`platform shell /bin/ps -axo pid=,comm=`), lists the build's own
-`bin/debugserver`, not Xcode's. The lldb-dap probe (DB4) also passes on
-it. To see which debugserver it starts, add
+`bin/debugserver`, not Xcode's. The lldb-dap probe (DB4) also
+passes on this build. To see which debugserver it starts, add
 `subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,comm="])` to the probe
 right after its `v =` line, while the program is stopped at the
 breakpoint. On `current` it lists the same `bin/debugserver`; on
-`-37f3cecb1624`, which has no debugserver of its own, it listed Xcode's.
+`-37f3cecb1624`, which had no debugserver of its own, it listed Xcode's.
 No password dialog appeared, and no debugserver was left running.
 
 Before the switch, `-9f4a6fe02298` (2026-11-14) also passed, built and
@@ -498,8 +498,8 @@ three signing steps (the `build.py` preflight, CMake's `llvm_codesign`,
 the `install.py` re-sign) ran with no keychain dialog; step 2 records the
 check of the CMake-signed copy. With `P2996` set to its `view/`:
 `bin/debugserver-p2996`, `Authority=lldb_codesign`, `valid on disk`,
-`satisfies its Designated Requirement`, the entitlement
-`com.apple.security.cs.debugger` kept, `--version` exits 0, and
+`satisfies its Designated Requirement`, `--version` exits 0,
+the entitlement `com.apple.security.cs.debugger` kept, and
 `stop reason = breakpoint 1.1`. `ps` in the stopped session lists the
 build's own `bin/debugserver`. The lldb-dap probe with the `ps` line also
 passes and lists the same debugserver. No debugserver was left running.
@@ -528,17 +528,22 @@ Earlier results:
   --preserve-metadata=identifier,entitlements,flags,runtime`, and refuses
   the build unless `codesign --verify --strict` and `debugserver
   --version` pass.
-- `-37f3cecb1624` (on disk, no longer linked): FAIL on the first three
-  lines. There is no debugserver under it because that p2996 build sets
-  `LLDB_USE_SYSTEM_DEBUGSERVER=ON` (its `CMakeCache.txt` has
-  `LLDB_USE_SYSTEM_DEBUGSERVER:BOOL=ON`). Building one signed with
-  `lldb_codesign` also needs that certificate, which this Mac now has
-  (installed 2026-11-14). The breakpoint part passes: lldb-p2996 stops at
-  the breakpoint using Xcode's debugserver
+- `-37f3cecb1624` (moved out of the p2996 prefix on 2026-11-14; it is in
+  the macOS Trash, so it can be restored until the Trash is emptied; the
+  build agent reports it first checked that no link resolved into it):
+  FAIL on the first three lines. There was no debugserver under it
+  because that p2996 build set `LLDB_USE_SYSTEM_DEBUGSERVER=ON` (its
+  `CMakeCache.txt` had `LLDB_USE_SYSTEM_DEBUGSERVER:BOOL=ON`). Building one
+  signed with `lldb_codesign` also needs that certificate, which this Mac
+  now has (installed 2026-11-14). The breakpoint part passed: lldb-p2996
+  stopped at the breakpoint using Xcode's debugserver
   (`/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Resources/debugserver`,
   seen in `ps` during the run; the same file as
   `.../LLDB.framework/Versions/A/Resources/debugserver`). `find -L` is
-  needed because `$P2996` is a link.
+  needed because `$P2996` is a link. The Xcode-debugserver fallback does
+  not need that build: `current`'s `lldb-p2996` with
+  `LLDB_DEBUGSERVER_PATH` set to Xcode's debugserver also stops at the
+  breakpoint, and `ps` lists Xcode's debugserver (2026-11-14).
 
 Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
 
