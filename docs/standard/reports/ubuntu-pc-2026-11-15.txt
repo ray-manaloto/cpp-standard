@@ -1,8 +1,8 @@
 Ubuntu certification  pc  2026-11-15
 Ubuntu 26.10  kernel 7.2.15-1-omarchy (container on the PC's Omarchy kernel)  glibc 2.44
-CPU AMD Ryzen 9 5900X 12-Core Processor  Docker 29.9.2  image f190c0212e77
-docker run flags: --privileged --hostname cert -v cpp-standard-cert-build:/build -v cpp-standard-p2996-562409c79426-9a47cc76800b:/opt/p2996:ro
-Timing pass: other containers used 11 ms CPU during the timing pass; host load 4.20 -> 11.36
+CPU AMD Ryzen 9 5900X 12-Core Processor  Docker 29.9.2  image 6b65ab1fac77
+docker run flags: --privileged --hostname cert -v cpp-standard-cert-build:/build -v cpp-standard-p2996-562409c79426-f3fb14942dd6:/opt/p2996:ro
+Timing pass: other containers used 13 ms CPU during the timing pass; host load 1.34 -> 10.31
 [host kernel] marks a kernel-dependent check: it ran in a container on the PC's Omarchy kernel, not Ubuntu's.
 A1    PASS Ubuntu 26.10 (stonking)
 A2    PASS base ubuntu:26.10@sha256:b5194b8e5898...
@@ -36,7 +36,7 @@ P4    PASS members=2; import std ok; fired: asan tsan ubsan [host kernel]
 P5    PASS 15 tools; polly-ok
 P6    PASS all four utilities
 P7    PASS clang-tidy, clang-format, clang-include-cleaner: exit 0, 0 errors
-P8    FAIL no include-what-you-use in $P2996/bin (not built)
+P8    PASS include-what-you-use 0.25 (git:791e69e) based on clang version 21.0.0git (https://github.com/bloomberg/clang-p2996 562409c7942690d59ea470762515f88f24b16e23); flags the unused <vector>
 P9    PASS File 'p.cpp' Lines executed:100.00% of 1
 P10   PASS ok with ld.lld
 DB1   PASS GNU gdb (Ubuntu 17.2-1ubuntu1) 17.2; breakpoint, libstdc++ printers (vector, string), python 42 [host kernel]
@@ -57,31 +57,29 @@ E2    FAIL clangd 23.1.5 vs clang-23 23.1.6 (apt clangd-23 needs libabsl20260107
 E3    PASS clangd (p2996): 0 errors on reflection code
 T1    N/A  rule: LLVM 23 tools for plain projects, p2996 tools for reflection projects (P7)
 T2    PASS USAGE: scan-build [options] <build command> [build options]
-T3    FAIL no IWYU built against LLVM 23 (none installed; the archive iwyu is 0.23 on clang 19)
+T3    PASS include-what-you-use 0.27 (git:c9cbc83) based on Ubuntu clang version 23.1.6 (++20261108033809+c47d7823685a-1~exp1~20261108153913.94); flags the unused <vector>
 T4    PASS rtsan, tysan run; libFuzzer fuzz.cpp: Done 16 runs, exit 0
 T5    PASS valgrind-3.27.1: memcheck leak and invalid read; callgrind; cachegrind
 T6    N/A  tier-2 tools (D19); installed: cppcheck
 T7    PASS xray-log written (clang 23)
 R1    PASS perf version 7.3.0 (linux-perf 7.3.0-10.10) [host kernel]
 R2    PASS cycles, instructions, cache-misses, branch-misses counted (--privileged); outside the Level-1 gate (D46) [host kernel]
-R3    PASS perf record + report: 55 sample lines [host kernel]
+R3    PASS perf record + report: 48 sample lines [host kernel]
 R4    PASS llvm-mca -mcpu=znver3: Iterations 100 (clang 23 and p2996)
 R5    PASS p.json written
 R6    PASS hyperfine 2.0.0
 R7    PASS callgrind instruction count 2065159, identical on two runs (D46 Level-1 metric)
 U1    PASS both compilers accept x86-64, x86-64-v3, -mtune=znver3, znver3; gcc -march=native = znver3
 U2    N/A  znver3 adds over x86-64-v3 (gcc): abm adx aes clflushopt clwb clzero fsgsbase mwaitx pclmul pku prfchw rdpid rdrnd rdseed sha sse4a vaes vpclmulqdq wbnoinvd xsavec xsaveopt xsaves; a -march=znver3 binary needs these on every machine that ru
-U3    N/A  [timing] gcc -O2 bench, best of 5 on cores 2-5: x86-64=244ms/1543403605i x86-64-v3=245ms/1270336749i x86-64-v3+tune=244ms/1270336759i znver3=246ms/1270336742i
-U4    N/A  [timing] link 65 objects with -g, best of 5: bfd=69ms lld=36ms mold=27ms
+U3    N/A  [timing] gcc -O2 bench, best of 5 on cores 2-5: x86-64=241ms/1543403602i x86-64-v3=244ms/1270336752i x86-64-v3+tune=244ms/1270336744i znver3=245ms/1270336751i
+U4    N/A  [timing] link 65 objects with -g, best of 5: bfd=67ms lld=37ms mold=27ms
 U5    PASS LTO and PGO build and give the same output: gcc-lto clang-thinlto gcc-pgo clang-pgo
 V1    PASS cpu.max 'max 100000', memory.max max, nproc 24 = host threads [host kernel]
 V2    PASS CapEff 000001ffffffffff: all capabilities incl. PERFMON and SYS_ADMIN; no seccomp filter: --privileged (D137) [host kernel]
 V3    PASS pids.max 76881; nofile 65536; memlock 8192; /dev/shm 64M; pid 1 sleep [host kernel]
-V4    PASS [timing] $BUILD_DIR on btrfs, not overlayfs; 192-file build: overlayfs 4996ms, btrfs 5024ms
+V4    PASS [timing] $BUILD_DIR on btrfs, not overlayfs; 192-file build: overlayfs 4956ms, btrfs 4982ms
 V5    N/A  host settings, reported only: governor powersave, driver amd-pstate-epp, EPP balance_performance, boost 1, SMT on, THP always [host kernel]
-V6    PASS [timing] compile 5026 vs 5025 ms (+0.0%), bench 244 vs 244 ms (+0.0%) container vs host, best of 3x5; instructions:u compile 36533804752 vs 36537040197, bench 1270489375 vs 1270499648; rootfs 2832 MB of 843 GB free, removed; others 26 ms C
-Summary: 62 PASS, 3 FAIL, 11 N/A
+V6    PASS [timing] compile 5021 vs 5029 ms (-0.2%), bench 243 vs 243 ms (+0.0%) container vs host, best of 3x5; instructions:u compile 36533932135 vs 36538534954, bench 1270489398 vs 1270499651; rootfs 2843 MB of 840 GB free, removed; others 72 ms C
+Summary: 64 PASS, 1 FAIL, 11 N/A
 Missing or wrong:
-  P8: build IWYU branch clang_21 against $P2996 and install it into the p2996 prefix (docs/standard/ubuntu.md, P8)
   E2: clangd matching clang-23 needs llvmorg-23.1.6 or an apt.llvm.org stonking suite (D25)
-  T3: build IWYU against LLVM 23 (the archive iwyu is IWYU 0.23 on clang 19)

@@ -51,7 +51,7 @@ explains each one):
 
 ```sh
 docker run --privileged --hostname cert -v cpp-standard-cert-build:/build \
-  -v cpp-standard-p2996-562409c79426-9a47cc76800b:/opt/p2996:ro cpp-standard-cert-ubuntu:26.10
+  -v cpp-standard-p2996-562409c79426-f3fb14942dd6:/opt/p2996:ro cpp-standard-cert-ubuntu:26.10
 ```
 
 ## Usable today (the PC, 2026-11-15)
@@ -63,12 +63,12 @@ running the probes below on the PC.
 |---|---|---|
 | GCC 16.2.0 (26.10 archive): `-freflection`, `import std` through CMake, ASan, TSan, UBSan, LSan | PASS | none needed |
 | clang 23 (apt.llvm.org `resolute-23`): `import std` through CMake with libc++ and with libstdc++; ASan, TSan, UBSan | PASS | none needed |
-| clang-p2996 562409c7 (amd64, built on the PC): reflection, `import std`, ASan, TSan, UBSan, tools, lldb and lldb-dap | PASS (P, DB4, DB5) except IWYU (P8) | run IWYU builds against LLVM 23 or p2996 later (T3, P8) |
+| clang-p2996 562409c7 (amd64, built on the PC): reflection, `import std`, ASan, TSan, UBSan, tools, lldb and lldb-dap | PASS (P, DB4, DB5), with IWYU 0.25 built in the tree (P8) | none needed |
 | MemorySanitizer | recorded, not certified (C6) | needs an MSan-built libc++, which no toolchain here ships |
 | clang 23's default standard library | libstdc++ (C2) | pass `-stdlib=libc++` in the libc++ presets |
 | apt libc++ hardening | default `NONE` (H2) | every libc++ preset sets `_LIBCPP_HARDENING_MODE` (H1) |
 | `clangd-23` from apt.llvm.org | FAIL (E2): needs `libabsl20260107`, which 26.10 does not have | clangd 23.1.5 from the LLVM release tarball (in the image); its version differs from the apt clang 23.1.6 snapshot |
-| The archive's `iwyu` package | not usable (B2, T3): IWYU 0.23 on clang 19, and it installs the archive `clang` 22, which takes over `cc`, `c++` and `clang++` | leave it out (the image does); IWYU against LLVM 23 is not built yet |
+| The archive's `iwyu` package | not usable (B2, T3): IWYU 0.23 on clang 19, and it installs the archive `clang` 22, which takes over `cc`, `c++` and `clang++` | leave it out (the image does); the image builds IWYU 0.27 against LLVM 23 instead (T3) |
 | GCC `<stacktrace>` | links only with `-lstdc++exp` (L4) | add `-lstdc++exp` to GCC targets that use it |
 | perf, and lldb's default launch (ASLR off) | need more than Docker's default seccomp profile (V2) | the container runs `--privileged` (D137); without it, see V2 |
 | CPU target | `-march=x86-64-v3` (U3, D137) | none needed |
@@ -82,7 +82,8 @@ running the probes below on the PC.
 | GCC 16.2.0 + libstdc++ | 26.10 archive, `g++-16 16.2.0-3ubuntu1` | no | D25. |
 | LLVM / clang 23 + libc++ | apt.llvm.org `llvm-toolchain-resolute-23`, `1:23.1.6~++20261108033809+c47d7823685a-1~exp1~20261108153913.94` | no | D12, D25, D27. apt.llvm.org has no stonking suite. It deletes old snapshots within days, so a rebuild needs new pins; the image ID in the report is the record (D27). |
 | clangd 23.1.5 | `LLVM-23.1.5-Linux-X64.tar.xz` from the llvmorg-23.1.5 release, sha256 `f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a`; its attestation verified on 2026-11-15 with `gh attestation verify <tarball> --bundle <tarball>.jsonl --repo llvm/llvm-project` (exit 0; signer `release-binaries.yml@refs/tags/llvmorg-23.1.5`; the same check with `--repo llvm/clangir` exits 1) | no | E2: the apt `clangd-23` does not install on 26.10. Only `bin/clangd` and `lib/clang` are kept. |
-| clang-p2996 + libc++ | `bloomberg/clang-p2996` at the pinned commit, built in a container on the PC | **yes** | The reflection reference compiler (D30, D32); no prebuilt binary exists. Mounted read-only from a volume, not baked into the image (D49). |
+| include-what-you-use 0.27 | `include-what-you-use/include-what-you-use` at `c9cbc836a1af` (tag 0.27, the `clang_23` head), built in the image's `iwyu` stage against `llvm-23-dev` and `libclang-23-dev` of the same snapshot | **yes** | T3: no package of IWYU for LLVM 23 exists; the archive `iwyu` is 0.23 on clang 19 (B2). Installed in `/opt/iwyu-llvm23`, linked into `/usr/local/bin`. |
+| clang-p2996 + libc++ + IWYU 0.25 | `bloomberg/clang-p2996` at the pinned commit, with IWYU `791e69ea4662` (the `clang_21` head) as an LLVM external project, built in a container on the PC | **yes** | The reflection reference compiler (D30, D32); no prebuilt binary exists. Mounted read-only from a volume, not baked into the image (D49). |
 | binutils 2.47, make 4.4.1, gdb 17.2, valgrind 3.27.1, linux-perf 7.3.0, cppcheck 2.21.0 | 26.10 archive | no | D45, D105, D19. |
 | mise 2026.11.8 | the release tarball, checked by sha256 | no | D99. A stand-in for D73's packslip install until the M1a base image exists. |
 | CMake 4.5.0, Ninja 1.13.2, sccache 0.19.0, vcpkg-tool 2026-10-29, gcovr 8.8, Doxygen 1.18.0, hyperfine 2.0.0, mold 3.0.0, uv 0.13.8, Python 3.14.8 | mise, from [`ubuntu-cert-tools/`](ubuntu-cert-tools/): `mise.toml` and its linux-x64 `mise.lock`, installed with `mise install --locked` | no | The Mac's versions (B1), plus mold. Python is there because a locked `pypi:` install (gcovr) needs a mise-managed interpreter. `--locked` refuses any tool or download not in the lock (checked: adding `jq` to the config makes the install fail). The image points `MISE_GLOBAL_CONFIG_FILE` at that `mise.toml` instead of changing a global config. |
@@ -243,8 +244,8 @@ gwp_asan safestack cfi fuzzer profile xray`. PASS if all 18. The macOS
 playbook lists most of these as Linux-only.
 
 **C6. Sanitizers fire (container on the PC's Omarchy kernel).** Use `san.cpp` from
-[Appendix: sanitizer probe](#appendix-sanitizer-probe) (the looping race
-macOS C6 is adopting too) for ASan, TSan, UBSan and MSan:
+[Appendix: sanitizer probe](#appendix-sanitizer-probe) (the same file as
+macOS C6) for ASan, TSan, UBSan and MSan:
 
 ```sh
 for s in address thread undefined memory; do
@@ -355,12 +356,24 @@ Expected: 15 and `polly-ok`.
 `clang-include-cleaner` from `$P2996/bin` on `refl.cpp` (with `--
 -std=c++26 -freflection-latest`) exit 0 with no `error:`. PASS if so.
 
-**P8. include-what-you-use.** As macOS P8: IWYU branch `clang_21` built
-against `$P2996` (CMake with `-DCMAKE_PREFIX_PATH=$P2996`) and installed
-into the p2996 prefix. Probe: `"$P2996"/bin/include-what-you-use --version`.
-Expected: exit 0, `include-what-you-use 0.25`, and a clang version line
-naming the p2996 commit. PASS if all three. `build-linux.sh` does not build
-IWYU yet: FAIL until it does.
+**P8. include-what-you-use.** IWYU 0.25 (the `clang_21` branch head,
+`791e69ea4662`) built in the p2996 tree as an LLVM external project
+(`LLVM_EXTERNAL_PROJECTS=iwyu`, `IWYU_RESOURCE_RELATIVE_TO=iwyu`), the way
+the dotfiles p2996 recipe builds it for macOS (dotfiles #707).
+`build-linux.sh` pins the commit, so it is part of the volume's input
+hash, and checks the checkout is exactly that commit. Probe:
+
+```sh
+"$P2996"/bin/include-what-you-use --version
+printf '#include <vector>\nint main() { return 0; }\n' > iw.cpp
+"$P2996"/bin/include-what-you-use -std=c++26 iw.cpp
+```
+
+Expected: exit 0, `include-what-you-use 0.25`, and a clang version naming
+the p2996 commit; then "should remove these lines" with `#include <vector>`
+and no `error:` (it found clang's builtin headers next to its own binary),
+with exit 0 (without `--error`, IWYU exits 0 after an analysis). PASS if
+all.
 
 **P9. Coverage tools match the compiler.** Probe:
 
@@ -549,9 +562,26 @@ projects, the p2996 tools for reflection projects (P7, D19).
 Expected: `USAGE: scan-build [options] <build command> [build options]`.
 
 **T3. IWYU.** An IWYU built against LLVM 23 for clang 23 projects, and P8's
-for p2996. Today: FAIL. The 26.10 archive has `iwyu 8.23-1build1`, which
-reports `include-what-you-use 0.23 based on Ubuntu clang version 19.1.7`
-and pulls in clang 22 (B2), so it is not used.
+for p2996. The 26.10 archive has `iwyu 8.23-1build1`, which reports
+`include-what-you-use 0.23 based on Ubuntu clang version 19.1.7` and pulls
+in clang 22 (B2), so it is not used. Instead the image builds IWYU 0.27 in
+a separate stage (`ubuntu-cert.Dockerfile`, stage `iwyu`) against
+apt.llvm.org's `llvm-23-dev` and `libclang-23-dev` from the same 23.1.6
+snapshot as clang-23, installs it in `/opt/iwyu-llvm23`, and links
+`include-what-you-use`, `iwyu_tool.py` and `fix_includes.py` into
+`/usr/local/bin`. The development packages stay out of the final image.
+The pin is commit `c9cbc836a1af`, which is both IWYU's tag 0.27 and the
+head of its `clang_23` branch (checked 2026-11-15). Probe: as P8, with
+`include-what-you-use` from `PATH`. Expected: exit 0,
+`include-what-you-use 0.27` and the same `clang version 23.1.6` that
+`clang++-23 --version` prints; then the unused `<vector>` flagged with no
+`error:`. PASS if all.
+
+Risk: apt.llvm.org deletes old snapshots within days (D12). If the 23.1.6
+snapshot is gone, this image cannot be rebuilt as written: keep the built
+image (it is the record), and for a new image move `LLVM_VER` to the
+current snapshot, rebuild, and rerun the full certification (C1 and T3
+check the versions match).
 
 **T4. More sanitizers.** Probe:
 
@@ -560,8 +590,8 @@ for f in realtime type; do clang++-23 -std=c++26 -fsanitize=$f p.cpp -o t_$f && 
 clang++-23 -fsanitize=fuzzer fuzz.cpp -o fz && ./fz -runs=16 2>&1 | grep 'Done 16 runs'
 ```
 
-`fuzz.cpp` is [Appendix: fuzz probe](#appendix-fuzz-probe), the target
-macOS T4 is adopting too. Expected: `ok` twice, then `Done 16 runs` and exit 0. PASS if
+`fuzz.cpp` is [Appendix: fuzz probe](#appendix-fuzz-probe), the same file as
+macOS T4. Expected: `ok` twice, then `Done 16 runs` and exit 0. PASS if
 all. `-fsanitize=fuzzer` needs a `LLVMFuzzerTestOneInput` target: linking
 `p.cpp` with it fails here (`undefined reference to
 'LLVMFuzzerTestOneInput'`).
@@ -649,17 +679,17 @@ the list is the evidence.
 each U1 target, run with `hyperfine` (best of 5, pinned to cores 2-5), and
 `perf stat -e instructions:u`. Every build must print the same result. N/A:
 the times are the evidence for D137; FAIL only if a build fails or the
-outputs differ. Today (2026-11-15, runners idle): x86-64 244 ms and
-1,543,403,605 instructions; x86-64-v3 245 ms and 1,270,336,749;
-x86-64-v3 with `-mtune=znver3` 244 ms; znver3 246 ms and 1,270,336,742.
+outputs differ. Today (2026-11-15, runners idle): x86-64 241 ms and
+1,543,403,602 instructions; x86-64-v3 244 ms and 1,270,336,752;
+x86-64-v3 with `-mtune=znver3` 244 ms; znver3 245 ms and 1,270,336,751.
 v3 retires 18% fewer instructions than generic x86-64, at a wall time
-within 1.2% (three runs that day: v3 244-246 ms, x86-64 241-244 ms); znver3 gains nothing
+within 1.2% (four runs that day: v3 244-246 ms, x86-64 241-244 ms); znver3 gains nothing
 measurable over v3. D137 picks `x86-64-v3`. One benchmark is thin
 evidence: re-measure on the reference project.
 
 **U4. Linker speed.** Probe: link the same 65 `-O2 -g` objects with
 `-fuse-ld=bfd`, `lld` and `mold` (best of 5). N/A: the times are the
-evidence; FAIL only if a link fails. Today: GNU ld 69 ms, lld 36 ms, mold
+evidence; FAIL only if a link fails. Today: GNU ld 67 ms, lld 37 ms, mold
 27 ms.
 
 **U5. LTO and PGO.** Probe: `bench.cpp` with `g++-16 -flto=auto`,
@@ -750,12 +780,12 @@ end. PASS if the container is at most 2% slower than the host on both. The
 host's `perf_event_paranoid` is 2, so the host side can count only user
 space: equal `instructions:u` shows both sides ran the same code, and the
 container's overhead (syscalls, seccomp filtering, overlayfs) shows only in
-wall time. Today: PASS (2026-11-15, runners idle). Compile 5026 ms in the
-container vs 5025 ms on the host (+0.0%); benchmark 244 vs 244 ms (+0.0%);
-`instructions:u` within 0.01% (compile) and 0.001% (benchmark). Two
-earlier runs the same day gave +0.6% and +0.2% (compile) and +0.4% twice
-(benchmark). The
-rootfs (2,832 MB) was removed after the run.
+wall time. Today: PASS (2026-11-15, runners idle). Compile 5021 ms in the
+container vs 5029 ms on the host (-0.2%); benchmark 243 vs 243 ms (+0.0%);
+`instructions:u` within 0.02% (compile) and 0.001% (benchmark). Three
+earlier runs the same day gave +0.6%, +0.2% and +0.0% (compile) and
++0.4%, +0.4% and +0.0% (benchmark). The
+rootfs (2,843 MB) was removed after the run.
 
 ## Report
 
@@ -1035,14 +1065,14 @@ The build inputs are files in this repository, in
 
 | File | sha256 |
 |---|---|
-| `build-linux.sh` | `3ab4ab9c9a74afcd51471169ad36869db25953a2d7838ad3f7cbf4915d1d2bc6` |
+| `build-linux.sh` | `40b30d2db76b996e5bac2f5d51843baf5885cd702afbd843412f3765f7391be9` |
 | `compiler-rt-remove-linux-scc-h.patch` | `c9e835ef4f553b03246d9371bc0ec4b9215e1fb7ef0714e2964ea8cda8562443` |
 | `lldb-base-specifier-derived.patch` | `7e83f3e0b77422037eaa08e454b57e1e80227a7dd51bc5fcf68960530f66ddc5` |
 
 The install goes into a Docker volume named
 `cpp-standard-p2996-<commit12>-<inputs12>`. `<inputs12>` is the first 12 hex
 digits of the sha256 of the three files concatenated in that order (today
-`cpp-standard-p2996-562409c79426-9a47cc76800b`). A new commit or a changed
+`cpp-standard-p2996-562409c79426-f3fb14942dd6`). A new commit or a changed
 input gives a new volume; an existing one is never overwritten.
 `certify:ubuntu` computes the same name and mounts it read-only at
 `/opt/p2996`.
@@ -1058,7 +1088,9 @@ volume `cpp-standard-sccache` at `/sccache`:
 leaves the LLVM sources alone is mostly cache hits. Measured on 2026-11-15:
 the first build missed all 6134 compiles and filled 633 MB of cache; a
 rebuild of the same tree from an empty build directory hit all 6134 and
-took 93 s, where a full build takes about 45 minutes. M1a replaces it with
+took 93 s, where a full build takes about 45 minutes. Adding IWYU (P8)
+changed the inputs; that build hit 6134 of 6149 compiles (the 15 misses are
+IWYU's own) and took 215 s. M1a replaces it with
 `toolchains/p2996/` and the hash-keyed builder (D49, D85).
 
 ## Sources
