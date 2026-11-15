@@ -911,15 +911,27 @@ next to the binary that sets the SDK, and the tarball's libc++ headers at
 `'vector' file not found`. Homebrew's `include-what-you-use` is built
 against Homebrew's LLVM, so it does not count. Probe:
 `$IWYU23 --version`, then
-`$IWYU23 -std=c++26 -Xiwyu --mapping_file=$LLVM23/include/c++/v1/libcxx.imp t3.cpp`
-on a file with an unused `<vector>`. Expected: `include-what-you-use 0.27`
-on the same `clang version` the tarball's `clang --version` prints, and the
-unused `<vector>` flagged with no `error:`. PASS if both, and P8 passes.
-On macOS IWYU names Apple's private `<_stdio.h>` for `puts`, where
-`<cstdio>` is meant; libc++'s mapping file does not cover the SDK's C
-headers. The report gives the p2996 half first, then the clang 23 half.
-Today (2026-11-15): PASS on the host; in the Tart guest the clang 23 half
-passes and the p2996 half waits for P8 (V3).
+`$IWYU23 -std=c++26 -Xiwyu --mapping_file=$LLVM23/include/c++/v1/libcxx.imp -Xiwyu --mapping_file=<prefix>/share/include-what-you-use/macos-sdk.imp t3.cpp`
+on a file with an unused `<vector>` that calls `std::puts`. Expected:
+`include-what-you-use 0.27` on the same `clang version` the tarball's
+`clang --version` prints, the unused `<vector>` flagged with no `error:`,
+and `<cstdio>` kept for `puts`. PASS if all three, and P8 passes.
+
+The SDK mapping (`macos-sdk.imp`). The SDK splits each C header in two:
+`<stdio.h>` includes `<_stdio.h>`, which declares `puts`. libc++'s mapping
+file does not cover the SDK, so without a mapping IWYU names the private
+`<_stdio.h>`. The build generates the mapping from the installed SDK: each
+`<_X.h>` that `<X.h>` includes directly maps to `<X.h>` (18 pairs on the
+27.2 SDK), and IWYU's built-in C++ mappings then map `<X.h>` to `<cX>`.
+`<X.h>` is marked private when libc++ has `<cX>`, because IWYU stops with
+an assertion if one header gets two visibilities. Use it for C++
+translation units only: in C, IWYU marks `<inttypes.h>` public and stops
+with that assertion. Private headers that several headers share are not
+mapped: for `newlocale` IWYU still names `<_locale_posix2008.h>`, which
+`<locale.h>` and `<xlocale.h>` both include. The report gives the p2996 half first, then the clang 23 half.
+Today (2026-11-15): PASS on the host, with `<cstdio>` kept for `puts`; in
+the Tart guest (SDK 27.2) the clang 23 half passes the same way and the
+p2996 half waits for P8 (V3).
 
 **T4. Sanitizers.** C6, G4 and P4. Also present and expected to link:
 `-fsanitize=realtime` (RTSan), `-fsanitize=type` (TySan),

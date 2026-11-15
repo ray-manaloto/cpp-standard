@@ -66,6 +66,34 @@ else
     exit 2
   }
   printf -- '-isysroot "%s"\n' "$sdk" >"$work/stage/bin/arm64-apple-darwin.cfg"
+  # A mapping for the SDK's private C headers (C++ translation units). The
+  # SDK splits each C header: <stdio.h> includes <_stdio.h>, which declares
+  # puts. Without a mapping IWYU names <_stdio.h>. Each <_X.h> that <X.h>
+  # includes directly maps to <X.h>, which IWYU's built-in C++ mappings then
+  # map to <cX>. <X.h> is "private" when libc++ has <cX> or when it is itself
+  # an underscore header, because IWYU stops with an assertion if one header
+  # is given two visibilities.
+  imp="$work/stage/share/include-what-you-use/macos-sdk.imp"
+  mkdir -p "${imp%/*}"
+  (
+    cd "$sdk/usr/include"
+    sep=""
+    echo "["
+    for p in _*.h; do
+      q="${p#_}"
+      [[ -f "$q" ]] || continue
+      grep -qE "^[[:space:]]*#[[:space:]]*include[[:space:]]*<$p>" "$q" || continue
+      vis=public
+      [[ "$q" == _* || -f "$llvm/include/c++/v1/c${q%.h}" ]] && vis=private
+      printf '%s  { "include": ["<%s>", "private", "<%s>", "%s"] }' "$sep" "$p" "$q" "$vis"
+      sep=$',\n'
+    done
+    printf '\n]\n'
+  ) >"$imp"
+  grep -q '"<_stdio.h>", "private", "<stdio.h>"' "$imp" || {
+    echo "toolchain:iwyu-llvm23: the SDK mapping has no <_stdio.h> entry: $imp" >&2
+    exit 2
+  }
   mkdir -p "$root_dir"
   mv "$work/stage" "$prefix"
   echo "toolchain:iwyu-llvm23: built $prefix"
