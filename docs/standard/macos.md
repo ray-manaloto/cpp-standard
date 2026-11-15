@@ -63,7 +63,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | In-tree code-signed debugserver | PASS (DB5) on `current` (`-d688c1d4bd0f`; first on `-9f4a6fe02298`, built with the `lldb_codesign` key limited to `/usr/bin/codesign`), with Developer mode enabled (A6) | none needed; `-37f3cecb1624` used Xcode's debugserver |
 | p2996 with `-fuse-ld=lld` | FAIL, known upstream (P10; does not fail strict mode): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
-| Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode enabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept`; `sudo DevToolsSecurity -enable` (DB5 step 5) |
+| Developer mode, Xcode first launch | PASS (A3, A6): first launch done with `sudo xcodebuild -runFirstLaunch`; Developer mode enabled | none needed; on a new Mac or VM run `sudo xcodebuild -runFirstLaunch` and `sudo DevToolsSecurity -enable` (DB5 step 5) |
 | p2996 coverage | PASS with the matching tools | use `llvm-cov-p2996 gcov`, never another LLVM's |
 | `g++` / `gcc` on `PATH` | Apple clang (`/usr/bin/g++`, `/usr/bin/gcc`); no stray mise shims (B2 PASS) | call `g++-16` by name |
 | `ccache` on `PATH` | not installed (B2 PASS) | use sccache (D9); ccache does not cache C++20 modules |
@@ -135,7 +135,8 @@ path is `/Library/Developer/CommandLineTools`.
 **A3. Xcode licence accepted and first launch done.** Probe:
 `xcodebuild -checkFirstLaunchStatus; echo $?`. Expected: `0`. Fix:
 `sudo xcodebuild -runFirstLaunch` and `sudo xcodebuild -license accept`.
-Today: FAIL (exit status `69`).
+Today (2026-11-15): PASS, exit status `0`, after the owner ran
+`sudo xcodebuild -runFirstLaunch`; before that, FAIL with exit status `69`.
 
 **A4. Command Line Tools installed.** Why: Homebrew and some build scripts
 look there. Probe: `pkgutil --pkg-info=com.apple.pkg.CLTools_Executables |
@@ -970,7 +971,10 @@ pulled by that digest. Today: not run; Tart is not installed (V1).
 
 **V3. Inside the guest (VM).** Run every section above inside the guest.
 Expected differences: R2 N/A; DB5 needs the certificate (step 1) and
-Developer mode (step 5) set up while the golden image was built.
+Developer mode (step 5, also A6) set up while the golden image was built,
+and A3 needs `sudo xcodebuild -runFirstLaunch` there too, unless the base
+image already ran it (untested). These are one-time settings per Mac or
+VM: the host's A3 and A6 PASS says nothing about a guest.
 Today: not run; Tart is not installed (V1).
 
 ## Report
