@@ -31,6 +31,12 @@ if [[ "${MISE_AUTO_INSTALL:-}" != 0 ]]; then
   echo "certify: run it as MISE_AUTO_INSTALL=0 mise run certify:macos ...; with auto-install on, mise can install a missing tool before or during the run (playbook rule 4)" >&2
   exit 2
 fi
+# mise's environment cache (env_cache, on in the global config) can hand this task a PATH from
+# before a tool was installed: right after `mise install tart`, V1 saw no tart until the cache was
+# bypassed (2026-11-15). Re-run once under a freshly computed environment; usage_* flags pass through.
+if [[ "${MISE_ENV_CACHE:-}" != 0 ]]; then
+  MISE_ENV_CACHE=0 exec mise -C "$root" x -- "$0" "$@"
+fi
 
 only=",${usage_only:-},"
 out="${usage_out:-}"
@@ -747,8 +753,30 @@ if [[ "$in_vm" == 1 ]]; then
 else
   tv="$(tart --version 2>/dev/null)"
   if want V1; then
-    [[ -n "$tv" ]] && awk -v v="$tv" 'BEGIN{split(v,a,"."); exit !(a[1]>2 || (a[1]==2 && (a[2]>41 || (a[2]==41 && a[3]>=1))))}' &&
-      res V1 PASS "tart $tv" || res V1 FAIL "tart ${tv:-not installed} (want 2.41.1 or later)"
+    # Tart must be mise-managed: the pin in .mise/conf.d/vm.toml (it wins over
+    # the dotfiles global pin inside this repository), and `tart` on PATH must
+    # be that install, not Homebrew's or another copy.
+    # The probes run in the scratch dir; mise must read this repository's config.
+    tj="$(mise -C "$root" ls tart --json 2>/dev/null)"
+    pin_sel='[.[] | select((.source.path // "") | endswith("/.mise/conf.d/vm.toml"))][0]'
+    want_tv="$(jq -r "$pin_sel.requested_version // empty" <<<"$tj" 2>/dev/null)"
+    want_dir="$(jq -r "$pin_sel.install_path // empty" <<<"$tj" 2>/dev/null)"
+    # From /, mise reads only the global config; an entry without a source is an install nothing pins.
+    glob_tv="$(mise -C / ls tart --json 2>/dev/null | jq -r '[.[] | select(.source.path)][0].requested_version // empty' 2>/dev/null)"
+    tbin="$(command -v tart 2>/dev/null || true)"
+    mbin="$(mise -C "$root" which tart 2>/dev/null || true)"
+    gnote=""
+    [[ -n "$glob_tv" && "$glob_tv" != "$want_tv" ]] && gnote="; dotfiles global pin $glob_tv differs"
+    [[ -z "$glob_tv" ]] && gnote="; no dotfiles global pin"
+    if [[ -z "$want_tv" ]]; then
+      res V1 FAIL "no tart pin in .mise/conf.d/vm.toml"
+    elif [[ -z "$tv" ]]; then
+      res V1 FAIL "tart $want_tv (mise pin) not installed$gnote"
+    elif [[ "$tv" != "$want_tv" || -z "$mbin" || "$mbin" != "$want_dir"/* || ("$tbin" != "$mbin" && "$tbin" != */mise/shims/tart) ]]; then
+      res V1 FAIL "tart $tv at ${tbin:-?} is not the mise pin $want_tv${gnote}"
+    else
+      res V1 PASS "tart $tv from mise (pin in .mise/conf.d/vm.toml)$gnote"
+    fi
   fi
   if want V2; then
     dg="$(grep -A2 '^Digest on ' "$doc" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)" # V2's digest line
@@ -776,7 +804,7 @@ fix_for() {
     P8 | T3) echo "build IWYU (branch clang_21) against p2996" ;;
     P10) echo "known upstream: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK" ;;
     L1 | L2 | R4) echo "see the check; clang 23 parts need the LLVM 23 tarball" ;;
-    V1) echo "install Tart 2.41.1+ (brew install openai/tools/tart)" ;;
+    V1) echo "install Tart with mise (mise install tart; pinned in .mise/conf.d/vm.toml and in the dotfiles global config); remove any Homebrew tart" ;;
     V2) echo "tart pull the golden-gate-xcode image by its digest" ;;
     *) echo "see $1 in docs/standard/macos.md" ;;
   esac

@@ -293,6 +293,17 @@ checksum_source = "mise-versions"
 url = "https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_darwin_arm64"
 url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/547320930"
 
+[[tools.tart]]
+version = "2.41.1"
+backend = "aqua:openai/tart"
+specifiers = ["2.41.1"]
+
+[tools.tart."platforms.macos-arm64"]
+checksum = "sha256:e680a734febccfce7d4e910c1f7f13fc3b00f19a181c945e2d746de3214c32c2"
+checksum_source = "mise-versions"
+url = "https://github.com/openai/tart/releases/download/2.41.1/tart.tar.gz"
+url_api = "https://api.github.com/repos/openai/tart/releases/assets/644183490"
+
 [[tools.tombi]]
 version = "1.11.2"
 backend = "aqua:tombi-toml/tombi"

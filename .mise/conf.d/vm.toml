@@ -1,0 +1,8 @@
+# The Tart VM host for the macOS playbook's V checks (docs/standard/macos.md,
+# section V). mise's registry maps `tart` to aqua:openai/tart (release
+# tarball, sha256 checksums). dotfiles pins the same version globally; inside
+# this repository this pin wins, and V1 fails unless `tart` on PATH is this
+# version from mise's installs. macOS only: there is no Linux build, and CI
+# runs on Linux.
+[tools]
+tart = { version = "2.41.1", os = ["macos"] }
