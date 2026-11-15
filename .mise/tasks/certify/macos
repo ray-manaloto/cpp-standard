@@ -689,23 +689,28 @@ if want T2; then
 fi
 if want T3; then
   # clang 23 projects: IWYU 0.27 built against the LLVM 23 tarball
-  # (toolchain:iwyu-llvm23), on the tarball's exact clang version; it must flag
-  # an unused <vector> with no error. Reflection projects: P8's.
+  # (toolchain:iwyu-llvm23), on the tarball's exact clang version, with the
+  # SDK mapping the build writes; it must flag an unused <vector> with no
+  # error and keep <cstdio> for puts (not the SDK's private <_stdio.h>).
+  # Reflection projects: P8's.
+  t3_imp="${IWYU23%/bin/*}/share/include-what-you-use/macos-sdk.imp"
   hv="$(tmo 30 "$IWYU23" --version 2>&1)"
   hrc=$?
   hv1="$(printf '%s\n' "$hv" | head -1)"
   cv="$("$LLVM23/bin/clang" --version 2>/dev/null | head -1 | sed -E 's/^.*(clang version [^ ]+).*$/\1/')"
   printf '#include <vector>\n#include <cstdio>\nint main(){std::puts("x");}\n' >t3.cpp
-  io="$(tmo 60 "$IWYU23" -std=c++26 -Xiwyu --mapping_file="$LLVM23/include/c++/v1/libcxx.imp" t3.cpp 2>&1)"
+  io="$(tmo 60 "$IWYU23" -std=c++26 -Xiwyu --mapping_file="$LLVM23/include/c++/v1/libcxx.imp" \
+    -Xiwyu --mapping_file="$t3_imp" t3.cpp 2>&1)"
   irc=$? # IWYU 0.27 exits 0 after printing its suggestions
   [[ "$p8_msg" == unset ]] && p8_eval
   if [[ $hrc == 0 && "$hv" == *"include-what-you-use 0.27"* && -n "$cv" && "$hv" == *"$cv "* &&
-    $irc == 0 && "$io" == *"should remove these lines"*"#include <vector>"* && "$io" != *"error:"* ]]; then
-    t3_23="PASS (${hv1%% (http*}; unused <vector> flagged)"
+    $irc == 0 && "$io" == *"should remove these lines"*"#include <vector>"* && "$io" != *"error:"* &&
+    "$io" == *"full include-list"*"#include <cstdio>"*"// for puts"* && "$io" != *"_stdio.h"* ]]; then
+    t3_23="PASS (${hv1%% (http*}; unused <vector> flagged; <cstdio> for puts)"
   elif [[ $hrc != 0 || "$hv" != *"include-what-you-use 0.27"* || -z "$cv" || "$hv" != *"$cv "* ]]; then
     t3_23="FAIL: exit $hrc: ${hv1%% (http*} (want 0.27 on ${cv:-the tarball clang})"
   else
-    t3_23="FAIL: sample exit $irc: $(grep -m1 -E 'error:|should remove' <<<"$io" || echo no verdict)"
+    t3_23="FAIL: sample exit $irc: $(grep -m1 -E 'error:|Assertion|_stdio.h|should remove' <<<"$io" || echo no verdict)"
   fi
   # The p2996 half first: res cuts the evidence at 240 characters.
   t3_p="p2996: P8 $([[ $p8_ok == yes ]] && echo PASS || echo 'not PASS')"
