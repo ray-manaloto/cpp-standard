@@ -50,7 +50,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | `llvm-mca-p2996` | PASS (R4) only with ELF assembly; macOS assembly hits an assertion on `.subsections_via_symbols` | feed it ELF assembly (`--target=aarch64-linux-gnu`), or use clang 23's `llvm-mca` |
 | p2996 LLVM utilities (FileCheck and others) | FAIL (P6): `LLVM_INSTALL_UTILS` was off | none needed until the rebuild |
 | include-what-you-use for p2996 | FAIL (P8): not built | run Homebrew IWYU on files without `^^` |
-| In-tree code-signed debugserver | FAIL (DB5): the p2996 build sets `LLDB_USE_SYSTEM_DEBUGSERVER=ON`, and this Mac has no `lldb_codesign` certificate | lldb-p2996 uses Xcode's debugserver, which works |
+| In-tree code-signed debugserver | FAIL (DB5): the `current` build sets `LLDB_USE_SYSTEM_DEBUGSERVER=ON`; the test build `-b6e46c1709ce` has an in-tree debugserver, but the file was changed after signing, so its signature is invalid and it is killed at launch (exit 137) | lldb-p2996 uses Xcode's debugserver, which works |
 | p2996 with `-fuse-ld=lld` | FAIL (P10): LLVM 21's `lld` cannot read the macOS 27 SDK's `.tbd` files | use Apple `ld`, the default |
 | XRay | not on macOS (T7): the runtime archives exist but do not work on Darwin, in p2996 and clang 23 alike | `xctrace` Time Profiler |
 | Developer mode, Xcode first launch | FAIL (A3); A6 PASS with Developer mode disabled | `sudo xcodebuild -runFirstLaunch`; `sudo xcodebuild -license accept` |
@@ -462,27 +462,56 @@ unsigned debugserver attach to a process. lldb looks for it in
 ```sh
 DS="$(find -L "$P2996" -name debugserver -type f 2>/dev/null | head -1)"; echo "$DS"
 codesign -dvv "$DS" 2>&1 | grep -E 'Authority|Signature'
+codesign --verify --strict -v "$DS"
 "$P2996/bin/clang++-p2996" -std=c++26 -g p.cpp -o pd
 "$P2996/bin/lldb-p2996" -b -o 'b main' -o run -o 'frame variable' -o kill pd 2>&1 | grep -m1 'stop reason'
 ```
 
-Expected: a path inside `$P2996`, `Authority=lldb_codesign`, and
-`stop reason = breakpoint 1.1`. Today: FAIL on the first two. There is no
-debugserver under `$P2996` because the p2996 build sets
-`LLDB_USE_SYSTEM_DEBUGSERVER=ON` (its `CMakeCache.txt` has
-`LLDB_USE_SYSTEM_DEBUGSERVER:BOOL=ON`). Building one signed with
-`lldb_codesign` also needs that certificate, which this Mac does not have (step 2 finds
-none). The breakpoint part passes: lldb-p2996 stops at the breakpoint
-using Xcode's debugserver
-(`/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Resources/debugserver`,
-seen in `ps` during the run; the same file as
-`.../LLDB.framework/Versions/A/Resources/debugserver`). `find -L` is needed because `$P2996` is a
-link.
+Expected: a path inside `$P2996`, `Authority=lldb_codesign`, `valid on
+disk` and `satisfies its Designated Requirement`, and
+`stop reason = breakpoint 1.1`. `codesign -dvv` only reads the signature;
+`codesign --verify --strict` checks that the file still matches it. To
+check a build before it becomes `current`, set `P2996` to that build's
+prefix and use `view/bin/lldb-p2996` in the last line.
+
+Today, on two builds:
+
+- `-b6e46c1709ce` (2026-11-14, not `current`), built with
+  `LLDB_USE_SYSTEM_DEBUGSERVER=OFF` and `LLDB_CODESIGN_IDENTITY=lldb_codesign`:
+  FAIL. `bin/debugserver` exists and shows `Authority=lldb_codesign`, but
+  `codesign --verify --strict -v` prints `invalid signature (code or
+  signature have been modified)`. The file changed after it was signed:
+  `Signed Time` is 19:24:41 and its modification time is 19:31.
+  `debugserver --version` exits 137 (SIGKILL), with no output, most
+  likely because of the kernel's code-signing check (the system log did
+  not record the reason). The session prints
+  `error: failed to get reply to handshake packet within timeout of 6.0
+  seconds`. Likely cause, not yet confirmed: the install step adds the
+  Python `LC_RPATH` to every binary after signing. `otool -l` shows that
+  rpath on debugserver, and `otool -L` shows debugserver does not link
+  libpython.
+- `-37f3cecb1624` (`current`): FAIL on the first three lines. There is no
+  debugserver under `$P2996` because the p2996 build sets
+  `LLDB_USE_SYSTEM_DEBUGSERVER=ON` (its `CMakeCache.txt` has
+  `LLDB_USE_SYSTEM_DEBUGSERVER:BOOL=ON`). Building one signed with
+  `lldb_codesign` also needs that certificate, which this Mac now has
+  (installed 2026-11-14). The breakpoint part passes: lldb-p2996 stops at
+  the breakpoint using Xcode's debugserver
+  (`/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Resources/debugserver`,
+  seen in `ps` during the run; the same file as
+  `.../LLDB.framework/Versions/A/Resources/debugserver`). `find -L` is
+  needed because `$P2996` is a link.
 
 Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
 
 1. Create the signing certificate once per Mac or VM, as an admin:
-   `sudo lldb/scripts/macos-setup-codesign.sh` from the p2996 source tree.
+   `lldb/scripts/macos-setup-codesign.sh` from the p2996 source tree. Run
+   it without `sudo`, because it calls `sudo` itself for the keychain
+   steps. Under `sudo`, `$TMPDIR` is empty, so the script tries to write
+   `/lldb_codesign.tmpl` and fails. If you must run it under `sudo`, use
+   `sudo env TMPDIR="$TMPDIR" bash lldb/scripts/macos-setup-codesign.sh`
+   (this form worked on 2026-11-14). It imports the private key with `-A`,
+   so any app on the Mac can sign with it without a prompt.
    It creates a self-signed `lldb_codesign` identity in
    `/Library/Keychains/System.keychain` and trusts it for code signing. It
    needs an admin password; in a VM, run it while building the golden image.
@@ -497,7 +526,11 @@ Steps (from `lldb/docs/resources/build.rst`, "Code Signing on macOS"):
    the build reaches the signing step without a certificate; with neither,
    it signs debugserver ad hoc, and whether that can attach here is
    untested.
-4. Rebuild and install; run the DB5 probe.
+4. Rebuild and install; run the DB5 probe. Anything that edits
+   debugserver after it is signed (`install_name_tool`, `strip`, an rpath
+   step) breaks the signature. Leave debugserver out of such steps, or
+   sign it again as the last step with its entitlements file
+   (`lldb/tools/debugserver/resources/debugserver-macosx-entitlements.plist`).
 5. If the certificate cannot be made (no admin), keep
    `LLDB_USE_SYSTEM_DEBUGSERVER=ON`: lldb-p2996 then uses Xcode's
    debugserver, which works today. Record DB5 as FAIL with that workaround.
