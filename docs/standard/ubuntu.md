@@ -409,9 +409,28 @@ TSan and UBSan fire on `san.cpp` (the C6 probe with `g++-16`, without
 `printf 'int* p;\nint main(){ p = new int[4]; p = nullptr; }\n' > leak.cpp`
 built with `-fsanitize=leak` ("detected memory leaks"). PASS if all four.
 Unlike macOS, GCC's TSan and LSan exist on Linux. Today: PASS (hand run).
+Build the probes without `-O`; see
+[Appendix: sanitizer probe](#appendix-sanitizer-probe) for what `-O2` does
+to them.
 
 **G5. Never mix standard libraries.** Rule, no probe: all C++ dependencies
 come from vcpkg with the matching triplet (K1).
+
+The same rule covers LTO objects: they are linked only by the compiler that
+made them. The archive `g++-16` compresses LTO bytecode with zstd ("Supported
+LTO compression algorithms: zlib zstd"). The macOS recipe in
+`toolchains/gcc-macos/` is built `--without-zstd` ("zlib" only). Built on
+this image (2026-11-16, amd64), the two fail both ways on the same two-file
+`-flto` program:
+
+| Objects compiled by | LTO-linked by | Result |
+|---|---|---|
+| archive `g++-16` | recipe GCC (`--without-zstd`) | `lto1: fatal error: compiler does not support ZSTD LTO compression` |
+| recipe GCC | archive `g++-16` | `lto1: internal compiler error: original not compressed with zstd` |
+
+Each compiler links its own LTO objects. A vcpkg binary cache or prebuilt
+static library holding LTO objects must come from the compiler that
+consumes it.
 
 **G6. Debug info links.** Probe:
 `g++-16 -std=c++26 -g -fsanitize=address san.cpp -o g6 && echo link-ok`.
@@ -1065,6 +1084,19 @@ int main(int argc, char**) {
   return r + big;
 }
 ```
+
+Build `san.cpp` and `leak.cpp` without `-O`. Measured at `-O2` (2026-11-16,
+amd64, both the archive `g++-16` and a GCC 16.2.0 built from the release
+tarball):
+
+- `leak.cpp` has no allocation left: `-S` output has 0 calls to
+  `operator new[]`, against 1 at `-O0`. LeakSanitizer then reports nothing.
+- TSan reported the race in only 2 to 6 of 10 runs, with either compiler.
+
+Neither is a compiler or hardening difference. Adding `-O2` to G4 makes its
+LSan probe fail every time and its TSan probe fail some of the time. A
+sanitizer report at `-O2` still means what it says; only a missing report
+proves nothing. The clang runs (C6) were not measured at `-O2`.
 
 ### Appendix: fuzz probe
 

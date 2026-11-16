@@ -6,7 +6,8 @@ maintainer's patch (`iains/gcc-16-branch`), following Homebrew's `gcc.rb` withou
 Since 2026-11-16 (owner: option A) the recipe has **no Homebrew dependency**:
 
 - gmp, mpfr, mpc and isl are built in-tree from GCC's own prerequisite archives;
-- zstd is left out (`--without-zstd`; it only compresses LTO bytecode);
+- zstd is left out (`--without-zstd`; it only compresses LTO bytecode, but see Limits: LTO
+  objects then don't cross to a zstd-built GCC);
 - make is Apple's `/usr/bin/make`.
 
 The build id is `71abf0a170ab`, from `macos/build-inputs.json`. The first D33 build
@@ -108,6 +109,15 @@ It also:
 - **rpath.** Programs it links record the hashed prefix as their rpath, not `current`
   (macOS playbook, G1).
 - **No TSan or LSan,** and ASan hangs with `detect_leaks=1` (design, Risks; D33).
+- **LTO objects stay with this compiler.** `--without-zstd` leaves zlib as the only LTO
+  compression ("Supported LTO compression algorithms: zlib"). The Ubuntu 26.10 archive `g++-16`
+  uses zstd. The same recipe built on Ubuntu 26.10 amd64 (2026-11-16) and the archive `g++-16`
+  can't LTO-link each other's `-flto` objects:
+  - the recipe's `lto1` stops with "compiler does not support ZSTD LTO compression";
+  - the archive's `lto1` hits an internal compiler error, "original not compressed with zstd".
+
+  Each links its own objects. A prebuilt LTO library or cache must come from the compiler that
+  links it (ubuntu.md, G5).
 - **Not upstream.** The Darwin patch is not upstream. A new macOS SDK can break it; the fallback
   is reverting the bump.
 - **Not yet a mise task**, and not yet run inside the Tart VM. Both belong to the
