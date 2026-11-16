@@ -1,0 +1,34 @@
+# GCC 16.2.0 for macOS arm64 (D33). Pins recorded from the D33 build of 2026-11-15
+# (installed as 16.2.0-9f99e2b94d93); see README.md for the evidence and what was not recorded.
+# Configure and make arguments live in build.sh, not here (design §3, pins:validate).
+
+upstream = "16.2.0"
+salt = 0
+# Build tools come from Homebrew today (gmake 4.4.1); none is a mise tool yet.
+host_tools = []
+
+[source]
+url = "https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz"
+sha256 = "e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e"
+
+[macos]
+# The GCC Darwin maintainer's Apple silicon patch (iains/gcc-16-branch), as Homebrew ships it.
+patch_url = "https://raw.githubusercontent.com/Homebrew/homebrew-core/4a334d2f90f786c3fc86cbc9cf72b2f13961b078/Patches/gcc/gcc-16.2.0.diff"
+patch_sha256 = "578a78ae0bc62a02f260b6a20c7f23e71deee16ed644e9cb5619247be4df5a71"
+# The Homebrew formula revision the tarball, patch and arguments follow.
+homebrew_core_commit = "4a334d2f90f786c3fc86cbc9cf72b2f13961b078"
+
+# Libraries: Homebrew kegs under /opt/homebrew/opt, at these versions. cc1plus links them
+# dynamically, so a brew upgrade that changes a library version breaks the compiler.
+gmp = "6.3.0"
+mpfr = "4.2.2"
+libmpc = "1.4.1"
+isl = "0.28"
+zstd = "1.5.7_1"
+make = "4.4.1"
+
+# Host recorded by the D33 build.
+xcode = "27.2 (27B52)"
+sdk_major = "27"
+bootstrap_cc = "Apple clang version 21.0.0 (clang-2100.4.1.1)"
+ld = "ld-27106.1"

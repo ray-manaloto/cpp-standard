@@ -307,7 +307,8 @@ by real path, into the tarball's `bin`. Today (2026-11-15): PASS.
 ## G. GCC 16.2 (source build)
 
 **G1. Version and origin.** Probe: `g++-16 --version | head -1; g++-16 -v 2>&1 | grep -o -- "--with-pkgversion='[^']*'"`.
-Expected: `16.2.0`, built by cpp-standard (D33). The certify task uses
+Expected: `16.2.0`, built by cpp-standard (D33; recipe and pins in
+`toolchains/gcc-macos/`). The certify task uses
 `~/.local/share/gcc-d33/current/bin/g++-16` when it exists, else the
 `g++-16` on `PATH`. Today (2026-11-15): PASS on the D33 build
 `16.2.0-9f99e2b94d93` (pkgversion `cpp-standard GCC 16.2.0 (D33
