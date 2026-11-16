@@ -1,0 +1,9 @@
+--disable-nls
+--enable-checking=release
+--with-gcc-major-version-only
+--enable-languages=c,c++,objc,obj-c++,fortran
+--program-suffix=-16
+--without-zstd
+--with-system-zlib
+--build=aarch64-apple-darwin27
+--with-sysroot=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk

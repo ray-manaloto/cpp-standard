@@ -1,0 +1,15 @@
+{
+  "arch": "arm64 darwin27.2.0",
+  "bootstrap_cc": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+  "configure_args": "f214627e8999f45f5521dd1ab50d2adcf965d7cb85016fc639857ddb6eb73b71",
+  "darwin_patch": "578a78ae0bc62a02f260b6a20c7f23e71deee16ed644e9cb5619247be4df5a71",
+  "gcc_tarball": "e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e",
+  "ld": "@(#)PROGRAM:ld PROJECT:ld-27106.1",
+  "make": "/usr/bin/make GNU Make 3.81",
+  "make_args": "BOOT_LDFLAGS=-Wl,-headerpad_max_install_names LDFLAGS_FOR_TARGET=-Wl,-headerpad_max_install_names",
+  "patch_from": "Homebrew/homebrew-core 4a334d2f90f786c3fc86cbc9cf72b2f13961b078 Patches/gcc/gcc-16.2.0.diff",
+  "prerequisites": "in-tree, gcc-16.2.0 contrib/prerequisites.sha512: gmp-6.3.0.tar.bz2 mpfr-4.2.2.tar.bz2 mpc-1.3.1.tar.gz isl-0.24.tar.bz2",
+  "sdk": "27.2 /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+  "xcode": "Xcode 27.2 Build version 27B52",
+  "zstd": "without"
+}

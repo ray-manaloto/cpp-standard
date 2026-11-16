@@ -1,10 +1,11 @@
-# GCC 16.2.0 for macOS arm64 (D33). Pins recorded from the D33 build of 2026-11-15
-# (installed as 16.2.0-9f99e2b94d93); see README.md for the evidence and what was not recorded.
-# Configure and make arguments live in build.sh, not here (design §3, pins:validate).
+# GCC 16.2.0 for macOS arm64 (D33), with no Homebrew dependency. gmp, mpfr, mpc and isl are
+# built in-tree from the archives GCC's own contrib/prerequisites.sha512 names; zstd is left out.
+# Configure and make arguments live in build.sh and macos/configure-args.txt, not here.
+# The first D33 build (16.2.0-9f99e2b94d93, Homebrew libraries) is recorded in macos/d33-*.
 
 upstream = "16.2.0"
 salt = 0
-# Build tools come from Homebrew today (gmake 4.4.1); none is a mise tool yet.
+# Every build tool comes from Xcode 27.2 or the base system (/usr/bin/make 3.81); none is a mise tool.
 host_tools = []
 
 [source]
@@ -18,16 +19,15 @@ patch_sha256 = "578a78ae0bc62a02f260b6a20c7f23e71deee16ed644e9cb5619247be4df5a71
 # The Homebrew formula revision the tarball, patch and arguments follow.
 homebrew_core_commit = "4a334d2f90f786c3fc86cbc9cf72b2f13961b078"
 
-# Libraries: Homebrew kegs under /opt/homebrew/opt, at these versions. cc1plus links them
-# dynamically, so a brew upgrade that changes a library version breaks the compiler.
-gmp = "6.3.0"
-mpfr = "4.2.2"
-libmpc = "1.4.1"
-isl = "0.28"
-zstd = "1.5.7_1"
-make = "4.4.1"
+# In-tree prerequisites: GCC's download_prerequisites set, which install.texi says is the only
+# supported in-tree set for gmp, mpfr and mpc. Fetched from prerequisites_url; each archive is
+# checked against its sha512 line in the pinned tarball's contrib/prerequisites.sha512.
+prerequisites_url = "https://gcc.gnu.org/pub/gcc/infrastructure/"
+prerequisites = ["gmp-6.3.0.tar.bz2", "mpfr-4.2.2.tar.bz2", "mpc-1.3.1.tar.gz", "isl-0.24.tar.bz2"]
+zstd = "without"
+make = "/usr/bin/make (GNU Make 3.81)"
 
-# Host recorded by the D33 build.
+# Host, as recorded in macos/build-inputs.json.
 xcode = "27.2 (27B52)"
 sdk_major = "27"
 bootstrap_cc = "Apple clang version 21.0.0 (clang-2100.4.1.1)"
