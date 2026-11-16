@@ -59,12 +59,30 @@ library upgrade can no longer break an installed GCC.
     are kept, as in `gcc.rb`;
   - make is `/usr/bin/make`. GCC needs GNU make 3.80 or later, per `install.texi`.
 
-## Not yet proven
+## Full build (2026-11-16)
 
-- **No full build has run with this recipe.** After the full three-stage bootstrap and
-  install, `build.sh` fails if `cc1plus` links anything under `/opt/homebrew` (`otool -L`).
-  Before this recipe replaces `current`, a full run must pass the macOS playbook's G1-G6 checks.
-- **The job count** of the first D33 build was not recorded. `build.sh` defaults to the CPU count.
+`build.sh <scratch> 6` with `HOME` pointed into a scratch folder, so the install and its
+`current` link landed there and the installed D33 build was not touched:
+
+- **Result:** exit 0 in 58 minutes, three-stage bootstrap, peak 8.7 GB (8.1 GB build, 0.5 GB
+  install).
+- **No Homebrew:** `otool -L` on `cc1`, `cc1plus`, `lto1` and `f951` lists only
+  `/usr/lib/libSystem.B.dylib`, `/usr/lib/libz.1.dylib` and `/usr/lib/libiconv.2.dylib`.
+- **macOS playbook checks:**
+  - G1: pkgversion `cpp-standard GCC 16.2.0 (D33 71abf0a170ab)`;
+  - G2: the reflection probe prints `members=2`, and the CMake probe prints `import std ok`;
+  - G3: `--with-sysroot` is Xcode's `MacOSX.sdk`, 27.2;
+  - G4: ASan and UBSan fire, and `-fsanitize=thread` fails to link (`___tsan_func_entry`), as
+    expected;
+  - G6: `-g` with ASan links.
+  - G5 is a rule, not a probe.
+- **The same recipe on Ubuntu 26.10 amd64** (configure without `--build` and `--with-sysroot`,
+  plus `--disable-multilib`) bootstraps in 32 minutes at `-j16` and links no gmp, mpfr, mpc,
+  isl or zstd.
+
+Not done yet: installing this build as the real `current`. Until then, `current` is the first
+D33 build. **The job count** of the first D33 build was not recorded; `build.sh` defaults to
+the CPU count.
 
 ## Guards
 
