@@ -1,0 +1,93 @@
+Ubuntu certification  pc  2026-11-16
+Ubuntu 26.10  kernel 7.2.15-1-omarchy (container on the PC's Omarchy kernel)  glibc 2.44
+CPU AMD Ryzen 9 5900X 12-Core Processor  Docker 29.9.2  image d15e5ed671c1
+docker run flags: --privileged --hostname cert -v cpp-standard-cert-build:/build -v cpp-standard-p2996-562409c79426-d3773989aa5d:/opt/p2996:ro (+ host NVIDIA driver 615.78.08: libcuda, libnvidia-ptxjitcompiler, read-only)
+Timing pass: other containers used 49 ms CPU during the timing pass; host load 0.81 -> 10.12
+[host kernel] marks a kernel-dependent check: it ran in a container on the PC's Omarchy kernel, not Ubuntu's.
+A1    PASS Ubuntu 26.10 (stonking)
+A2    PASS base ubuntu:26.10@sha256:b5194b8e5898...
+A3    PASS amd64 x86_64; no qemu-x86_64 in the host's binfmt_misc: native
+A4    N/A  kernel 7.2.15-1-omarchy, shared with the host; recorded, not certified [host kernel]
+A5    PASS ldd (Ubuntu GLIBC 2.44-1ubuntu2.1) 2.44
+A6    PASS glibc-hwcaps: x86-64-v3 x86-64-v2; avx2 bmi2 fma adx sha_ni vaes vpclmulqdq present; no avx512f
+A7    PASS resolute-23; key 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
+B1    PASS all nine print a version; cmake 4.5.0; mold 3.0.0
+B2    PASS no cc/c++/clang/lldb link to another compiler; no second LLVM major; all 31 mise shims have an active version
+B3    PASS sccache --show-stats prints statistics
+B4    PASS binutils 2.47-6ubuntu1; make 4.4.1-3 (D105)
+C1    PASS Ubuntu clang version 23.1.6 (++20261115084239+551bf48cf74f-1~exp1~20261115204336.95); apt.llvm.org snapshot 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95
+C2    PASS default libstdc++; -stdlib=libc++ finds /lib/x86_64-linux-gnu/libc++.modules.json
+C3    PASS ok; /usr/lib/x86_64-linux-gnu/libc++.so.1.0 from libc++1 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95, the same build as clang-23
+C4    PASS import std ok with libc++ and with libstdc++
+C5    PASS all 18 runtimes incl. Linux-only msan dfsan hwasan memprof nsan scudo gwp_asan safestack
+C6    PASS fired: asan tsan ubsan msan [host kernel]
+C7    PASS all eleven tools (clangd from the release tarball, E2)
+C8    PASS GNU ld, ld.lld and mold link and run
+C9    PASS llvm-bolt-23 rewrote the binary; it runs
+G1    PASS g++-16 (Ubuntu 16.2.0-3ubuntu1) 16.2.0; package 16.2.0-3ubuntu1 (D25)
+G2    PASS members=2; import std ok
+G4    PASS fired: asan tsan ubsan lsan [host kernel]
+G5    N/A  rule, no probe: C++ dependencies for GCC come from vcpkg with the GCC triplet (K1)
+G6    PASS -g -fsanitize=address links
+P1    PASS commit 562409c79426; +assertions
+P2    PASS default libc++ /opt/p2996/lib/x86_64-unknown-linux-gnu/libc++.so.1.0; runs without LD_LIBRARY_PATH
+P3    PASS _LIBCPP_HARDENING_MODE_DEFAULT 16 (extensive)
+P4    PASS members=2; import std ok; fired: asan tsan ubsan [host kernel]
+P5    PASS 15 tools; polly-ok
+P6    PASS all four utilities
+P7    PASS clang-tidy, clang-format, clang-include-cleaner: exit 0, 0 errors
+P8    PASS include-what-you-use 0.25 (git:791e69e) based on clang version 21.0.0git (https://github.com/bloomberg/clang-p2996 562409c7942690d59ea470762515f88f24b16e23); flags the unused <vector>
+P9    PASS File 'p.cpp' Lines executed:100.00% of 1
+P10   PASS ok with ld.lld
+P11   PASS flang version 21.0.0git (https://github.com/bloomberg/clang-p2996 562409c7942690d59ea470762515f88f24b16e23); hello.f90 runs
+P12   PASS llvm-bolt, perf2bolt, merge-fdata; BOLT rewrote an ELF that runs
+P13   PASS threads=2 target_initial=0 (CPU offload); libomp /opt/p2996/lib/x86_64-unknown-linux-gnu/libomp.so
+P14   PASS /opt/p2996/lib/x86_64-unknown-linux-gnu/libllvmlibc.a: strlen linked from LLVM libc (overlay); runs
+GO1   PASS p2996 + CUDA 12.9: devices=1 initial=0 sum=5050 on sm_75
+GO2   PASS clang 23 + CUDA 13.2: devices=1 initial=0 sum=5050 on sm_75
+GO3   PASS GCC 16 nvptx-none: devices=1 initial=0 sum=5050 on sm_75
+DB1   PASS GNU gdb (Ubuntu 17.2-1ubuntu1) 17.2; breakpoint, libstdc++ printers (vector, string), python 42 [host kernel]
+DB2   PASS lldb version 23.1.6; breakpoint (default launch, ASLR off), std::string, python 42 [host kernel]
+DB3   PASS lldb-dap-23 session: breakpoint, locals, exit 0 [host kernel]
+DB4   PASS lldb (p2996): breakpoint, libc++ string, python 42 [host kernel]
+DB5   PASS lldb-dap (p2996) session PASS [host kernel]
+L1    PASS all six headers on: clang23-libcxx clang23-libstdcxx p2996 gcc16
+L2    PASS matches the table on: clang23-libcxx clang23-libstdcxx p2996 gcc16
+L3    PASS the two-part guard matches on GCC 16 and p2996
+L4    PASS <stacktrace> needs -lstdc++exp: without it the link fails; with it frames=true
+H1    N/A  per-project rule: apt libc++ defaults to NONE (H2), so every libc++ preset sets _LIBCPP_HARDENING_MODE
+H2    PASS apt libc++ default NONE (2): no trap; EXTENSIVE: exit 132 (SIGILL); _GLIBCXX_ASSERTIONS: 134 (SIGABRT); p2996 default: 132
+K1    N/A  project check (triplets/x64-linux-*.cmake); no C++ project in this repo yet (D5)
+K2    PASS vcpkg package management program version 2026-10-29-139f2e53438b1529e178f6295bc563f4e0de734f
+E1    N/A  project check (compile_commands.json after configure); no C++ project in this repo yet
+E2    FAIL clangd 23.1.5 vs clang-23 23.1.6 (apt clangd-23 needs libabsl20260107, absent in 26.10); check: yes
+E3    PASS clangd (p2996): 0 errors on reflection code
+T1    N/A  rule: LLVM 23 tools for plain projects, p2996 tools for reflection projects (P7)
+T2    PASS USAGE: scan-build [options] <build command> [build options]
+T3    PASS include-what-you-use 0.27 (git:c9cbc83) based on Ubuntu clang version 23.1.6 (++20261115084239+551bf48cf74f-1~exp1~20261115204336.95); flags the unused <vector>
+T4    PASS rtsan, tysan run; libFuzzer fuzz.cpp: Done 16 runs, exit 0
+T5    PASS valgrind-3.27.1: memcheck leak and invalid read; callgrind; cachegrind
+T6    N/A  tier-2 tools (D19); installed: cppcheck
+T7    PASS xray-log written (clang 23)
+R1    PASS perf version 7.3.0 (linux-perf 7.3.0-10.10) [host kernel]
+R2    PASS cycles, instructions, cache-misses, branch-misses counted (--privileged); outside the Level-1 gate (D46) [host kernel]
+R3    PASS perf record + report: 138 sample lines [host kernel]
+R4    PASS llvm-mca -mcpu=znver3: Iterations 100 (clang 23 and p2996)
+R5    PASS p.json written
+R6    PASS hyperfine 2.0.0
+R7    PASS callgrind instruction count 2065774, identical on two runs (D46 Level-1 metric)
+U1    PASS both compilers accept x86-64, x86-64-v3, -mtune=znver3, znver3; gcc -march=native = znver3
+U2    N/A  znver3 adds over x86-64-v3 (gcc): abm adx aes clflushopt clwb clzero fsgsbase mwaitx pclmul pku prfchw rdpid rdrnd rdseed sha sse4a vaes vpclmulqdq wbnoinvd xsavec xsaveopt xsaves; a -march=znver3 binary needs these on every machine that ru
+U3    N/A  [timing] gcc -O2 bench, best of 5 on cores 2-5: x86-64=243ms/1543404214i x86-64-v3=244ms/1270337360i x86-64-v3+tune=242ms/1270337370i znver3=243ms/1270337362i
+U4    N/A  [timing] link 65 objects with -g, best of 5: bfd=67ms lld=37ms mold=28ms
+U5    PASS LTO and PGO build and give the same output: gcc-lto clang-thinlto gcc-pgo clang-pgo
+V1    PASS cpu.max 'max 100000', memory.max max, nproc 24 = host threads [host kernel]
+V2    PASS CapEff 000001ffffffffff: all capabilities incl. PERFMON and SYS_ADMIN; no seccomp filter: --privileged (D137) [host kernel]
+V3    PASS pids.max 76881; nofile 65536; memlock 8192; /dev/shm 64M; pid 1 sleep [host kernel]
+V4    PASS [timing] $BUILD_DIR on btrfs, not overlayfs; 192-file build: overlayfs 4983ms, btrfs 5010ms
+V5    N/A  host settings, reported only: governor powersave, driver amd-pstate-epp, EPP balance_performance, boost 1, SMT on, THP always [host kernel]
+V6    PASS [timing] compile 4996 vs 4975 ms (+0.4%), bench 243 vs 241 ms (+0.8%) container vs host, best of 3x5; instructions:u compile 36538273702 vs 36535377487, bench 1270490628 vs 1270500908; rootfs 3141 MB of 816 GB free, removed; others 100 ms
+Summary: 71 PASS, 1 FAIL, 11 N/A
+mise installs (this Mac): unchanged (27 pinned tool folders)
+Missing or wrong:
+  E2: clangd matching clang-23 needs llvmorg-23.1.6 or an apt.llvm.org stonking suite (D25)

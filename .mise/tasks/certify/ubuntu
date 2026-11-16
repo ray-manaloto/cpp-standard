@@ -106,7 +106,9 @@ digest="$(grep -oE 'ubuntu:26\.10@sha256:[0-9a-f]{64}' "$doc" | head -1 | sed 's
 # The p2996 install volume is named after its whole build input: the commit and
 # the hash of the build script and patches, so a new input never overwrites it.
 p2996_in="$(cat "$root"/docs/standard/ubuntu-p2996/build-linux.sh "$root"/docs/standard/ubuntu-p2996/*.patch | shasum -a 256 | cut -c1-12)"
-p2996_vol="cpp-standard-p2996-${pin:0:12}-$p2996_in"
+# CERT_P2996_VOL mounts another volume instead (a scratch build under test); the
+# report header names the volume, so such a report is never mistaken for the pinned one.
+p2996_vol="${CERT_P2996_VOL:-cpp-standard-p2996-${pin:0:12}-$p2996_in}"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/certify-ubuntu.XXXXXX")"
 cname="cpp-standard-cert-$$"
 cleanup() {
@@ -196,8 +198,29 @@ host_threads="$(hostsh nproc)"
 host_binfmt="$(hostsh 'test -e /proc/sys/fs/binfmt_misc/qemu-x86_64 && echo yes || echo no')"
 docker_ver="$(docker version -f '{{.Server.Version}}' 2>/dev/null)"
 docker volume inspect "$build_vol" >/dev/null 2>&1 || docker volume create --label org.cpp-standard.cert=1 "$build_vol" >/dev/null
+# GPU offload (GO): the host's NVIDIA user-space driver, read-only. --privileged
+# already exposes /dev/nvidia*; the libraries must match the host's kernel
+# module exactly, so they come from the host, never from the image. Both
+# offload plugins dlopen the unversioned libcuda.so
+# (offload/plugins-nextgen/cuda/dynamic_cuda/cuda.cpp), and GCC's PTX is
+# compiled by the driver's libnvidia-ptxjitcompiler. Upgrade path: CDI through
+# nvidia-container-toolkit on the host (via dotfiles-lead).
+gpu_mount="" gpu_driver=""
+gpu_driver="$(hostsh 'nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1')"
+if [[ -n "$gpu_driver" ]]; then
+  ml=/usr/lib/x86_64-linux-gnu
+  for lib in libcuda libnvidia-ptxjitcompiler; do
+    src="$(hostsh "readlink -f \"\$(ldconfig -p | awk '/$lib\\.so\\.1 /{print \$NF; exit}')\"")"
+    [[ "$src" == *".so.$gpu_driver" ]] || {
+      echo "certify: host $lib ($src) does not match driver $gpu_driver" >&2
+      gpu_mount="" && break
+    }
+    gpu_mount="$gpu_mount -v $src:$ml/$lib.so.1:ro"
+    [[ "$lib" == libcuda ]] && gpu_mount="$gpu_mount -v $src:$ml/libcuda.so:ro"
+  done
+fi
 # shellcheck disable=SC2086
-docker run -d --name "$cname" --label org.cpp-standard.cert=1 $RUN_FLAGS $p2996_mount "$image" sleep infinity >/dev/null || exit 2
+docker run -d --name "$cname" --label org.cpp-standard.cert=1 $RUN_FLAGS $p2996_mount $gpu_mount "$image" sleep infinity >/dev/null || exit 2
 tar -C "$scratch" -cf - probes 2>/dev/null | docker exec -i "$cname" tar -C /root -xf - 2>/dev/null
 
 run_inner() { # run_inner ONLY SKIP: one pass of the in-container script
@@ -357,6 +380,7 @@ fix_for() {
     P8) echo "rebuild p2996 with build-linux.sh (it builds IWYU 0.25 in the tree) into volume $p2996_vol (docs/standard/ubuntu.md, P8)" ;;
     P*) echo "build p2996 for amd64 and mount it as volume $p2996_vol (docs/standard/ubuntu.md, P)" ;;
     DB4 | DB5) echo "the p2996 install (P)" ;;
+    GO*) echo "the host NVIDIA driver (nvidia-smi on the Docker host), the image's CUDA toolkits and offload runtimes (mise run certify:ubuntu-image), and the p2996 install for GO1 (docs/standard/ubuntu.md, GO)" ;;
     T3) echo "rebuild the image (mise run certify:ubuntu-image; stage iwyu builds IWYU 0.27); if the LLVM 23 snapshot is gone, move LLVM_VER and recertify (docs/standard/ubuntu.md, T3)" ;;
     V2) echo "run the container with --privileged (certify:ubuntu does)" ;;
     *) echo "see $1 in docs/standard/ubuntu.md" ;;
@@ -366,7 +390,7 @@ report() {
   printf 'Ubuntu certification  %s  %s\n' "$label" "$(date +%F)"
   printf '%s  kernel %s (container on the PC'"'"'s Omarchy kernel)  glibc %s\n' "$(hdr os)" "$(hdr kernel)" "$(hdr glibc)"
   printf 'CPU %s  Docker %s  image %s\n' "$(hdr cpu)" "$docker_ver" "${image_id:7:12}"
-  printf 'docker run flags: %s%s\n' "$RUN_FLAGS" "${p2996_mount:+ -v $p2996_vol:/opt/p2996:ro}"
+  printf 'docker run flags: %s%s%s\n' "$RUN_FLAGS" "${p2996_mount:+ -v $p2996_vol:/opt/p2996:ro}" "${gpu_mount:+ (+ host NVIDIA driver $gpu_driver: libcuda, libnvidia-ptxjitcompiler, read-only)}"
   [[ -n "$busy_note" ]] && printf 'Timing pass: %s\n' "$busy_note"
   [[ -n "$rc_inner" ]] && printf 'Probe passes exited non-zero:%s (the report is incomplete)\n' "$rc_inner"
   printf '[host kernel] marks a kernel-dependent check: it ran in a container on the PC'"'"'s Omarchy kernel, not Ubuntu'"'"'s.\n'
