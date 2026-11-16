@@ -1,6 +1,7 @@
-# Ubuntu 26.10 amd64 C++ environment: certification playbook
+# Ubuntu 26.10 C++ environment (amd64 and arm64): certification playbook
 
-This playbook says what the Ubuntu 26.10 amd64 container on the PC needs
+This playbook says what the Ubuntu 26.10 container needs, amd64 on the PC
+and arm64 in Docker Desktop on the Mac,
 for modern low-level C++ work: three compilers, their standard libraries and
 runtimes, and the tools for analysis, debugging, profiling and metrics. It
 also says how the container must run so that its numbers are as close to
@@ -25,6 +26,16 @@ counters, `perf_event_paranoid`, ptrace and ASLR, sanitizer memory layout,
 cgroups) is marked **(container on the PC's Omarchy kernel)** here and
 `[host kernel]` in the report. Those results say what the container does on
 this kernel, not what Ubuntu's own kernel would do.
+
+"The Mac" is the owner's Apple M2 Max (Armv8.6-A). The arm64 container runs
+natively, with no emulation, in Docker Desktop (29.9.3), whose Linux VM
+(kernel `7.0.14-linuxkit`, 8 CPUs and 16 GB as configured) is the Docker
+host: there the kernel-dependent checks are about that VM's kernel, and
+the report says so. The Mac is shared by many agents, so arm64 builds and
+certification run only in a load window agreed with chief-of-staff, with the
+build container capped (`--cpus 4 --memory 16g`, 4 jobs). Where a check
+differs per architecture, its text gives both; a check is N/A only where the
+hardware or host is absent, with the reason in its line.
 
 ## How to use it
 
@@ -56,8 +67,21 @@ this kernel, not what Ubuntu's own kernel would do.
    packages: reported, never changed (rule 4). The `ubuntu-certify`
    skill explains the report. The first report is
    `reports/ubuntu-pc-2026-11-15.txt`, next to this file; the current
-   baseline is `reports/ubuntu-pc-2026-11-16.txt` (the full LLVM set for
-   p2996, GPU offload, and LLVM 23 moved to the `551bf48cf74f` snapshot).
+   baseline is `reports/ubuntu-pc-2026-11-16-multiarch.txt`, from the
+   image built from the multi-arch Dockerfile (`reports/ubuntu-pc-2026-11-16.txt`
+   before it added the full LLVM set for p2996, GPU offload, and LLVM 23 at
+   the `551bf48cf74f` snapshot).
+
+   arm64, on the Mac: `mise run certify:ubuntu-image --local` builds the image
+   natively in Docker Desktop (4 ninja jobs), and
+   `MISE_AUTO_INSTALL=0 mise run certify:ubuntu --local --allow-fail`
+   certifies it there, with no ssh. The "Docker host" is then Docker
+   Desktop's Linux VM: the host-side probes run in it through `nsenter` from
+   a privileged helper container. p2996 for arm64 is built the same way as on
+   the PC, into a volume of the same name, in a container capped at
+   `--cpus 4 --memory 16g` (Appendix: p2996 build). Run both only in a load
+   window agreed with chief-of-staff. The arm64 baseline is
+   `reports/ubuntu-mac-arm64-2026-11-16.txt`.
 3. Write one report line per check: `<id> PASS|FAIL|N/A <one-line evidence>`.
 4. Do not install or change anything while certifying. The image puts
    mise's shims first on `PATH` and sets `MISE_YES=1`, so the probes run with
@@ -109,6 +133,24 @@ running the probes below on the PC.
 | CPU target | `-march=x86-64-v3` (U3, D137) | none needed |
 | Build trees | on the volume `/build` (V4) | none needed |
 
+### arm64 on the Mac (2026-11-16)
+
+The same image and the same p2996 build, arm64 in Docker Desktop, certify
+at 66 PASS, 1 FAIL (E2, as above), 16 N/A
+(`reports/ubuntu-mac-arm64-2026-11-16.txt`). Everything in the table above
+holds there too, except:
+
+| Area | State | Workaround until fixed |
+|---|---|---|
+| OpenMP GPU offload | N/A (GO1-GO3): no NVIDIA GPU reaches Docker on the Mac | compiles; run it on the PC |
+| Hardware counters | N/A (R2): Docker Desktop's VM has no PMU | `perf record -e cpu-clock` (R3) and callgrind (R7) |
+| `-mcpu=native` | `generic` (U1): the VM hides the CPU model | name the target: `-mcpu=apple-m2` or `-march=armv8.6-a` |
+| memprof, nsan | not built for AArch64 by compiler-rt (C5) | none |
+| CPU target | proposed, decided in the Part B pull request (U) | none needed |
+
+To launch and use the container, the `ubuntu-arm64-run` skill
+(`mise run ubuntu:arm64`).
+
 ## The end state
 
 | Component | Source | Built from source? | Why |
@@ -119,7 +161,7 @@ running the probes below on the PC.
 | clang 23 OpenMP NVPTX device runtime | `llvm/llvm-project` at `551bf48cf74f` (the apt snapshot's commit), `openmp` built for `nvptx64-nvidia-cuda` in the image's `llvm23-offload` stage with the apt `clang-23` | **yes** | GO2: no llvm-23 apt package and not the 23.1.5 release tarball ships it (the tarball has only `libomp.so` and `libompd.so`). Installed in `/opt/llvm23-offload`, linked as `/usr/lib/llvm-23/lib/nvptx64-nvidia-cuda`, where clang looks (`clang/lib/Driver/ToolChains/CommonArgs.cpp:3076-3078`). The stage checks its commit is the one in `LLVM_VER`, so the two move together. |
 | CUDA 13.2.86 and 12.9.86 (ptxas, nvlink, fatbinary, libdevice, headers) | NVIDIA's redistributables (`cuda_nvcc`, `libnvvm`, `cuda_cudart`), each checked against the sha256 in `redistrib_13.2.2.json` / `redistrib_12.9.2.json`; only those files kept, in `/opt/cuda-13.2` and `/opt/cuda-12.9`, not on `PATH` | no | GO: clang's NVPTX offload runs `ptxas`, `nvlink` and `fatbinary`, with no toolkit-free path. clang 23 takes 13.2, the newest it fully supports (`clang/include/clang/Basic/Cuda.h:54`). p2996 takes 12.9 (GO1). |
 | GCC 16 NVPTX offload | 26.10 archive, `gcc-16-offload-nvptx 16.2.0-3ubuntu1`, `nvptx-tools 0.20260402-1` | no | GO3. No CUDA toolkit: libgomp's plugin hands PTX to the driver. |
-| clangd 23.1.5 | `LLVM-23.1.5-Linux-X64.tar.xz` from the llvmorg-23.1.5 release, sha256 `f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a`; its attestation verified on 2026-11-15 with `gh attestation verify <tarball> --bundle <tarball>.jsonl --repo llvm/llvm-project` (exit 0; signer `release-binaries.yml@refs/tags/llvmorg-23.1.5`; the same check with `--repo llvm/clangir` exits 1) | no | E2: the apt `clangd-23` does not install on 26.10. Only `bin/clangd` and `lib/clang` are kept. |
+| clangd 23.1.5 | `LLVM-23.1.5-Linux-X64.tar.xz` (amd64, sha256 `f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a`) or `LLVM-23.1.5-Linux-ARM64.tar.xz` (arm64, sha256 `44f1e4b7a125b2763d56386a199928dd57ec32e151cc6042dce2f7b0da7bb651`) from the llvmorg-23.1.5 release, unpacked to `/opt/llvm-23.1.5`; its attestation verified on 2026-11-15 with `gh attestation verify <tarball> --bundle <tarball>.jsonl --repo llvm/llvm-project` (exit 0; signer `release-binaries.yml@refs/tags/llvmorg-23.1.5`; the same check with `--repo llvm/clangir` exits 1) | no | E2: the apt `clangd-23` does not install on 26.10. Only `bin/clangd` and `lib/clang` are kept. |
 | include-what-you-use 0.27 | `include-what-you-use/include-what-you-use` at `c9cbc836a1af` (tag 0.27, the `clang_23` head), built in the image's `iwyu` stage against `llvm-23-dev` and `libclang-23-dev` of the same snapshot | **yes** | T3: no package of IWYU for LLVM 23 exists; the archive `iwyu` is 0.23 on clang 19 (B2). Installed in `/opt/iwyu-llvm23`, linked into `/usr/local/bin`. |
 | clang-p2996 + libc++ + IWYU 0.25 | `bloomberg/clang-p2996` at the pinned commit, with IWYU `791e69ea4662` (the `clang_21` head) as an LLVM external project, built in a container on the PC | **yes** | The reflection reference compiler (D30, D32); no prebuilt binary exists. Mounted read-only from a volume, not baked into the image (D49). |
 | binutils 2.47, make 4.4.1, gdb 17.2, valgrind 3.27.1, linux-perf 7.3.0, cppcheck 2.21.0 | 26.10 archive | no | D45, D105, D19. |
@@ -130,7 +172,7 @@ running the probes below on the PC.
 exactly the table above and nothing else. It is a stand-in for the M1a base
 and tools images (D45, D49).
 
-### The p2996 amd64 build
+### The p2996 build (amd64 and arm64)
 
 The D136 configuration, with the changes Linux needs. The build ran in a
 container from the image above (host compiler clang 23, `lld`), with
@@ -144,7 +186,7 @@ it finds no device and every target region falls back to the host
 (measured: "No images found compatible with the installed hardware"). With
 it the plugin links `libffi.so.8` (`host/CMakeLists.txt:17-22`). flang,
 MLIR, BOLT, openmp and the libc overlay need nothing more. The script is in
-[Appendix: p2996 amd64 build](#appendix-p2996-amd64-build).
+[Appendix: p2996 build](#appendix-p2996-build).
 
 | Setting | Value | Why |
 |---|---|---|
@@ -159,7 +201,7 @@ MLIR, BOLT, openmp and the libc overlay need nothing more. The script is in
 | `CLANG_DEFAULT_CXX_STDLIB` | `libc++` | p2996 pairs with its own libc++ (D6). |
 | `COMPILER_RT_DEFAULT_TARGET_ONLY` and the `linux/scc.h` patch | `ON`, patch from `spikes/m0/h/patches/` | D105: compiler-rt at this commit does not build against 26.10's kernel headers without it. |
 | `lldb-base-specifier-derived.patch` | from the dotfiles p2996 recipe | lldb at this commit does not compile against p2996's `CXXBaseSpecifier` (it takes the derived record, not a flag): `TypeSystemClang.cpp:7862: no matching constructor for initialization of 'clang::CXXBaseSpecifier'`. The Mac build carries the same patch. M0 (h) built only `clang;lld`, so it never hit this. |
-| Install prefix | `/opt/p2996` in the volume `cpp-standard-p2996-<commit12>-<inputs12>` (Appendix: p2996 amd64 build) | `research/p2996-linux.md`: a separate prefix, nothing on `PATH`. |
+| Install prefix | `/opt/p2996` in the volume `cpp-standard-p2996-<commit12>-<inputs12>` (Appendix: p2996 build) | `research/p2996-linux.md`: a separate prefix, nothing on `PATH`. |
 
 ### What the container cannot have, or has only with a flag
 
@@ -187,7 +229,10 @@ times slower and its counters mean nothing. Probe:
 `dpkg --print-architecture; uname -m` in the container, and on the host
 `ls /proc/sys/fs/binfmt_misc/qemu-x86_64`. Expected: `amd64`, `x86_64`, and
 no `qemu-x86_64` entry. PASS if all three. Today: PASS; the host registers
-qemu only for foreign architectures (`qemu-aarch64` and others).
+qemu only for foreign architectures (`qemu-aarch64` and others). arm64:
+expected `arm64`, `aarch64`, and `uname -m` on the Docker host (Docker
+Desktop's VM) `aarch64`; a `qemu-x86_64` handler there would only run x86
+images, so it is recorded, not failed.
 
 **A4. Kernel (container on the PC's Omarchy kernel).** Probe: `uname -r`.
 Recorded in the report header; N/A, because the container cannot choose it.
@@ -207,7 +252,9 @@ for f in avx2 bmi2 fma adx sha_ni vaes vpclmulqdq avx512f; do grep -qw $f /proc/
 Expected: `x86-64-v3 (supported, searched)` and `x86-64-v2 (supported,
 searched)` but not v4, and every flag except `avx512f`. PASS if so. The
 level names and which are supported come from this glibc's own loader
-(`ld.so --help`), not from a list in this playbook.
+(`ld.so --help`), not from a list in this playbook. arm64 (Apple M2,
+Armv8.6-A): `asimd atomics crc32 aes sha2 asimddp lrcpc i8mm bf16` in
+`/proc/cpuinfo` and no `sve` (Apple cores have none). PASS if so.
 
 **A7. apt.llvm.org source.** Probe: `cat /etc/apt/sources.list.d/llvm.list`
 and `gpg --show-keys --with-colons /usr/share/keyrings/apt-llvm.gpg`.
@@ -294,7 +341,10 @@ ok` twice. Today: PASS (hand run, 2026-11-15).
 Expected, at least, `libclang_rt.<name>` for: `asan tsan msan lsan
 ubsan_standalone dfsan hwasan memprof nsan rtsan tysan scudo_standalone
 gwp_asan safestack cfi fuzzer profile xray`. PASS if all 18. The macOS
-playbook lists most of these as Linux-only.
+playbook lists most of these as Linux-only. arm64: 16, without `memprof` and
+`nsan`, which compiler-rt builds for x86_64 only
+(`compiler-rt/cmake/Modules/AllSupportedArchDefs.cmake:94,96` at LLVM
+`551bf48cf74f`); the probe looks in `clang++-23 -print-runtime-dir`.
 
 **C6. Sanitizers fire (container on the PC's Omarchy kernel).** Use `san.cpp` from
 [Appendix: sanitizer probe](#appendix-sanitizer-probe) (the same file as
@@ -490,7 +540,10 @@ PASS if both.
 
 D136 (amended 2026-11-16): every compiler that can offload to the host's GPU
 does, and is certified on it. The PC has an NVIDIA GeForce GTX 1660 SUPER
-(Turing, `sm_75`), driver 615.78.08.
+(Turing, `sm_75`), driver 615.78.08. The Mac has no NVIDIA GPU and Docker
+Desktop passes no GPU through, so GO1-GO3 are N/A on arm64; the arm64 image
+still carries the CUDA toolkits (`linux-sbsa` archives), so offload code
+compiles there.
 
 **The container's GPU.** `--privileged` already exposes `/dev/nvidia0`,
 `/dev/nvidiactl` and `/dev/nvidia-uvm`. The user-space driver must match the
@@ -638,8 +691,9 @@ g++-16 -std=c++26 -D_GLIBCXX_ASSERTIONS h.cpp -o h2 && ./h2; echo "exit=$?"
 "$P2996/bin/clang++" -std=c++26 h.cpp -o h3 && ./h3; echo "exit=$?"
 ```
 
-Expected: no trap for `h0`; `exit=132` (SIGILL: on x86 the trap is `ud2`,
-where arm64 macOS reports 133, SIGTRAP) for `h1` and `h3`; `exit=134`
+Expected: no trap for `h0`; `exit=132` (SIGILL: on x86 the trap is `ud2`)
+for `h1` and `h3`, and on arm64 `exit=133` (SIGTRAP: the trap is `brk`, as
+on arm64 macOS); `exit=134`
 (SIGABRT) for `h2`. Every compile must succeed, and `h0` must exit
 normally (0 to 125: not a signal, and not 126 or 127 from a program that
 did not run).
@@ -662,7 +716,7 @@ version.
 
 **E2. clangd matching clang 23.** Why: clangd parses with its own frontend,
 so it should be the same version as the compiler. Probe:
-`/opt/LLVM-23.1.5-Linux-X64/bin/clangd --version` against `clang++-23
+`/opt/llvm-23.1.5/bin/clangd --version` against `clang++-23
 --version`, and `clangd --check=e.cpp` on a libstdc++ file with a
 `compile_commands.json` entry for `clang++-23`. PASS if the versions are
 equal and the check ends `All checks completed, 0 errors`.
@@ -773,18 +827,25 @@ takes hardware counters from the PC. Probe:
 PASS if all four are counted. Needs `CAP_PERFMON`, which `--privileged`
 includes (V2). Outside the
 Level-1 gate: D46 moves the PMU check to Level 2, and only callgrind
-instruction counts (R7) are Level 1.
+instruction counts (R7) are Level 1. arm64 on the Mac: N/A. Docker
+Desktop's VM exposes no hardware PMU (`/sys/bus/event_source/devices` holds
+only `breakpoint kprobe software tracepoint uprobe`); the line lists them.
+U3's `instructions:u` counts are absent there for the same reason.
 
 **R3. Sampling (container on the PC's Omarchy kernel).** Probe:
 `perf record -F 999 -g -o r.data -- ./p && perf report -i r.data --stdio`.
 PASS if the report has sample lines. With the host's `kptr_restrict=0`, perf
 warns that it could not record the kernel reference relocation symbol; user
-samples are unaffected.
+samples are unaffected. arm64 on the Mac, with no hardware PMU (R2): it
+samples the software `cpu-clock` event instead of cycles, on a 0.3 s loop,
+since a timer cannot sample a program that ends in a millisecond; the line
+says so.
 
 **R4. llvm-mca.** Probe: `clang++-23 -O2 -march=znver3 -S k.cpp -o k.s &&
 llvm-mca-23 -mcpu=znver3 k.s | grep Iterations` (and the same with p2996),
 with `k.cpp` the dot product from macOS R4. Expected: `Iterations: 100`
-twice. Hand run: `Total Cycles: 1347`, `Block RThroughput: 13.2`.
+twice. Hand run: `Total Cycles: 1347`, `Block RThroughput: 13.2`. arm64:
+the same with `-mcpu=apple-m2` for both the compile and llvm-mca.
 
 **R5. Build timing.** `clang++-23 -std=c++26 -ftime-trace -c p.cpp` writes
 `p.json`. PASS if so.
@@ -796,15 +857,23 @@ twice. Hand run: `Total Cycles: 1347`, `Block RThroughput: 13.2`.
 `valgrind --tool=callgrind` twice on the same `-O2` binary. PASS if both
 print the same `Collected` count.
 
-## U. CPU target (the PC)
+## U. CPU target
 
-Which `-march` to build with is a trade between speed on the PC and
-running elsewhere. These checks measure it; the choice is D137.
+Which `-march` to build with is a trade between speed on the machine and
+running elsewhere. These checks measure it; the choice is D137 for amd64.
+arm64 (proposed in the Part B pull request, decided there): the targets are
+`-march=armv8-a` (the portable baseline), `-march=armv8.2-a`,
+`-march=armv8.6-a` (the M2's level) and `-mcpu=apple-m2`, with
+`armv8.2-a` against `apple-m2` in U2. Docker Desktop's VM hides the CPU
+model (MIDR part `0x000`), so `g++-16 -mcpu=native` says `generic`: on
+arm64, U1 shows only that every target builds, not that a target is tuned to
+a CPU the container can see, and U3's times are for the M2 under the VM.
 
 **U1. Targets accepted.** Probe: both compilers compile with
 `-march=x86-64`, `-march=x86-64-v3`, `-march=x86-64-v3 -mtune=znver3` and
 `-march=znver3`, and `g++-16 -march=native -Q --help=target | grep
-'march='` prints `znver3`. PASS if all.
+'march='` prints `znver3`. PASS if all. arm64: both compilers build each
+arm64 target above; `-mcpu=native` is recorded. PASS if all build.
 
 **U2. What znver3 adds over x86-64-v3.** Probe: the difference of
 `g++-16 -march=x86-64-v3 -Q --help=target` and the same with
@@ -815,7 +884,12 @@ adds the same set (its macros also show `INVPCID`; GCC's list shows `abm`
 and `clflushopt`). A binary built with `-march=znver3` may use any of these
 and stops with SIGILL on a CPU without one; an `x86-64-v3` binary needs only
 the v3 set (AVX2, BMI2, FMA, MOVBE and the rest of the psABI level). N/A:
-the list is the evidence.
+the list is the evidence. arm64: `armv8.2-a` against `-mcpu=apple-m2`,
+from clang's `__ARM_FEATURE_*` macros, because GCC's `-Q --help=target`
+lists no AArch64 extensions. On 2026-11-16: `AES BF16 BF16_SCALAR_ARITHMETIC
+BF16_VECTOR_ARITHMETIC BTI COMPLEX CRYPTO DOTPROD FP16_FML
+FP16_SCALAR_ARITHMETIC FP16_VECTOR_ARITHMETIC FRINT JCVT MATMUL_INT8 PAUTH
+RCPC SHA2 SHA3 SHA512`.
 
 **U3. Measured speed per target.** Probe: `bench.cpp` from
 [Appendix: bench probe](#appendix-bench-probe), built with `g++-16 -O2` for
@@ -928,7 +1002,9 @@ container vs 5029 ms on the host (-0.2%); benchmark 243 vs 243 ms (+0.0%);
 `instructions:u` within 0.02% (compile) and 0.001% (benchmark). Three
 earlier runs the same day gave +0.6%, +0.2% and +0.0% (compile) and
 +0.4%, +0.4% and +0.0% (benchmark). The
-rootfs (2,843 MB) was removed after the run.
+rootfs (2,843 MB) was removed after the run. arm64: N/A. The Docker host is
+Docker Desktop's Linux VM, and the Mac runs macOS, so no host runs this
+toolchain natively to compare against.
 
 ## Report
 
@@ -1197,7 +1273,7 @@ if failed:
 print("PASS")
 ```
 
-## Appendix: p2996 amd64 build
+## Appendix: p2996 build
 
 The build inputs are files in this repository, in
 [`ubuntu-p2996/`](ubuntu-p2996/): the script `build-linux.sh`, the
@@ -1216,14 +1292,19 @@ The install goes into a Docker volume named
 `cpp-standard-p2996-<commit12>-<inputs12>`. `<inputs12>` is the first 12 hex
 digits of the sha256 of the three files concatenated in that order (today
 `cpp-standard-p2996-562409c79426-d3773989aa5d`). A new commit or a changed
-input gives a new volume; an existing one is never overwritten.
+input gives a new volume; an existing one is never overwritten. The name
+does not include the architecture: the amd64 volume on the PC and the arm64
+volume in the Mac's Docker Desktop have the same name, built from the same
+inputs. That is safe while each Docker host holds one architecture; a host
+that held both would need the architecture in the name. Adding it now would
+rename the PC's certified amd64 volume, so it waits for the next input change.
 `certify:ubuntu` computes the same name and mounts it read-only at
 `/opt/p2996`. `CERT_P2996_VOL=<volume>` mounts another volume instead, to
 check a scratch build before it gets its final name; the report header names
 the volume mounted.
 
 Run it in a throwaway container from the certified image, with the build
-dependencies named in "The p2996 amd64 build" installed in that container
+dependencies named in "The p2996 build" installed in that container
 only, the three files next to each other, the volume (created with
 `--label org.cpp-standard.cert=1`) at `/opt/p2996`, and the kept sccache
 volume `cpp-standard-sccache` at `/sccache`:
@@ -1238,6 +1319,12 @@ changed the inputs; that build hit 6134 of 6149 compiles (the 15 misses are
 IWYU's own) and took 215 s. On 2026-11-16 the full project list,
 NVPTX and the new image (whose clang 23 is a different build, so no cache
 entry matched) missed all 6590 compiles and took 49 min 49 s with 20 jobs.
+arm64, the same day, in the Mac's Docker Desktop: the same three files,
+`build-linux.sh /work /opt/p2996 4` in a container capped at `--cpus 4
+--memory 16g`, missed all 6576 compiles and took 76 min 28 s, with no
+out-of-memory kill. The result defaults to `aarch64-unknown-linux-gnu`,
+with the AArch64 and NVPTX back ends; the volume is 7.5 GB and its cache
+1.06 GB.
 M1a replaces it with
 `toolchains/p2996/` and the hash-keyed builder (D49, D85).
 
@@ -1263,6 +1350,11 @@ M1a replaces it with
   `clang/include/clang/Basic/Cuda.h`, `llvm/lib/Object/ELFObjectFile.cpp`;
   the contents of the apt `liboffload-23`, `libomp-23-dev` and other llvm-23
   packages (`dpkg -c`), and of `LLVM-23.1.5-Linux-X64.tar.xz` (`tar -t`).
+- arm64: compiler-rt's `AllSupportedArchDefs.cmake:94,96` (memprof and
+  nsan are x86_64 only) at LLVM `551bf48cf74f`; the arm64 `apt-cache madison`
+  of every pinned package in an arm64 `ubuntu:26.10` container (all 37 at
+  the same versions); NVIDIA's `linux-sbsa` redistributables in the same
+  JSON files; mise's and LLVM's release digests for the arm64 assets.
 - CUDA: NVIDIA's `redistrib_13.2.2.json` and `redistrib_12.9.2.json`
   (<https://developer.download.nvidia.com/compute/cuda/redist/>), the source of
   every archive digest in the image.

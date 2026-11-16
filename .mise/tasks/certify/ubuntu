@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-#MISE description="Run the Ubuntu 26.10 amd64 certification checks in docs/standard/ubuntu.md on the PC's Docker and print the report"
+#MISE description="Run the Ubuntu 26.10 certification checks in docs/standard/ubuntu.md (amd64 on the PC's Docker, or arm64 here with --local) and print the report"
+#USAGE flag "--local" help="Certify the arm64 image in this Mac's Docker Desktop instead of the PC over ssh"
 #USAGE flag "--out <file>" help="Also write the report to this file"
 #USAGE flag "--only <ids>" help="Run only these checks: comma-separated ids or section prefixes (A3,DB,C)"
 #USAGE flag "--name <label>" help="Machine label in the report header (default: pc)"
@@ -80,16 +81,31 @@ inst_walk >"$inst_mark.start" || {
   exit 2
 }
 inst_before="$(inst_list)"
-dest="${CERT_UBUNTU_SSH:-}"
-[[ -n "$dest" ]] || {
-  echo "certify: set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC)" >&2
-  exit 2
-}
-export DOCKER_HOST="ssh://$dest"
+local_docker="${usage_local:-false}"
+if [[ "$local_docker" == true ]]; then
+  # arm64 in this Mac's Docker Desktop. The "Docker host" is Docker Desktop's
+  # Linux VM: hostsh runs there, in the VM's own namespaces (nsenter into PID 1).
+  dest=""
+  # This Mac's Docker Desktop, whatever DOCKER_HOST or the current context say.
+  unset DOCKER_HOST
+  export DOCKER_CONTEXT=desktop-linux
+  [[ "$(docker info -f '{{.OperatingSystem}} {{.Architecture}}' 2>/dev/null)" == "Docker Desktop aarch64" ]] || {
+    echo "certify: --local needs this Mac's Docker Desktop (context desktop-linux) running on Apple silicon" >&2
+    exit 2
+  }
+else
+  dest="${CERT_UBUNTU_SSH:-}"
+  [[ -n "$dest" ]] || {
+    echo "certify: set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC), or pass --local" >&2
+    exit 2
+  }
+  export DOCKER_HOST="ssh://$dest"
+fi
 only="${usage_only:-}"
 out="${usage_out:-}"
 [[ -z "$out" || "$out" == /* ]] || out="$PWD/$out"
 label="${usage_name:-pc}"
+[[ "$local_docker" == true && -z "${usage_name:-}" ]] && label=mac-arm64
 image="${usage_image:-cpp-standard-cert-ubuntu:26.10}"
 
 # The docker run flags the playbook certifies (section V). --privileged, by the
@@ -130,7 +146,12 @@ want() { # want ID: is this check selected by --only?
   done
   return 1
 }
-hostsh() { ssh -o BatchMode=yes "$dest" "$@"; }
+hostsh() {
+  if [[ "$local_docker" == true ]]; then
+    docker run --rm --privileged --pid=host --net=host --label org.cpp-standard.cert=1 "$image" \
+      nsenter -t 1 -m -u -i -n -p sh -c "$*"
+  else ssh -o BatchMode=yes "$dest" "$@"; fi
+}
 mask() { # mask the Mac's home and user, and the ssh destination
   local tilde='~' s
   s="$(cat)"
@@ -139,7 +160,7 @@ mask() { # mask the Mac's home and user, and the ssh destination
   # The destination only as a whole host name: a short alias such as `pc`
   # must not hit `vpclmulqdq` or `cppcheck`. An alias equal to the machine
   # label names nothing private, so it stays.
-  [[ "$dest" == "$label" ]] ||
+  [[ -z "$dest" || "$dest" == "$label" ]] ||
     s="$(D="$dest" perl -pe 's/(?<![\w.-])\Q$ENV{D}\E(?![\w.-])/<pc>/g' <<<"$s")"
   printf '%s\n' "$s"
 }
@@ -196,6 +217,10 @@ p2996_mount=""
 docker volume inspect "$p2996_vol" >/dev/null 2>&1 && p2996_mount="-v $p2996_vol:/opt/p2996:ro"
 host_threads="$(hostsh nproc)"
 host_binfmt="$(hostsh 'test -e /proc/sys/fs/binfmt_misc/qemu-x86_64 && echo yes || echo no')"
+host_arch="$(hostsh 'uname -m')"
+if [[ "$local_docker" == true ]]; then
+  host_kernel_desc="Docker Desktop's Linux VM kernel on this Mac"
+else host_kernel_desc="the PC's Omarchy kernel"; fi
 docker_ver="$(docker version -f '{{.Server.Version}}' 2>/dev/null)"
 docker volume inspect "$build_vol" >/dev/null 2>&1 || docker volume create --label org.cpp-standard.cert=1 "$build_vol" >/dev/null
 # GPU offload (GO): the host's NVIDIA user-space driver, read-only. --privileged
@@ -225,7 +250,7 @@ tar -C "$scratch" -cf - probes 2>/dev/null | docker exec -i "$cname" tar -C /roo
 
 run_inner() { # run_inner ONLY SKIP: one pass of the in-container script
   docker exec -e MISE_AUTO_INSTALL=0 -e usage_only="$1" -e SKIP="$2" -e PROBES=/root/probes -e PIN="$pin" -e EXPECT_DIGEST="$digest" \
-    -e IMAGE_BASE="$image_base" -e HOST_BINFMT_X86="$host_binfmt" -e HOST_THREADS="$host_threads" \
+    -e IMAGE_BASE="$image_base" -e HOST_BINFMT_X86="$host_binfmt" -e HOST_ARCH="$host_arch" -e HOST_THREADS="$host_threads" \
     -e BUILD_DIR=/build "$cname" bash /root/probes/ubuntu-probes 2>/dev/null
 }
 # The other running containers on the host: "<ids> <usec> <unreadable>", with ids
@@ -292,7 +317,9 @@ fi
 
 : >"$scratch/lines3.txt"
 if want V6; then
-  if [[ "${usage_ab:-false}" != true ]]; then
+  if [[ "$local_docker" == true ]]; then
+    printf '%-5s %-4s %s\n' V6 N/A "no host to compare against: the Docker host is Docker Desktop's Linux VM, not a machine that runs this toolchain natively (the Mac runs macOS)" >"$scratch/lines3.txt"
+  elif [[ "${usage_ab:-false}" != true ]]; then
     printf '%-5s %-4s %s\n' V6 N/A "not run: pass --ab (writes a rootfs under /var/tmp on the Docker host)" >"$scratch/lines3.txt"
   else
     ab=/var/tmp/cpp-standard-cert-ab
@@ -388,12 +415,12 @@ fix_for() {
 }
 report() {
   printf 'Ubuntu certification  %s  %s\n' "$label" "$(date +%F)"
-  printf '%s  kernel %s (container on the PC'"'"'s Omarchy kernel)  glibc %s\n' "$(hdr os)" "$(hdr kernel)" "$(hdr glibc)"
+  printf '%s  kernel %s (container on %s)  glibc %s\n' "$(hdr os)" "$(hdr kernel)" "$host_kernel_desc" "$(hdr glibc)"
   printf 'CPU %s  Docker %s  image %s\n' "$(hdr cpu)" "$docker_ver" "${image_id:7:12}"
   printf 'docker run flags: %s%s%s\n' "$RUN_FLAGS" "${p2996_mount:+ -v $p2996_vol:/opt/p2996:ro}" "${gpu_mount:+ (+ host NVIDIA driver $gpu_driver: libcuda, libnvidia-ptxjitcompiler, read-only)}"
   [[ -n "$busy_note" ]] && printf 'Timing pass: %s\n' "$busy_note"
   [[ -n "$rc_inner" ]] && printf 'Probe passes exited non-zero:%s (the report is incomplete)\n' "$rc_inner"
-  printf '[host kernel] marks a kernel-dependent check: it ran in a container on the PC'"'"'s Omarchy kernel, not Ubuntu'"'"'s.\n'
+  printf '[host kernel] marks a kernel-dependent check: it ran in a container on %s, not Ubuntu'"'"'s.\n' "$host_kernel_desc"
   cat "$scratch/body.txt"
   printf 'Summary: %d PASS, %d FAIL, %d N/A\n' "$npass" "$nfail" "$nna"
   printf 'mise installs (this Mac): %s\n' "$inst_note"

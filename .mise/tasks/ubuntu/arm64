@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#MISE description="Launch the certified Ubuntu 26.10 arm64 container in this Mac's Docker Desktop and run a command, a smoke test or a shell in it"
+#USAGE flag "--smoke" help="Compile and run one program with each compiler (p2996 with reflection, clang 23, GCC 16, flang); exit 1 if any fails"
+#USAGE flag "--shell" help="Open an interactive bash in the container (a terminal is needed)"
+#USAGE flag "--image <ref>" help="Image (default: cpp-standard-cert-ubuntu:26.10, built by certify:ubuntu-image --local)"
+#USAGE arg "[cmd]..." help="Command to run in the container (bash -c), in /work: the directory mise was run from, mounted read-write"
+#
+# The run harness of the ubuntu-arm64-run skill. Each call starts a fresh
+# container (--rm) with the playbook's run flags (--privileged, D137) and the
+# p2996 install mounted read-only at /opt/p2996 ($P2996), the way
+# certify:ubuntu runs it. Nothing persists but what the command writes to /work.
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+image="${usage_image:-cpp-standard-cert-ubuntu:26.10}"
+# This Mac's Docker Desktop, whatever DOCKER_HOST or the current context say.
+unset DOCKER_HOST
+export DOCKER_CONTEXT=desktop-linux
+[[ "$(docker info -f '{{.OperatingSystem}} {{.Architecture}}' 2>/dev/null)" == "Docker Desktop aarch64" ]] || {
+  echo "ubuntu:arm64: needs this Mac's Docker Desktop (context desktop-linux) running on Apple silicon: start Docker Desktop" >&2
+  exit 2
+}
+docker image inspect "$image" >/dev/null 2>&1 || {
+  echo "ubuntu:arm64: no image $image: run 'mise run certify:ubuntu-image --local' first (a load window on the Mac)" >&2
+  exit 2
+}
+# The same volume name certify:ubuntu computes from the p2996 build inputs.
+inp="$root/docs/standard/ubuntu-p2996"
+pin="$(grep -oE 'pinned commit \(today `[0-9a-f]{40}' "$root/docs/standard/ubuntu.md" | grep -oE '[0-9a-f]{40}' | head -1)"
+hash="$(cat "$inp/build-linux.sh" "$inp"/*.patch | shasum -a 256 | cut -c1-12)"
+vol="${CERT_P2996_VOL:-cpp-standard-p2996-${pin:0:12}-$hash}"
+docker volume inspect "$vol" >/dev/null 2>&1 || {
+  echo "ubuntu:arm64: no p2996 volume $vol: build it (playbook, Appendix: p2996 build)" >&2
+  exit 2
+}
+run=(docker run --rm --privileged --platform linux/arm64 --label org.cpp-standard.cert=1
+  -v "$vol:/opt/p2996:ro" -e P2996=/opt/p2996 -e MISE_AUTO_INSTALL=0 -v "${MISE_ORIGINAL_CWD:-$PWD}:/work" -w /work)
+
+if [[ "${usage_smoke:-false}" == true ]]; then
+  # shellcheck disable=SC2016 # expanded in the container
+  "${run[@]}" "$image" bash -c '
+    set -u; t=$(mktemp -d); cd "$t"; bad=0
+    printf "#include <meta>\n#include <print>\nstruct S { int a; double b; };\nint main() {\n  constexpr auto n = std::meta::nonstatic_data_members_of(\n      ^^S, std::meta::access_context::unchecked()).size();\n  std::println(\"members={}\", n);\n}\n" >refl.cpp
+    printf "#include <print>\nint main(){ std::println(\"hello\"); }\n" >h.cpp
+    printf "program h\n  print \"(a)\", \"hello\"\nend program h\n" >h.f90
+    chk() { local want=$1; shift; local out; out="$("$@" 2>&1)"; if [[ "$out" == "$want" ]]; then echo "ok   $want"; else echo "FAIL want $want, got: $out"; bad=1; fi; }
+    echo "$(uname -m); $(clang++-23 --version | head -1); $(g++-16 --version | head -1); $($P2996/bin/clang++ --version | head -1)"
+    chk members=2 sh -c "$P2996/bin/clang++ -std=c++26 -freflection-latest refl.cpp -o r && ./r"
+    chk hello sh -c "clang++-23 -std=c++26 h.cpp -o a && ./a"
+    chk hello sh -c "clang++-23 -std=c++26 -stdlib=libc++ h.cpp -o b && ./b"
+    chk hello sh -c "g++-16 -std=c++26 h.cpp -o c && ./c"
+    chk hello sh -c "$P2996/bin/flang h.f90 -o f && ./f"
+    exit $bad'
+elif [[ "${usage_shell:-false}" == true ]]; then
+  "${run[@]}" -it "$image" bash
+else
+  # mise passes the original arguments, options included: keep only the command words.
+  cmd=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --image) shift ;;
+      --image=* | --smoke | --shell) ;;
+      --)
+        shift
+        cmd+=("$@")
+        break
+        ;;
+      *) cmd+=("$1") ;;
+    esac
+    shift
+  done
+  [[ ${#cmd[@]} -gt 0 ]] || {
+    echo "ubuntu:arm64: give a command, --smoke or --shell" >&2
+    exit 2
+  }
+  "${run[@]}" "$image" bash -c "${cmd[*]}"
+fi
