@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#MISE description="Install clangd 23.1.5 (bin/clangd and lib/clang only) into /opt/llvm-23.1.5 on Ubuntu, as the cert image does"
+#
+# clangd for Ubuntu 26.10 (ubuntu.md E2): apt.llvm.org's clangd-23 needs libabsl20260107, which
+# 26.10 does not have, so clangd comes from the llvmorg-23.1.5 release tarball. Only bin/clangd
+# and lib/clang are kept, the same as docs/standard/ubuntu-cert.Dockerfile; the sha256 pins are
+# read from that file, so the two cannot drift. Run as root (it writes /opt). It does nothing if
+# the right clangd is already installed. mise.ubuntu.toml runs it after the apt packages.
+set -euo pipefail
+
+root="${MISE_PROJECT_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+dockerfile="$root/docs/standard/ubuntu-cert.Dockerfile"
+ver=23.1.5
+dest=/opt/llvm-$ver
+
+case "$(uname -m)" in
+  x86_64) asset=LLVM-$ver-Linux-X64 key=CLANGD_SHA256_AMD64 ;;
+  aarch64) asset=LLVM-$ver-Linux-ARM64 key=CLANGD_SHA256_ARM64 ;;
+  *)
+    echo "ubuntu:clangd: unsupported machine $(uname -m)" >&2
+    exit 2
+    ;;
+esac
+sha="$(sed -n "s/^ARG $key=\([0-9a-f]\{64\}\)\$/\1/p" "$dockerfile")"
+[[ -n "$sha" ]] || {
+  echo "ubuntu:clangd: no $key pin in $dockerfile" >&2
+  exit 2
+}
+
+if [[ -x "$dest/bin/clangd" && -d "$dest/lib/clang" ]] &&
+  "$dest/bin/clangd" --version 2>/dev/null | grep -q "^clangd version $ver "; then
+  echo "ubuntu:clangd: $dest/bin/clangd is already $ver"
+  exit 0
+fi
+[[ ! -e "$dest" ]] || {
+  echo "ubuntu:clangd: $dest exists but holds no clangd $ver with lib/clang; remove it first" >&2
+  exit 3
+}
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+curl -fsSL --retry 3 -o "$tmp/llvm.tar.xz" \
+  "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/$asset.tar.xz"
+echo "$sha  $tmp/llvm.tar.xz" | sha256sum -c -
+mkdir -p "$tmp/out"
+tar -C "$tmp/out" --strip-components=1 -xJf "$tmp/llvm.tar.xz" "$asset/bin/clangd" "$asset/lib/clang"
+mkdir -p "$(dirname "$dest")"
+mv "$tmp/out" "$dest"
+"$dest/bin/clangd" --version | head -1

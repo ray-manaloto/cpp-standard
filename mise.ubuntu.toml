@@ -1,0 +1,89 @@
+# The Ubuntu 26.10 machine module: what `mise -E ubuntu bootstrap` installs on a fresh
+# Ubuntu 26.10 container or host, as root, after the bare minimum (ca-certificates, curl,
+# mise). Only loaded with `-E ubuntu` (MISE_ENV=ubuntu), so the Mac and CI never apply it.
+# Source of truth for the versions: docs/standard/ubuntu-cert.Dockerfile and ubuntu.md
+# "The end state", minus gnupg, which the image needs only to check the LLVM key (mise checks
+# the fingerprint itself). Measured on the PC on 2026-11-16: 10 min from the live mirror,
+# 31 min with the snapshot below (slow downloads from snapshot.ubuntu.com); a second run takes
+# seconds and changes nothing.
+#
+# Not here yet (built from source or fetched elsewhere today, see ubuntu.md): clang-p2996,
+# IWYU 0.27, the clang 23 OpenMP NVPTX runtime, the CUDA redistributables.
+#
+# Never run this in a --privileged container: installing these packages runs procps'
+# `sysctl --system`, which a privileged container applies to the host kernel. Pass
+# `-e container=docker` to any container that runs apt.
+
+# The image installs with --no-install-recommends; mise runs plain `apt-get install -y`.
+[bootstrap.files."/etc/apt/apt.conf.d/90-no-recommends"]
+content = """
+APT::Install-Recommends "false";
+APT::Install-Suggests "false";
+"""
+phase = "pre-packages"
+
+# The Ubuntu archive pins below are exact, and several are -updates/-security versions, which
+# Ubuntu's live indexes drop when the next update ships. apt reads the archive as it was at this
+# snapshot (snapshot.ubuntu.com) instead, so the pins keep installing. Bump the date on purpose,
+# with the pins, to take newer security fixes. apt.llvm.org has no snapshots.
+[bootstrap.files."/etc/apt/apt.conf.d/50-snapshot"]
+content = """
+APT::Snapshot "20261116T000000Z";
+"""
+phase = "pre-packages"
+
+# apt.llvm.org has no stonking (26.10) suite: the resolute (26.04) suite, as the Dockerfile
+# uses. mise checks the key's fingerprint and writes it inline into a deb822 source
+# (/etc/apt/sources.list.d/mise-llvm.sources), so gnupg is not needed. Probe A7 checks it.
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+
+[bootstrap.packages]
+# Ubuntu 26.10 archive: exact pins, the same as the Dockerfile.
+"apt:ca-certificates" = "20260816ubuntu0.26.10.2"
+"apt:curl" = "8.20.0-2ubuntu11.1"
+"apt:git" = "1:2.55.0-1ubuntu1.1"
+"apt:xz-utils" = "5.8.3-1ubuntu1"
+"apt:python3" = "3.14.7-3"
+"apt:g++-16" = "16.2.0-3ubuntu1"
+"apt:gcc-16" = "16.2.0-3ubuntu1"
+"apt:binutils" = "2.47-6ubuntu1"
+"apt:make" = "4.4.1-3"
+"apt:gdb" = "17.2-1ubuntu1"
+"apt:valgrind" = "1:3.27.1-0.2ubuntu2"
+"apt:linux-perf" = "7.3.0-10.10"
+"apt:cppcheck" = "2.21.0-1"
+"apt:gcc-16-offload-nvptx" = "16.2.0-3ubuntu1"
+"apt:nvptx-tools" = "0.20260402-1"
+# LLVM 23 from apt.llvm.org: "latest", not an exact pin. apt.llvm.org deletes old snapshots
+# within days (D27): the Dockerfile's pin from the morning of 2026-11-16 was gone the same
+# day. The certified snapshot is the one probe C1 prints in the report.
+"apt:clang-23" = "latest"
+"apt:clang-tools-23" = "latest"
+"apt:llvm-23" = "latest"
+"apt:llvm-23-tools" = "latest"
+"apt:libc++-23-dev" = "latest"
+"apt:libc++abi-23-dev" = "latest"
+"apt:libclang-rt-23-dev" = "latest"
+"apt:lld-23" = "latest"
+"apt:lldb-23" = "latest"
+"apt:python3-lldb-23" = "latest"
+"apt:clang-tidy-23" = "latest"
+"apt:clang-format-23" = "latest"
+"apt:bolt-23" = "latest"
+"apt:libfuzzer-23-dev" = "latest"
+"apt:mlir-23-tools" = "latest"
+"apt:libomp-23-dev" = "latest"
+"apt:liboffload-23" = "latest"
+"apt:liboffload-23-dev" = "latest"
+
+# clangd (E2): only bin/clangd and lib/clang from the llvmorg-23.1.5 release tarball, into
+# /opt/llvm-23.1.5, the image's layout. The whole tarball through mise's github backend is a
+# 12 GB install whose shims take over clang, clang++ and lldb (probe B2), so a task extracts
+# the two paths instead, checked against the Dockerfile's pinned sha256.
+[bootstrap.hooks.post-packages]
+run = "mise run ubuntu:clangd"

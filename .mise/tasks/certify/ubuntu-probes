@@ -185,10 +185,81 @@ elif want A6; then
   else res A6 FAIL "glibc-hwcaps: ${hw:-none}; missing:${miss:- none}; unexpected:${extra:- none}"; fi
 fi
 if want A7; then
-  src="$(cat /etc/apt/sources.list.d/llvm.list 2>/dev/null)"
-  fpr="$(gpg --show-keys --with-colons /usr/share/keyrings/apt-llvm.gpg 2>/dev/null | awk -F: '/^fpr/ {print $10; exit}')"
-  [[ "$src" == *"llvm-toolchain-resolute-23 main"* && "$fpr" == 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421 ]] &&
-    res A7 PASS "resolute-23; key $fpr" || res A7 FAIL "source '${src:-none}'; key ${fpr:-none}"
+  # Two layouts: the image's one-line llvm.list with a keyring file (checked with gpg), or the
+  # deb822 file `mise -E ubuntu bootstrap` writes (mise.ubuntu.toml), with the key inline in
+  # Signed-By and no gpg installed. For the inline key the fingerprint is computed here: an
+  # OpenPGP v4 fingerprint is SHA-1 over 0x99, the 2-byte length and the public-key packet
+  # body (RFC 9580 section 5.5.4.2).
+  want_fpr=6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
+  if [[ -f /etc/apt/sources.list.d/llvm.list ]]; then
+    lay=llvm.list
+    src="$(cat /etc/apt/sources.list.d/llvm.list)"
+    ok_src=no
+    [[ "$src" == *"llvm-toolchain-resolute-23 main"* ]] && ok_src=yes
+    fpr="$(gpg --show-keys --with-colons /usr/share/keyrings/apt-llvm.gpg 2>/dev/null | awk -F: '/^fpr/ {print $10; exit}')"
+  elif [[ -f /etc/apt/sources.list.d/mise-llvm.sources ]]; then
+    lay=mise-llvm.sources
+    f=/etc/apt/sources.list.d/mise-llvm.sources
+    ok_src=no
+    grep -qx 'URIs: https://apt.llvm.org/resolute/' "$f" && grep -qx 'Suites: llvm-toolchain-resolute-23' "$f" &&
+      grep -qx 'Components: main' "$f" && ok_src=yes
+    src="$(grep -E '^(URIs|Suites|Components):' "$f" | tr '\n' ' ')"
+    fpr="$(
+      python3 -I - "$f" <<'PY' 2>/dev/null
+import base64, hashlib, sys
+lines, inkey = [], False
+for raw in open(sys.argv[1]):
+    if raw.startswith("Signed-By:"):
+        inkey = True
+        raw = " " + raw[len("Signed-By:"):]
+    elif inkey and not raw.startswith((" ", "\t")):
+        break
+    if inkey:
+        s = raw.strip()
+        lines.append("" if s == "." else s)
+body, seen_blank, started = [], False, False
+for s in lines:
+    if s.startswith("-----BEGIN PGP PUBLIC KEY BLOCK"):
+        started = True
+        continue
+    if not started:
+        continue
+    if s.startswith("-----END"):
+        break
+    if not seen_blank:
+        seen_blank = s == ""
+        continue
+    if s.startswith("="):
+        break
+    body.append(s)
+data = base64.b64decode("".join(body))
+tag = data[0]
+assert tag & 0x80
+if tag & 0x40:
+    ptag, l0 = tag & 0x3F, data[1]
+    if l0 < 192:
+        hlen, plen = 2, l0
+    elif l0 < 224:
+        hlen, plen = 3, ((l0 - 192) << 8) + data[2] + 192
+    elif l0 == 255:
+        hlen, plen = 6, int.from_bytes(data[2:6], "big")
+    else:
+        raise ValueError("partial length on a key packet (RFC 9580 4.2.1.4)")
+else:
+    ptag, lt = (tag >> 2) & 0x0F, tag & 3
+    n = {0: 1, 1: 2, 2: 4}[lt]
+    hlen, plen = 1 + n, int.from_bytes(data[1:1 + n], "big")
+assert ptag == 6
+pkt = data[hlen:hlen + plen]
+assert len(pkt) == plen and pkt[0] == 4
+print(hashlib.sha1(b"\x99" + len(pkt).to_bytes(2, "big") + pkt).hexdigest().upper())
+PY
+    )"
+  else
+    lay=none src="" ok_src=no fpr=""
+  fi
+  [[ "$ok_src" == yes && "$fpr" == "$want_fpr" ]] &&
+    res A7 PASS "resolute-23 ($lay); key $fpr" || res A7 FAIL "$lay: source '${src:-none}'; key ${fpr:-none}"
 fi
 
 # --- B. Build tools -----------------------------------------------------------
