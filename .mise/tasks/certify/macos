@@ -95,6 +95,8 @@ gcc_d33="$HOME/.local/share/gcc-d33/current/bin/g++-16"
 GXX="${GXX:-$gcc_d33}"
 # IWYU for clang 23 projects: the toolchain:iwyu-llvm23 output, through its stable link.
 IWYU23="${IWYU23:-${XDG_DATA_HOME:-$HOME/.local/share}/iwyu-llvm23/current/bin/include-what-you-use}"
+# AdaptiveCpp with the Metal backend: the toolchain:acpp-metal output, through its stable link.
+ACPP="${ACPP:-${XDG_DATA_HOME:-$HOME/.local/share}/acpp-metal/current}"
 PROBE="$(mktemp -d "${TMPDIR:-/tmp}/certify-macos.XXXXXX")"
 if [[ -z "$PROBE" || ! -d "$PROBE" ]]; then
   echo "certify: cannot create a scratch directory under ${TMPDIR:-/tmp}" >&2
@@ -108,7 +110,7 @@ npass=0 nfail=0 nna=0 failed_ids=""
 # Only a FAIL whose evidence starts with "known upstream" counts: the check
 # writes that prefix only when it sees the known cause, so any other failure
 # of the same check still fails strict mode.
-known_upstream=" P10 " n_known=0 known_ids=""
+known_upstream=" P10 GO6 " n_known=0 known_ids=""
 db5_stop=unrun p8_ok=no p8_msg=unset # results later checks reuse (A6, T3)
 user_name="$(id -un)"
 
@@ -212,7 +214,7 @@ awk -v dir="$PROBE" '
   }
   inb && first {
     first = 0
-    if (match($0, /^(\/\/|#) (refl\.cpp|san\.cpp|fuzz\.cpp|dap\.cpp|dap_probe\.py|CMakeLists\.txt)/)) {
+    if (match($0, /^(\/\/|#) (refl\.cpp|san\.cpp|fuzz\.cpp|dap\.cpp|dap_probe\.py|acpp_sycl\.cpp|acpp_stdpar\.cpp|CMakeLists\.txt)/)) {
       name = substr($0, RSTART, RLENGTH); sub(/^(\/\/|#) /, "", name)
       out = dir "/" name
     }
@@ -226,7 +228,7 @@ mv "$PROBE/CMakeLists.txt" "$PROBE/cmake/" 2>/dev/null
 sed -n 's/^# CMakeLists.txt, next to m.cpp: //p' "$doc" | head -1 |
   perl -pe 's/^import std; */import std;\n/' >"$PROBE/cmake/m.cpp"
 printf '#include <print>\nint main(){std::println("ok");}\n' >"$PROBE/p.cpp"
-for f in refl.cpp san.cpp fuzz.cpp dap.cpp dap_probe.py cmake/m.cpp cmake/CMakeLists.txt; do
+for f in refl.cpp san.cpp fuzz.cpp dap.cpp dap_probe.py acpp_sycl.cpp acpp_stdpar.cpp cmake/m.cpp cmake/CMakeLists.txt; do
   [[ -s "$PROBE/$f" ]] || {
     echo "certify: could not extract $f from the playbook appendix" >&2
     exit 2
@@ -810,6 +812,90 @@ if want R6; then
   [[ "$v" == hyperfine* ]] && res R6 PASS "$v" || res R6 FAIL "${v:-hyperfine not found}"
 fi
 
+# --- GO. GPU offload ----------------------------------------------------------
+
+# The ids match ubuntu.md's GO section. GO1-GO3 (OpenMP offload with p2996,
+# clang 23, GCC 16) cannot exist on the Mac: no Apple GPU target, no
+# libomptarget on macOS. GO4-GO7 are AdaptiveCpp's Metal backend and chipStar.
+# Each must show the work ran on the GPU: the device name the runtime
+# reports, and every result checked. They are host checks: the toolchains
+# are built on the host (toolchain:acpp-metal), not in the guest.
+for id in GO1 GO2 GO3; do want $id && res $id N/A "no Apple GPU target in clang or GCC; libomptarget does not build on macOS"; done
+# On hold (owner, 2026-11-16): nothing is built, so GO4-GO7 report N/A.
+# Set go_hold=no to turn the probes below back on.
+go_hold=yes
+acpp_pin="$(grep -oE 'AdaptiveCpp commit \(today `[0-9a-f]{40}' "$doc" | grep -oE '[0-9a-f]{40}' | head -1)"
+if [[ "$go_hold" == yes ]]; then
+  for id in GO4 GO5 GO6 GO7; do want $id && res $id N/A "on hold (owner, 2026-11-16), see research/apple-gpu-offload.md"; done
+elif [[ "$in_vm" == 1 ]]; then
+  for id in GO4 GO5 GO6 GO7; do want $id && res $id N/A "host check: the Apple GPU toolchains are built and certified on the host"; done
+else
+  # Every acpp run keeps its JIT cache (app db) and the compiler's temporary
+  # files in the scratch dir (rule 4).
+  export ACPP_APPDB_DIR="$PROBE/acpp-appdb"
+  acpp_tmp="$PROBE/acpp-tmp"
+  mkdir -p "$acpp_tmp"
+  acpp_ok=no
+  if [[ ! -x "$ACPP/bin/acpp" ]]; then
+    acpp_msg="no AdaptiveCpp at \$ACPP ($ACPP; mise run toolchain:acpp-metal)"
+  else
+    ai="$(tmo 60 "$ACPP/bin/acpp-info" -l 2>&1)"
+    inputs="$(cat "$ACPP/share/acpp-metal-inputs.txt" 2>/dev/null)"
+    dev="$(sed -n 's/^ *Found device: //p' <<<"$(sed -n '/Loaded backend .*: Metal/,$p' <<<"$ai")" | head -1)"
+    if [[ -z "$acpp_pin" || "$inputs" != *"acpp $acpp_pin"* ]]; then
+      acpp_msg="built from ${inputs%%$'\n'*} (want acpp ${acpp_pin:-<no pin in the playbook>})"
+    elif [[ "$ai" != *"Loaded backend"*": Metal"* || "$dev" != Apple* ]]; then
+      acpp_msg="acpp-info lists no Metal device: $(grep -m2 -E 'backend|device' <<<"$ai" | tr '\n' ' ')"
+    else
+      acpp_ok=yes acpp_msg="acpp ${acpp_pin:0:12}, Metal device: $dev"
+    fi
+  fi
+  if want GO4; then
+    [[ $acpp_ok == yes ]] && res GO4 PASS "$acpp_msg" || res GO4 FAIL "$acpp_msg"
+  fi
+  if want GO5; then
+    if [[ $acpp_ok != yes ]]; then res GO5 FAIL "not run: GO4: $acpp_msg"; else
+      o="$(TMPDIR="$acpp_tmp" tmo 600 "$ACPP/bin/acpp" -O2 acpp_sycl.cpp -o acpp_sycl 2>&1 && TMPDIR="$acpp_tmp" tmo 120 ./acpp_sycl 2>&1)"
+      rc=$?
+      d="$(sed -n 's/^device: //p' <<<"$o" | head -1)" r="$(grep -m1 '^sycl: ' <<<"$o")"
+      if [[ $rc == 0 && "$d" == Apple*"(Metal"* && "$r" == "sycl: 0/"*" wrong" ]]; then
+        res GO5 PASS "kernel ran on $d; $r"
+      else res GO5 FAIL "exit $rc: ${d:-no device line}; ${r:-$(grep -m1 -E 'error|exception' <<<"$o")}"; fi
+    fi
+  fi
+  if want GO6; then
+    if [[ $acpp_ok != yes ]]; then res GO6 FAIL "not run: GO4: $acpp_msg"; else
+      # Unconditional offload: without it the runtime may choose the host.
+      o="$(TMPDIR="$acpp_tmp" tmo 600 "$ACPP/bin/acpp" -O2 --acpp-stdpar --acpp-stdpar-unconditional-offload acpp_stdpar.cpp -o acpp_stdpar 2>&1)"
+      rc=$?
+      if [[ $rc != 0 && "$o" == *"'pstl/execution_defs.h' file not found"* ]]; then
+        res GO6 FAIL "known upstream (stdpar needs libstdc++, doc/stdpar.md:8; the Mac has libc++): $(grep -m1 'fatal error' <<<"$o" | sed 's#^.*/stdpar/#stdpar/#')"
+      elif [[ $rc != 0 ]]; then
+        res GO6 FAIL "compile exit $rc: $(grep -m1 -E 'error' <<<"$o")"
+      else
+        # Proof of GPU execution: the Metal queue logs each kernel it submits
+        # ("metal_queue: Submitting kernel...", src/runtime/metal/metal_queue.cpp:734).
+        o="$(TMPDIR="$acpp_tmp" ACPP_DEBUG_LEVEL=3 tmo 120 ./acpp_stdpar 2>&1)"
+        rc=$?
+        r="$(grep -m1 '^stdpar: ' <<<"$o")"
+        k="no"
+        [[ "$o" == *"metal_queue: Submitting kernel"* ]] && k="yes"
+        if [[ $rc == 0 && "$r" == "stdpar: 0/"*" wrong" && $k == yes ]]; then
+          res GO6 PASS "std::transform ran as a Metal kernel (metal_queue submitted it); $r"
+        else res GO6 FAIL "exit $rc: ${r:-no result line}; Metal kernel submitted: $k"; fi
+      fi
+    fi
+  fi
+  if want GO7; then
+    # chipStar (CUDA/HIP) on the Apple GPU: upstream's route is its native
+    # Vulkan backend on Mesa KosmicKrisp, which needs LLVM 24+. Not built yet.
+    CHIPSTAR="${CHIPSTAR:-${XDG_DATA_HOME:-$HOME/.local/share}/chipstar/current}"
+    if [[ ! -x "$CHIPSTAR/bin/hipcc" ]]; then
+      res GO7 FAIL "chipStar not built (\$CHIPSTAR: $CHIPSTAR): its Apple-GPU route needs LLVM 24+ and Mesa KosmicKrisp (research note)"
+    else res GO7 FAIL "chipStar found at $CHIPSTAR, but this playbook has no probe for it yet"; fi
+  fi
+fi
+
 # --- V. Tart -----------------------------------------------------------------
 
 if [[ "$in_vm" == 1 ]]; then
@@ -876,6 +962,9 @@ fix_for() {
     P8) echo "build IWYU (branch clang_21) against p2996" ;;
     T3) echo "mise run toolchain:iwyu-llvm23 (IWYU 0.27 against the LLVM 23 tarball); for the p2996 half, P8" ;;
     P10) echo "known upstream: use Apple ld until p2996 moves to an LLVM whose lld reads the SDK" ;;
+    GO4 | GO5) echo "mise run toolchain:acpp-metal (AdaptiveCpp with the Metal backend, against LLVM 21.1.8)" ;;
+    GO6) echo "known upstream: AdaptiveCpp stdpar supports only libstdc++ (doc/stdpar.md:8); use SYCL (GO5) on the Mac" ;;
+    GO7) echo "build chipStar on its native Vulkan backend over Mesa KosmicKrisp (research note, section 3)" ;;
     L1 | L2 | R4) echo "see the check; clang 23 parts need the LLVM 23 tarball" ;;
     V1) echo "install Tart with mise (mise install tart; pinned in .mise/conf.d/vm.toml and in the dotfiles global config); remove any Homebrew tart" ;;
     V2) echo "tart pull the golden-gate-xcode image by its digest" ;;

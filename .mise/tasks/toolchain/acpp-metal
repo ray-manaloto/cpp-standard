@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+#MISE description="Build AdaptiveCpp with its Metal backend against a pinned LLVM 21.1.8 (macOS, playbook GO4-GO6)"
+#USAGE flag "--root <dir>" help="Install root (default: ~/.local/share/acpp-metal)"
+#USAGE flag "--jobs <n>" help="Parallel compile jobs (default: 6; the Mac is shared)"
+#USAGE flag "--llvm-only" help="Stop after the LLVM build"
+#
+# ON HOLD (owner, 2026-11-16): written, never run at these pins; the GO4-GO7
+# checks report N/A. Resume from the research note's "Resume here" list.
+#
+# SYCL and C++ standard parallelism on the Mac's Apple GPU (D136 as amended
+# 2026-11-16; research: docs/designs/level-1/research/apple-gpu-offload.md).
+# AdaptiveCpp's generic (SSCP) compiler puts LLVM IR into the program and, at
+# run time, its Metal backend turns that IR into Metal Shading Language for
+# the GPU. That compiler links the shared libLLVM
+# (src/compiler/llvm-to-backend/CMakeLists.txt:41-48), and AdaptiveCpp
+# supports LLVM releases up to 21. Neither the LLVM tarballs (static
+# libraries only) nor p2996 (21.0.0git, a fork with assertions) qualify, so
+# this task builds LLVM 21.1.8 itself: clang, lld and the openmp runtime, for
+# AArch64, with LLVM_BUILD_LLVM_DYLIB. It then builds AdaptiveCpp as its
+# upstream Metal CI does (.github/workflows/macos-metal.yml): Apple clang as
+# the host compiler, the Metal backend on, OpenCL off.
+#
+# Two install folders, each named after a hash of its build inputs, so a new
+# input never overwrites an old build:
+#   <root>/llvm-21.1.8-<id>   LLVM (the LLVM commit, the SDK, this script)
+#   <root>/<acpp12>-<id>      AdaptiveCpp (its commit, metal-cpp, the LLVM folder, the SDK, this script)
+# <root>/current links to the newest AdaptiveCpp. The build's clang has no
+# libc++ of its own: it uses the SDK's, as Apple clang does, so programs and
+# the AdaptiveCpp runtime share one C++ library.
+set -euo pipefail
+
+LLVM_COMMIT=2078da43e25a4623cab2d0d60decddf709aaea28 # tag llvmorg-21.1.8
+LLVM_URL=https://github.com/llvm/llvm-project
+ACPP_COMMIT=fe81de555a801f2847489e23ac9b638514966986 # develop, 2026-11-12
+ACPP_URL=https://github.com/AdaptiveCpp/AdaptiveCpp
+# metal-cpp: the release AdaptiveCpp itself fetches (src/runtime/CMakeLists.txt:467-469).
+METAL_CPP_COMMIT=f567ed836e4cbb85788c42115a2682bbe68097ee # tag release/metal-cpp_macOS26_iOS26
+METAL_CPP_URL=https://github.com/apple/metal-cpp
+
+[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || {
+  echo "toolchain:acpp-metal: Apple silicon macOS only" >&2
+  exit 2
+}
+root_dir="${usage_root:-${XDG_DATA_HOME:-$HOME/.local/share}/acpp-metal}"
+jobs="${usage_jobs:-6}"
+[[ "$jobs" =~ ^[1-9][0-9]*$ ]] || {
+  echo "toolchain:acpp-metal: --jobs wants a positive number, got: $jobs" >&2
+  exit 2
+}
+for t in cmake ninja git; do
+  command -v "$t" >/dev/null || {
+    echo "toolchain:acpp-metal: $t not on PATH (mise install --locked)" >&2
+    exit 2
+  }
+done
+sdk_path="$(xcrun --show-sdk-path)"
+sdk_ver="$(xcrun --show-sdk-version)"
+[[ -d "$sdk_path" ]] || {
+  echo "toolchain:acpp-metal: no SDK at $sdk_path" >&2
+  exit 2
+}
+self="$(shasum -a 256 "$0" | cut -c1-64)"
+
+fetch() { # fetch URL COMMIT DIR: a shallow checkout of exactly COMMIT
+  git init -q "$3"
+  git -C "$3" fetch -q --depth 1 "$1" "$2"
+  git -C "$3" checkout -q FETCH_HEAD
+  [[ "$(git -C "$3" rev-parse HEAD)" == "$2" ]]
+}
+
+mkdir -p "$root_dir"
+root_dir="$(cd "$root_dir" && pwd -P)" # absolute: the current link and the recorded paths use it
+work="$(mktemp -d "${TMPDIR:-/tmp}/acpp-metal.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+# --- LLVM 21.1.8 with libLLVM.dylib --------------------------------------------
+llvm_id="$(printf '%s\n' "$LLVM_COMMIT" "$sdk_ver" "$sdk_path" "$self" | shasum -a 256 | cut -c1-12)"
+llvm="$root_dir/llvm-21.1.8-$llvm_id"
+if [[ -x "$llvm/bin/clang++" && -e "$llvm/lib/libLLVM.dylib" && -d "$llvm/lib/cmake/llvm" ]]; then
+  echo "toolchain:acpp-metal: LLVM already built: $llvm"
+else
+  fetch "$LLVM_URL" "$LLVM_COMMIT" "$work/llvm-src"
+  # DEFAULT_SYSROOT: the build's clang finds the SDK without a config file.
+  # Assertions off: AdaptiveCpp can trip false-positive LLVM assertions
+  # (doc/install-llvm.md:33).
+  cmake -G Ninja -S "$work/llvm-src/llvm" -B "$work/llvm-build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+    -DCMAKE_OSX_SYSROOT="$sdk_path" -DDEFAULT_SYSROOT="$sdk_path" \
+    -DCMAKE_INSTALL_PREFIX="$work/llvm-stage" \
+    -DLLVM_ENABLE_PROJECTS="clang;lld" \
+    -DLLVM_ENABLE_RUNTIMES="openmp" \
+    -DLLVM_TARGETS_TO_BUILD=AArch64 \
+    -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON \
+    -DLLVM_PARALLEL_LINK_JOBS=2 \
+    -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF
+  ninja -C "$work/llvm-build" -j "$jobs" install
+  rm -rf "$llvm"
+  mv "$work/llvm-stage" "$llvm"
+  rm -rf "$work/llvm-src" "$work/llvm-build"
+  echo "toolchain:acpp-metal: LLVM installed: $llvm ($(du -sh "$llvm" | cut -f1))"
+fi
+v="$("$llvm/bin/clang" --version | head -1)"
+[[ "$v" == *"clang version 21.1.8"* ]] || {
+  echo "toolchain:acpp-metal: want clang 21.1.8 in $llvm, got: $v" >&2
+  exit 2
+}
+[[ "${usage_llvm_only:-false}" == true ]] && exit 0
+
+# --- AdaptiveCpp ------------------------------------------------------------------
+acpp_id="$(printf '%s\n' "$ACPP_COMMIT" "$METAL_CPP_COMMIT" "$llvm" "$sdk_ver" "$sdk_path" "$self" | shasum -a 256 | cut -c1-12)"
+prefix="$root_dir/${ACPP_COMMIT:0:12}-$acpp_id"
+# The inputs file is written last, so it marks a complete install.
+if [[ -x "$prefix/bin/acpp" && -s "$prefix/share/acpp-metal-inputs.txt" ]]; then
+  echo "toolchain:acpp-metal: AdaptiveCpp already built: $prefix"
+else
+  fetch "$ACPP_URL" "$ACPP_COMMIT" "$work/acpp-src"
+  fetch "$METAL_CPP_URL" "$METAL_CPP_COMMIT" "$work/metal-cpp"
+  # metal-cpp is header-only; keep it beside the install for later builds.
+  mkdir -p "$work/stage/share"
+  cp -R "$work/metal-cpp" "$work/stage/share/metal-cpp"
+  rm -rf "$work/stage/share/metal-cpp/.git"
+  # A program built by acpp links libomp from the LLVM folder: give it an rpath.
+  cmake -G Ninja -S "$work/acpp-src" -B "$work/acpp-build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+    -DCMAKE_OSX_SYSROOT="$sdk_path" \
+    -DCMAKE_INSTALL_PREFIX="$prefix" \
+    -DLLVM_DIR="$llvm/lib/cmake/llvm" \
+    -DCLANG_EXECUTABLE_PATH="$llvm/bin/clang++" \
+    -DACPP_LLD_PATH="$llvm/bin/ld64.lld" \
+    -DWITH_OPENCL_BACKEND=OFF -DWITH_METAL_BACKEND=ON \
+    -DMETAL_INCLUDE_DIR="$work/stage/share/metal-cpp" \
+    -DACPP_COMPILER_FEATURE_PROFILE=full \
+    -DSEQUENTIAL_LINK_LINE="$llvm/lib/libomp.dylib -Wl,-rpath,$llvm/lib" \
+    "-DOMP_LINK_LINE=-fopenmp $llvm/lib/libomp.dylib -L$llvm/lib -Wl,-rpath,$llvm/lib" \
+    "-DOMP_CXX_FLAGS=-fopenmp -D_ENABLE_EXTENDED_ALIGNED_STORAGE -I$llvm/include"
+  # Installs straight into the hashed prefix: acpp records its install path
+  # at configure time. An interrupted run leaves no inputs file, so a rerun
+  # deletes the prefix and rebuilds.
+  rm -rf "$prefix"
+  ninja -C "$work/acpp-build" -j "$jobs" install
+  mkdir -p "$prefix/share"
+  cp -R "$work/stage/share/metal-cpp" "$prefix/share/metal-cpp"
+  printf '%s\n' "acpp $ACPP_COMMIT" "metal-cpp $METAL_CPP_COMMIT" "llvm $LLVM_COMMIT $llvm" \
+    "sdk $sdk_ver" >"$prefix/share/acpp-metal-inputs.txt"
+  echo "toolchain:acpp-metal: AdaptiveCpp installed: $prefix ($(du -sh "$prefix" | cut -f1))"
+fi
+ln -sfn "$prefix" "$root_dir/current"
+info="$(ACPP_APPDB_DIR="$work/appdb" "$prefix/bin/acpp-info" -l 2>&1 || true)"
+grep -q "Loaded backend .*: Metal" <<<"$info" || {
+  echo "toolchain:acpp-metal: acpp-info lists no Metal backend:" >&2
+  printf '%s\n' "$info" >&2
+  exit 1
+}
+echo "toolchain:acpp-metal: $root_dir/current -> $prefix"
+printf '%s\n' "$info" | grep -E "Loaded backend|Found device"
