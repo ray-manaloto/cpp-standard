@@ -12,8 +12,9 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 tag="${usage_tag:-cpp-standard-cert-ubuntu:26.10}"
 if [[ "${usage_local:-false}" == true ]]; then
-  # This Mac's Docker Desktop, whatever DOCKER_HOST or the current context say.
-  unset DOCKER_HOST
+  # This Mac's Docker Desktop, whatever DOCKER_HOST, BUILDX_BUILDER or the
+  # current context say.
+  unset DOCKER_HOST BUILDX_BUILDER
   export DOCKER_CONTEXT=desktop-linux
   [[ "$(docker info -f '{{.OperatingSystem}} {{.Architecture}}' 2>/dev/null)" == "Docker Desktop aarch64" ]] || {
     echo "certify:ubuntu-image --local: needs this Mac's Docker Desktop (context desktop-linux) running on Apple silicon" >&2

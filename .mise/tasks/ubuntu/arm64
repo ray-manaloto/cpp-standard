@@ -53,10 +53,24 @@ if [[ "${usage_smoke:-false}" == true ]]; then
 elif [[ "${usage_shell:-false}" == true ]]; then
   "${run[@]}" -it "$image" bash
 else
-  # The command words arrive as the positional arguments; bash -c joins them.
-  [[ $# -gt 0 ]] || {
+  # mise passes the original arguments, options included: keep only the command words.
+  cmd=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --image) shift ;;
+      --image=* | --smoke | --shell) ;;
+      --)
+        shift
+        cmd+=("$@")
+        break
+        ;;
+      *) cmd+=("$1") ;;
+    esac
+    shift
+  done
+  [[ ${#cmd[@]} -gt 0 ]] || {
     echo "ubuntu:arm64: give a command, --smoke or --shell" >&2
     exit 2
   }
-  "${run[@]}" "$image" bash -c "$*"
+  "${run[@]}" "$image" bash -c "${cmd[*]}"
 fi
