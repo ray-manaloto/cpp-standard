@@ -7,7 +7,11 @@
 # Build: mise run certify:ubuntu-image (on the Docker host, amd64 only).
 # The LLVM 23 snapshot every stage installs from (declared before the first
 # FROM so the IWYU stage sees it too).
-ARG LLVM_VER=1:23.1.6~++20261108033809+c47d7823685a-1~exp1~20261108153913.94
+# Bumped 2026-11-16 from the c47d7823685a snapshot, which apt.llvm.org had
+# already deleted (D12). LLVM23_COMMIT is the same snapshot's full commit,
+# for the llvm23-offload stage's sources; that stage checks the two agree.
+ARG LLVM_VER=1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95
+ARG LLVM23_COMMIT=551bf48cf74f5aa587924a38f2cb29f72e7c9497
 FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7 AS base
 LABEL org.opencontainers.image.base.digest=sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
 LABEL org.cpp-standard.cert=1
@@ -29,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git=1:2.55.0-1ubuntu1.1 xz-utils=5.8.3-1ubuntu1 python3=3.14.7-3 \
       g++-16=16.2.0-3ubuntu1 gcc-16=16.2.0-3ubuntu1 binutils=2.47-6ubuntu1 make=4.4.1-3 \
       gdb=17.2-1ubuntu1 valgrind=1:3.27.1-0.2ubuntu2 linux-perf=7.3.0-10.10 cppcheck=2.21.0-1 \
+      gcc-16-offload-nvptx=16.2.0-3ubuntu1 nvptx-tools=0.20260402-1 \
     && rm -rf /var/lib/apt/lists/*
 
 # LLVM 23 from apt.llvm.org resolute-23: 26.10 has no suite of its own (D25, D27, D105).
@@ -42,6 +47,7 @@ RUN curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /us
       lld-23="$LLVM_VER" lldb-23="$LLVM_VER" python3-lldb-23="$LLVM_VER" \
       clang-tidy-23="$LLVM_VER" clang-format-23="$LLVM_VER" bolt-23="$LLVM_VER" \
       libfuzzer-23-dev="$LLVM_VER" mlir-23-tools="$LLVM_VER" \
+      libomp-23-dev="$LLVM_VER" liboffload-23="$LLVM_VER" liboffload-23-dev="$LLVM_VER" \
     && rm -rf /var/lib/apt/lists/*
 
 # mise from its release tarball, checked by digest. A stand-in for D73's packslip install.
@@ -75,6 +81,67 @@ RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/includ
          -DCMAKE_C_COMPILER=clang-23 -DCMAKE_CXX_COMPILER=clang++-23 -DCMAKE_INSTALL_PREFIX=/opt/iwyu-llvm23 \
     && ninja -C /b install
 
+# The OpenMP NVPTX device runtime for clang 23 (GPU offload, D136 amended
+# 2026-11-16): neither apt.llvm.org (no nvptx64-nvidia-cuda files in any
+# llvm-23 package) nor the 23.1.5 release tarball ships it. Built from the
+# apt snapshot's own commit with the apt clang-23, as a standalone runtimes
+# build (openmp/docs/Building.md "Building with Offload Support").
+FROM base AS llvm23-offload
+ARG LLVM_VER
+ARG LLVM23_COMMIT
+RUN [[ "$LLVM_VER" == *"+${LLVM23_COMMIT:0:12}-"* ]] \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      llvm-23-dev="$LLVM_VER" libclang-23-dev="$LLVM_VER" libclang-cpp23-dev="$LLVM_VER" \
+    && rm -rf /var/lib/apt/lists/*
+RUN git init -q /src && git -C /src remote add origin https://github.com/llvm/llvm-project \
+    && git -C /src fetch -q --depth 1 --filter=blob:none origin "$LLVM23_COMMIT" \
+    && git -C /src sparse-checkout set --no-cone /runtimes /openmp /offload /cmake /llvm/cmake \
+         /llvm/utils/llvm-lit /llvm/utils/lit /libc/shared /third-party \
+    && git -C /src checkout -q FETCH_HEAD && test "$(git -C /src rev-parse HEAD)" = "$LLVM23_COMMIT" \
+    && cmake -G Ninja -S /src/runtimes -B /b -DCMAKE_BUILD_TYPE=Release \
+         -DLLVM_ENABLE_RUNTIMES=openmp -DLLVM_DEFAULT_TARGET_TRIPLE=nvptx64-nvidia-cuda \
+         -DCMAKE_C_COMPILER=clang-23 -DCMAKE_CXX_COMPILER=clang++-23 \
+         -DCMAKE_C_COMPILER_TARGET=nvptx64-nvidia-cuda -DCMAKE_CXX_COMPILER_TARGET=nvptx64-nvidia-cuda \
+         -DCMAKE_C_COMPILER_WORKS=ON -DCMAKE_CXX_COMPILER_WORKS=ON \
+         -DLLVM_BINARY_DIR=/usr/lib/llvm-23 -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON \
+         -DCMAKE_INSTALL_PREFIX=/opt/llvm23-offload \
+    && ninja -C /b install \
+    && test -f /opt/llvm23-offload/lib/nvptx64-nvidia-cuda/libomptarget-nvptx.bc
+
+# NVIDIA's CUDA redistributables, for clang's GPU offload (ptxas, nvlink,
+# fatbinary, libdevice; cuda.h only so clang can read the version). Each
+# archive is checked against the sha256 in NVIDIA's redistrib_<ver>.json, and
+# only what clang uses is kept. Two toolkits: clang 23 takes 13.2 (the newest
+# it fully supports, clang/include/clang/Basic/Cuda.h:54); p2996 takes 12.9,
+# because CUDA 13's ptxas writes the new ELF SM encoding that LLVM 21 cannot
+# read (llvm/lib/Object/ELFObjectFile.cpp:684 "Unknown EF_CUDA_SM value").
+# Neither is on PATH.
+FROM base AS cuda
+ARG CUDA_REDIST=https://developer.download.nvidia.com/compute/cuda/redist
+ARG CUDA13_NVCC=13.2.86:b04e5ca5b41f8b5629ce5f16930920e6af437f32c9777fcb67e0361f732b6f43
+ARG CUDA13_NVVM=13.2.86:029fc2a43904a2208a83dfd5834c4c343394d1117279f849863ae94208a88b8a
+ARG CUDA13_CUDART=13.2.86:d6be2b3546fa93e5dec9e3d118d31f9540d0b7af5319ee3c6726f202dfc5b5d4
+ARG CUDA12_NVCC=12.9.86:7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35
+ARG CUDA12_CUDART=12.9.79:1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99
+# get PREFIX PACKAGE VERSION:SHA256 fetches one archive, checks it, unpacks it.
+RUN get() { \
+      local h="${3#*:}" f="$2-linux-x86_64-${3%%:*}-archive"; \
+      curl -fsSLo "/tmp/$f.tar.xz" "$CUDA_REDIST/$2/linux-x86_64/$f.tar.xz" \
+        && echo "$h  /tmp/$f.tar.xz" | sha256sum -c - \
+        && mkdir -p "$1" && tar -C "$1" --strip-components=1 -xJf "/tmp/$f.tar.xz" && rm "/tmp/$f.tar.xz"; \
+    } \
+    && get /tmp/c13 cuda_nvcc "$CUDA13_NVCC" && get /tmp/c13 libnvvm "$CUDA13_NVVM" \
+    && get /tmp/c13 cuda_cudart "$CUDA13_CUDART" \
+    && get /tmp/c12 cuda_nvcc "$CUDA12_NVCC" && get /tmp/c12 cuda_cudart "$CUDA12_CUDART" \
+    && for p in 13.2:c13 12.9:c12; do \
+         d="/opt/cuda-${p%%:*}" s="/tmp/${p#*:}"; \
+         mkdir -p "$d/bin" "$d/nvvm" \
+         && cp "$s"/bin/ptxas "$s"/bin/nvlink "$s"/bin/fatbinary "$d/bin/" \
+         && cp -r "$s/include" "$d/" && cp -r "$s/nvvm/libdevice" "$d/nvvm/" && cp "$s/LICENSE" "$d/" \
+         || exit 1; \
+       done \
+    && rm -rf /tmp/c13 /tmp/c12 && du -sh /opt/cuda-13.2 /opt/cuda-12.9
+
 FROM base
 ARG CLANGD_TARBALL=LLVM-23.1.5-Linux-X64
 ARG CLANGD_SHA256=f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a
@@ -91,3 +158,9 @@ RUN ln -s /opt/iwyu-llvm23/bin/include-what-you-use /usr/local/bin/include-what-
     && ln -s /opt/iwyu-llvm23/bin/iwyu_tool.py /usr/local/bin/iwyu_tool.py \
     && ln -s /opt/iwyu-llvm23/bin/fix_includes.py /usr/local/bin/fix_includes.py \
     && include-what-you-use --version
+COPY --from=cuda /opt/cuda-13.2/ /opt/cuda-13.2/
+COPY --from=cuda /opt/cuda-12.9/ /opt/cuda-12.9/
+COPY --from=llvm23-offload /opt/llvm23-offload/ /opt/llvm23-offload/
+# clang 23 finds the device runtime in <its dir>/../lib/<triple>
+# (clang/lib/Driver/ToolChains/CommonArgs.cpp:3076-3078), so no flag is needed.
+RUN ln -s /opt/llvm23-offload/lib/nvptx64-nvidia-cuda /usr/lib/llvm-23/lib/nvptx64-nvidia-cuda

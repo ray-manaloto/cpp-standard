@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# clang-p2996 on Ubuntu 26.10 amd64: the D136 configuration adapted for Linux.
+# clang-p2996 on Ubuntu 26.10 (amd64 or arm64, the machine it runs on): the
+# D136 configuration adapted for Linux, with every LLVM project and runtime that
+# builds there.
 # build-linux.sh <work dir> <install prefix> <jobs>
+# FLANG_JOBS (default jobs/4, at least 1) caps flang's own compiles, which
+# take several GB of memory each (flang/docs/GettingStarted.md).
 # Compiles go through sccache; its cache is $SCCACHE_DIR (default /sccache, the
 # kept volume cpp-standard-sccache), so a rebuild after an input change that
 # leaves the sources alone is mostly cache hits.
@@ -13,6 +17,22 @@ command -v sccache >/dev/null || {
 sccache --start-server >/dev/null 2>&1 || true
 sccache --zero-stats >/dev/null
 work="$1" prefix="$2" jobs="$3"
+flang_jobs="${FLANG_JOBS:-$((jobs / 4 > 0 ? jobs / 4 : 1))}"
+# One native LLVM target, taken from the machine (a hard-coded target broke an
+# earlier arm64 build, docs/designs/level-1/research/p2996-linux.md), plus
+# NVPTX for OpenMP GPU offload: offload builds its NVPTX device runtime only
+# when NVPTX is a target (offload/DeviceRTL/CMakeLists.txt:182-188). The
+# runtimes (offload, openmp, flang-rt) build against libstdc++: their sources
+# set no C++ library and nothing orders them after libc++'s headers, so with
+# the libc++ default they race them (D136, amended 2026-11-16).
+case "$(uname -m)" in
+  x86_64) target=X86 ;;
+  aarch64) target=AArch64 ;;
+  *)
+    echo "build-linux.sh: unsupported machine $(uname -m)" >&2
+    exit 1
+    ;;
+esac
 commit=562409c7942690d59ea470762515f88f24b16e23
 # include-what-you-use, built in the LLVM tree as an external project (the
 # dotfiles p2996 recipe does the same, dotfiles #707): the clang_21 branch head,
@@ -67,11 +87,13 @@ cmake -G Ninja -S "$work/src/llvm" -B "$work/build" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
   -DCMAKE_C_COMPILER=clang-23 -DCMAKE_CXX_COMPILER=clang++-23 -DLLVM_USE_LINKER=lld \
   -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;lld;lldb;mlir;polly" \
+  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;lld;lldb;mlir;polly;bolt;flang" \
   -DLLVM_EXTERNAL_PROJECTS=iwyu -DLLVM_EXTERNAL_IWYU_SOURCE_DIR="$work/iwyu" \
   -DIWYU_RESOURCE_RELATIVE_TO=iwyu \
-  -DLLVM_ENABLE_RUNTIMES="libunwind;libcxxabi;libcxx;compiler-rt" \
-  -DLLVM_TARGETS_TO_BUILD=X86 \
+  -DLLVM_ENABLE_RUNTIMES="libc;libunwind;libcxxabi;libcxx;compiler-rt;openmp;offload;flang-rt" \
+  -DFLANG_PARALLEL_COMPILE_JOBS="$flang_jobs" \
+  -DRUNTIMES_CMAKE_ARGS="-DCMAKE_CXX_FLAGS=-stdlib=libstdc++" \
+  -DLLVM_TARGETS_TO_BUILD="$target;NVPTX" \
   -DLLVM_ENABLE_ASSERTIONS=ON -DLIBCXX_HARDENING_MODE=extensive -DLLVM_INSTALL_UTILS=ON \
   -DLLDB_ENABLE_PYTHON=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
   -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON -DCLANG_DEFAULT_CXX_STDLIB=libc++ \
@@ -84,7 +106,7 @@ sccache --show-stats
 # rpath for its own runtimes, so without these a program finds the system
 # libc++ (or no libunwind) at run time. Link-only (`$`), relative to the
 # config file (<CFGDIR>), so the install can move.
-for drv in clang clang++; do
-  printf '%s\n' '$-Wl,-rpath,<CFGDIR>/../lib/x86_64-unknown-linux-gnu' \
-    >"$prefix/bin/x86_64-unknown-linux-gnu-$drv.cfg"
+triple="$("$prefix/bin/clang" -print-target-triple)"
+for drv in clang clang++ flang; do
+  printf '%s\n' "\$-Wl,-rpath,<CFGDIR>/../lib/$triple" >"$prefix/bin/$triple-$drv.cfg"
 done

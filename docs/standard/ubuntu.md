@@ -55,7 +55,9 @@ this kernel, not what Ubuntu's own kernel would do.
    pin covers it yet. On the PC, Docker and (for `--ab`) `bwrap` are host
    packages: reported, never changed (rule 4). The `ubuntu-certify`
    skill explains the report. The first report is
-   `reports/ubuntu-pc-2026-11-15.txt`, next to this file.
+   `reports/ubuntu-pc-2026-11-15.txt`, next to this file; the current
+   baseline is `reports/ubuntu-pc-2026-11-16.txt` (the full LLVM set for
+   p2996, GPU offload, and LLVM 23 moved to the `551bf48cf74f` snapshot).
 3. Write one report line per check: `<id> PASS|FAIL|N/A <one-line evidence>`.
 4. Do not install or change anything while certifying. The image puts
    mise's shims first on `PATH` and sets `MISE_YES=1`, so the probes run with
@@ -74,10 +76,18 @@ explains each one):
 
 ```sh
 docker run --privileged --hostname cert -v cpp-standard-cert-build:/build \
-  -v cpp-standard-p2996-562409c79426-f3fb14942dd6:/opt/p2996:ro cpp-standard-cert-ubuntu:26.10
+  -v cpp-standard-p2996-562409c79426-d3773989aa5d:/opt/p2996:ro \
+  -v /usr/lib/libcuda.so.<driver>:/usr/lib/x86_64-linux-gnu/libcuda.so.1:ro \
+  -v /usr/lib/libcuda.so.<driver>:/usr/lib/x86_64-linux-gnu/libcuda.so:ro \
+  -v /usr/lib/libnvidia-ptxjitcompiler.so.<driver>:/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1:ro \
+  cpp-standard-cert-ubuntu:26.10
 ```
 
-## Usable today (the PC, 2026-11-15)
+The three driver mounts are the PC's NVIDIA libraries at the version
+`nvidia-smi` reports (GO); the host paths are where its distribution keeps
+them.
+
+## Usable today (the PC, 2026-11-16)
 
 You can start a C++26 project in this container now. These results came from
 running the probes below on the PC.
@@ -87,6 +97,8 @@ running the probes below on the PC.
 | GCC 16.2.0 (26.10 archive): `-freflection`, `import std` through CMake, ASan, TSan, UBSan, LSan | PASS | none needed |
 | clang 23 (apt.llvm.org `resolute-23`): `import std` through CMake with libc++ and with libstdc++; ASan, TSan, UBSan | PASS | none needed |
 | clang-p2996 562409c7 (amd64, built on the PC): reflection, `import std`, ASan, TSan, UBSan, tools, lldb and lldb-dap | PASS (P, DB4, DB5), with IWYU 0.25 built in the tree (P8) | none needed |
+| p2996's full LLVM set: flang, BOLT, OpenMP with CPU offload, LLVM libc (overlay) | PASS (P11-P14) | none needed |
+| OpenMP GPU offload on the GTX 1660 SUPER (`sm_75`) with p2996, clang 23 and GCC 16 | PASS (GO1-GO3) | each compiler needs its own flags (GO); the container needs the host's driver libraries, which `certify:ubuntu` mounts |
 | MemorySanitizer | recorded, not certified (C6) | needs an MSan-built libc++, which no toolchain here ships |
 | clang 23's default standard library | libstdc++ (C2) | pass `-stdlib=libc++` in the libc++ presets |
 | apt libc++ hardening | default `NONE` (H2) | every libc++ preset sets `_LIBCPP_HARDENING_MODE` (H1) |
@@ -103,7 +115,10 @@ running the probes below on the PC.
 |---|---|---|---|
 | Ubuntu 26.10 "stonking" | `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7` (the amd64 manifest is `sha256:8f52618638aaad6b239d47d734112b15757a22fe1a8e76ace2c402e33ed672c8`) | no | The base (D25), pinned by digest. glibc 2.44. |
 | GCC 16.2.0 + libstdc++ | 26.10 archive, `g++-16 16.2.0-3ubuntu1` | no | D25. |
-| LLVM / clang 23 + libc++ | apt.llvm.org `llvm-toolchain-resolute-23`, `1:23.1.6~++20261108033809+c47d7823685a-1~exp1~20261108153913.94` | no | D12, D25, D27. apt.llvm.org has no stonking suite. It deletes old snapshots within days, so a rebuild needs new pins; the image ID in the report is the record (D27). |
+| LLVM / clang 23 + libc++, libomp, liboffload | apt.llvm.org `llvm-toolchain-resolute-23`, `1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95` | no | D12, D25, D27. apt.llvm.org has no stonking suite. It deletes old snapshots within days, so a rebuild needs new pins; the image ID in the report is the record (D27). Moved on 2026-11-16 from `c47d7823685a`, which apt.llvm.org had already deleted when the GPU-offload layers needed an image rebuild. |
+| clang 23 OpenMP NVPTX device runtime | `llvm/llvm-project` at `551bf48cf74f` (the apt snapshot's commit), `openmp` built for `nvptx64-nvidia-cuda` in the image's `llvm23-offload` stage with the apt `clang-23` | **yes** | GO2: no llvm-23 apt package and not the 23.1.5 release tarball ships it (the tarball has only `libomp.so` and `libompd.so`). Installed in `/opt/llvm23-offload`, linked as `/usr/lib/llvm-23/lib/nvptx64-nvidia-cuda`, where clang looks (`clang/lib/Driver/ToolChains/CommonArgs.cpp:3076-3078`). The stage checks its commit is the one in `LLVM_VER`, so the two move together. |
+| CUDA 13.2.86 and 12.9.86 (ptxas, nvlink, fatbinary, libdevice, headers) | NVIDIA's redistributables (`cuda_nvcc`, `libnvvm`, `cuda_cudart`), each checked against the sha256 in `redistrib_13.2.2.json` / `redistrib_12.9.2.json`; only those files kept, in `/opt/cuda-13.2` and `/opt/cuda-12.9`, not on `PATH` | no | GO: clang's NVPTX offload runs `ptxas`, `nvlink` and `fatbinary`, with no toolkit-free path. clang 23 takes 13.2, the newest it fully supports (`clang/include/clang/Basic/Cuda.h:54`). p2996 takes 12.9 (GO1). |
+| GCC 16 NVPTX offload | 26.10 archive, `gcc-16-offload-nvptx 16.2.0-3ubuntu1`, `nvptx-tools 0.20260402-1` | no | GO3. No CUDA toolkit: libgomp's plugin hands PTX to the driver. |
 | clangd 23.1.5 | `LLVM-23.1.5-Linux-X64.tar.xz` from the llvmorg-23.1.5 release, sha256 `f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a`; its attestation verified on 2026-11-15 with `gh attestation verify <tarball> --bundle <tarball>.jsonl --repo llvm/llvm-project` (exit 0; signer `release-binaries.yml@refs/tags/llvmorg-23.1.5`; the same check with `--repo llvm/clangir` exits 1) | no | E2: the apt `clangd-23` does not install on 26.10. Only `bin/clangd` and `lib/clang` are kept. |
 | include-what-you-use 0.27 | `include-what-you-use/include-what-you-use` at `c9cbc836a1af` (tag 0.27, the `clang_23` head), built in the image's `iwyu` stage against `llvm-23-dev` and `libclang-23-dev` of the same snapshot | **yes** | T3: no package of IWYU for LLVM 23 exists; the archive `iwyu` is 0.23 on clang 19 (B2). Installed in `/opt/iwyu-llvm23`, linked into `/usr/local/bin`. |
 | clang-p2996 + libc++ + IWYU 0.25 | `bloomberg/clang-p2996` at the pinned commit, with IWYU `791e69ea4662` (the `clang_21` head) as an LLVM external project, built in a container on the PC | **yes** | The reflection reference compiler (D30, D32); no prebuilt binary exists. Mounted read-only from a volume, not baked into the image (D49). |
@@ -120,14 +135,25 @@ and tools images (D45, D49).
 The D136 configuration, with the changes Linux needs. The build ran in a
 container from the image above (host compiler clang 23, `lld`), with
 `python3-dev swig libedit-dev libxml2-dev zlib1g-dev libzstd-dev
-libncurses-dev` added to that throwaway container only. The script is in
+libncurses-dev libffi-dev` added to that throwaway container only. The full
+project list (2026-11-16) added one package, `libffi-dev`: without it
+offload's host plugin is built to `dlopen("libffi.so")`
+(`offload/plugins-nextgen/host/dynamic_ffi/ffi.cpp:32`), a name only the
+dev package installs, so in the certified image (which has `libffi.so.8`)
+it finds no device and every target region falls back to the host
+(measured: "No images found compatible with the installed hardware"). With
+it the plugin links `libffi.so.8` (`host/CMakeLists.txt:17-22`). flang,
+MLIR, BOLT, openmp and the libc overlay need nothing more. The script is in
 [Appendix: p2996 amd64 build](#appendix-p2996-amd64-build).
 
 | Setting | Value | Why |
 |---|---|---|
-| `LLVM_ENABLE_PROJECTS` | `clang;clang-tools-extra;lld;lldb;mlir;polly` | As D136. |
-| `LLVM_ENABLE_RUNTIMES` | `libunwind;libcxxabi;libcxx;compiler-rt` | As D136; compiler-rt for the sanitizers (M0 (c)). |
-| `LLVM_TARGETS_TO_BUILD` | `X86` | One native target; a hard-coded target broke an earlier arm64 build (`research/p2996-linux.md`). |
+| `LLVM_ENABLE_PROJECTS` | `clang;clang-tools-extra;lld;lldb;mlir;polly;bolt;flang` | D136 (amended 2026-11-16): every project that builds on Linux, the macOS list. BOLT works here: it reads X86-64 and AArch64 ELF (`bolt/README.md:12`; `bolt/CMakeLists.txt:65` targets `AArch64;X86;RISCV`, and lines 88-93 build its runtime on Linux x86_64 and aarch64). flang is an extra project (`llvm/CMakeLists.txt:124`) that pulls in MLIR, clang and flang-rt (lines 164-179); it needs `LLVM_ENABLE_EH` off (`flang/CMakeLists.txt:20`, the default) and a 64-bit CPU (line 73). |
+| `LLVM_ENABLE_RUNTIMES` | `libc;libunwind;libcxxabi;libcxx;compiler-rt;openmp;offload;flang-rt` | D136 (amended 2026-11-16); compiler-rt for the sanitizers (M0 (c)). **libc** is the overlay (`libllvmlibc.a` beside glibc): a full build is the default only for GPU targets (`libc/CMakeLists.txt:128-135`), and the overlay generates no headers, so it needs no PyYAML (`libc/cmake/modules/LLVMLibCHeaderRules.cmake:84-87`). **openmp** builds `libomp` and, on 64-bit Linux, its offload hooks (`openmp/CMakeLists.txt:103-114`). **offload** builds the host plugin (CPU offload, Linux only: `offload/CMakeLists.txt:157-161`; P13) and, because NVPTX is a target, the NVPTX device runtime (`offload/DeviceRTL/CMakeLists.txt:182-188`; GPU offload, GO1). The CUDA and AMDGPU plugins `dlopen` their drivers, so they need nothing at build time; with no AMDGPU backend there is no AMD device runtime. The Mac has none: offload does not build on Apple. **flang-rt** needs flang (`llvm/CMakeLists.txt:209-213`). |
+| Left out | `libclc`, `llvm-libgcc` | libclc is the OpenCL C library for GPU devices (`libclc/CMakeLists.txt:120-130`: amdgcn, nvptx, r600, clspv targets); OpenMP offload does not use it, and nothing here compiles OpenCL. llvm-libgcc needs an explicit opt-in and is a configure error next to compiler-rt or libunwind (`llvm-libgcc/CMakeLists.txt:38-58`). |
+| `FLANG_PARALLEL_COMPILE_JOBS` | the build's jobs / 4, at least 1 (`FLANG_JOBS` overrides) | Each flang compile takes several GB; this pool keeps them within the container's memory while the rest of LLVM builds at full width (`flang/CMakeLists.txt:486-494`). |
+| `LLVM_TARGETS_TO_BUILD` | `X86` on amd64, `AArch64` on arm64, from `uname -m`; plus `NVPTX` | One native target; a hard-coded target broke an earlier arm64 build (`research/p2996-linux.md`), so the script picks it from the machine. `NVPTX` for OpenMP GPU offload (D136, amended 2026-11-16): offload builds its NVPTX device runtime only when NVPTX is a target (`offload/DeviceRTL/CMakeLists.txt:182-188`). No `AMDGPU`: no AMD hardware to certify, and it is one of the largest backends. arm64 builds `NVPTX` too, so both run the same script. |
+| `RUNTIMES_CMAKE_ARGS` | `-DCMAKE_CXX_FLAGS=-stdlib=libstdc++` | The runtimes sub-build compiles offload, openmp and flang-rt with the just-built `clang++`, whose default is libc++. Those runtimes set no C++ library, and nothing orders them after libcxx generates its headers, so the first full build failed: `offload/tools/offload-tblgen/PrintGen.cpp: fatal error: 'type_traits' file not found` (2026-11-16). libcxx, libcxxabi, libunwind and compiler-rt are unaffected: they compile with `-nostdinc++` and link with `-nostdlib++` (`runtimes/CMakeLists.txt:152-161`). apt.llvm.org ships these runtimes the same way. Consequence (`readelf -d`): `libomptarget.so` needs `libstdc++.so.6`, so a libc++ program that offloads loads both C++ runtimes (they do not clash: `std` vs `std::__1`). `libomp.so`, `libc++.so.1`, `libc++abi.so.1` and `libunwind.so.1` need no libstdc++. |
 | `LLVM_ENABLE_ASSERTIONS`, `LIBCXX_HARDENING_MODE`, `LLVM_INSTALL_UTILS` | `ON`, `extensive`, `ON` | As D136. |
 | `LLDB_ENABLE_PYTHON` | `ON`, Ubuntu's Python 3.14 | lldb scripting and lldb-dap. On Linux lldb uses its own `lldb-server`; no code signing. |
 | `CLANG_DEFAULT_CXX_STDLIB` | `libc++` | p2996 pairs with its own libc++ (D6). |
@@ -230,7 +256,7 @@ statistics.
 
 **C1. Version and origin.** Probe: `clang++-23 --version | head -1;
 apt-cache policy clang-23`. Expected: `Ubuntu clang version 23.1.6
-(++20261108033809+c47d7823685a-...)` installed from apt.llvm.org. That
+(++20261115084239+551bf48cf74f-...)` installed from apt.llvm.org. That
 version is a snapshot of the `release/23.x` branch: no llvmorg-23.1.6
 release exists yet (23.1.5 is the newest).
 
@@ -431,6 +457,80 @@ Expected: `File 'p.cpp'` and `Lines executed:100.00%` (D88).
 `"$P2996/bin/clang++" -std=c++26 -fuse-ld=lld p.cpp -o pl && ./pl`.
 Expected: `ok`. (On macOS this fails on the SDK's `.tbd` files; Linux has
 none.)
+
+P11 to P14 cover the projects and runtimes D136 (amended 2026-11-16) adds
+on Linux. `<triple>` is `"$P2996/bin/clang++" -print-target-triple`
+(`x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`).
+
+**P11. flang.** Probe: a `hello.f90` that prints `ok`,
+`"$P2996/bin/flang" hello.f90 -o p11 && ./p11` with no `LD_LIBRARY_PATH`.
+Expected: `ok` (flang-rt links and is found at run time). PASS if so.
+
+**P12. BOLT on an ELF binary.** Why: BOLT reads only ELF, so Linux is
+where it works. Probe: `llvm-bolt`, `perf2bolt` and `merge-fdata` in
+`$P2996/bin`, then
+`"$P2996/bin/clang++" -std=c++26 -O2 -Wl,--emit-relocs p.cpp -o p12 && "$P2996/bin/llvm-bolt" p12 -o p12.bolt && ./p12.bolt`.
+Expected: all three tools and `ok`. PASS if so.
+
+**P13. OpenMP and CPU offload.** Probe: a program with a
+`#pragma omp parallel` reduction and a `#pragma omp target` region that
+records `omp_is_initial_device()`, built with
+`-fopenmp -fopenmp-targets=<triple>` and run with `OMP_NUM_THREADS=2`.
+Expected: `threads=2 target_initial=0` (the target region ran through
+offload's host plugin, not the fallback), and `ldd` resolves `libomp.so`
+under `$P2996`. PASS if both. GPU offload is GO1.
+
+**P14. LLVM libc (overlay).** Probe: `libllvmlibc.a` in
+`$P2996/lib/<triple>`; a C program calling `strlen` linked with that
+archive and `-Wl,-y,strlen`, then run. Expected: the linker reports the
+definition of `strlen` from `libllvmlibc.a`, and the program prints `7`.
+PASS if both.
+
+## GO. OpenMP GPU offload
+
+D136 (amended 2026-11-16): every compiler that can offload to the host's GPU
+does, and is certified on it. The PC has an NVIDIA GeForce GTX 1660 SUPER
+(Turing, `sm_75`), driver 615.78.08.
+
+**The container's GPU.** `--privileged` already exposes `/dev/nvidia0`,
+`/dev/nvidiactl` and `/dev/nvidia-uvm`. The user-space driver must match the
+host's kernel module exactly, so `certify:ubuntu` mounts the host's own,
+read-only, after checking it has the version `nvidia-smi` reports:
+`libcuda.so.<driver>` as both `libcuda.so.1` and `libcuda.so` (both offload
+plugins `dlopen("libcuda.so")`, the unversioned name:
+`offload/plugins-nextgen/cuda/dynamic_cuda/cuda.cpp:101` at p2996, `:119` at
+LLVM 23), and `libnvidia-ptxjitcompiler.so.<driver>` as
+`libnvidia-ptxjitcompiler.so.1` (the driver compiles GCC's PTX with it;
+without it libgomp stops with "Cannot map target functions or variables").
+The report header names the driver. The upgrade path is CDI: the NVIDIA
+container toolkit on the host (through dotfiles-lead), then
+`--device nvidia.com/gpu=all`.
+
+**The flags per compiler** (for the GPU presets, when the reference project adds them):
+
+| Compiler | Flags | Why |
+|---|---|---|
+| p2996 | `-fopenmp --offload-arch=sm_75 --cuda-path=/opt/cuda-12.9` | CUDA 13's `ptxas` writes the new ELF SM encoding (the SM in bits 8-15, `EF_CUDA_SM_MASK`), which LLVM 23 reads (`llvm/lib/Object/ELFObjectFile.cpp:440-444`) and p2996's LLVM 21 does not: with CUDA 13.2 the run stops at "Unknown EF_CUDA_SM value" (`ELFObjectFile.cpp:684`, UNREACHABLE). CUDA 12.9 writes the old encoding. Drop 12.9 when p2996 rebases onto an LLVM that reads the new flags. clang 21 fully supports CUDA up to 12.3; on 2026-11-16 neither p2996 with 12.9 or 13.2 nor clang 23 with 13.2 or 12.9 printed a CUDA version warning for an OpenMP offload compile. `-fopenmp-target-jit` with CUDA 13.2 also runs, but it needs `ptxas` on `PATH` at run time. |
+| clang 23 | `-fopenmp --offload-arch=sm_75 --cuda-path=/opt/cuda-13.2` | 13.2 is the newest CUDA clang 23 fully supports (`clang/include/clang/Basic/Cuda.h:54`). `cuda.h` (from `cuda_cudart`) must be there: clang reads the version from it and otherwise assumes "newer than supported" (`clang/lib/Driver/ToolChains/Cuda.cpp:221-231`). |
+| GCC 16 | `-fopenmp -foffload=nvptx-none -foffload-options="-fcf-protection=none -march=sm_75"` | Ubuntu's GCC enables `-fcf-protection=full` by default, and the nvptx compiler refuses it ("'-fcf-protection=full' is not supported for this target"); the host code keeps it. No CUDA toolkit. |
+
+The trimmed toolkits take 92 MB (`/opt/cuda-13.2`) and 74 MB (`/opt/cuda-12.9`) in the image (`du -sh` in the image build, 2026-11-16); `cuda_nvcc`, `libnvvm` and `cuda_cudart` 13.2 together unpack to 282 MB.
+
+The runner writes `gpu.cpp`: a target region that sets
+`initial = omp_is_initial_device()` and sums 1..100, run with
+`OMP_TARGET_OFFLOAD=MANDATORY`, so a host fallback is a fatal error.
+Expected: `devices=1 initial=0 sum=5050` (any device count of 1 or more).
+
+**GO1. p2996.** PASS if the expected line.
+
+**GO2. clang 23.** PASS if the expected line.
+
+**GO3. GCC 16.** PASS if the expected line.
+
+With no NVIDIA GPU in the container (`/dev/nvidia0` absent), GO1-GO3 are
+N/A. That is the arm64 container in Docker on the Mac: Docker Desktop's
+Linux VM gets no GPU, and no LLVM or GCC offload target exists for Apple
+GPUs.
 
 ## D. Debuggers
 
@@ -1104,21 +1204,23 @@ The build inputs are files in this repository, in
 `linux/scc.h` patch from `spikes/m0/h/patches/` (D105), and
 `lldb-base-specifier-derived.patch`, copied from the dotfiles p2996 recipe
 (`python/toolchains/p2996/src/p2996/patches/`, last changed in dotfiles
-`9550cea`). sha256 on 2026-11-15:
+`9550cea`). sha256 on 2026-11-16:
 
 | File | sha256 |
 |---|---|
-| `build-linux.sh` | `40b30d2db76b996e5bac2f5d51843baf5885cd702afbd843412f3765f7391be9` |
+| `build-linux.sh` | `fc4b5f0eceac79d9452335bc0b4a4412d6a98849e91ccaa9ef1e022eaa33b58d` |
 | `compiler-rt-remove-linux-scc-h.patch` | `c9e835ef4f553b03246d9371bc0ec4b9215e1fb7ef0714e2964ea8cda8562443` |
 | `lldb-base-specifier-derived.patch` | `7e83f3e0b77422037eaa08e454b57e1e80227a7dd51bc5fcf68960530f66ddc5` |
 
 The install goes into a Docker volume named
 `cpp-standard-p2996-<commit12>-<inputs12>`. `<inputs12>` is the first 12 hex
 digits of the sha256 of the three files concatenated in that order (today
-`cpp-standard-p2996-562409c79426-f3fb14942dd6`). A new commit or a changed
+`cpp-standard-p2996-562409c79426-d3773989aa5d`). A new commit or a changed
 input gives a new volume; an existing one is never overwritten.
 `certify:ubuntu` computes the same name and mounts it read-only at
-`/opt/p2996`.
+`/opt/p2996`. `CERT_P2996_VOL=<volume>` mounts another volume instead, to
+check a scratch build before it gets its final name; the report header names
+the volume mounted.
 
 Run it in a throwaway container from the certified image, with the build
 dependencies named in "The p2996 amd64 build" installed in that container
@@ -1133,7 +1235,10 @@ the first build missed all 6134 compiles and filled 633 MB of cache; a
 rebuild of the same tree from an empty build directory hit all 6134 and
 took 93 s, where a full build takes about 45 minutes. Adding IWYU (P8)
 changed the inputs; that build hit 6134 of 6149 compiles (the 15 misses are
-IWYU's own) and took 215 s. M1a replaces it with
+IWYU's own) and took 215 s. On 2026-11-16 the full project list,
+NVPTX and the new image (whose clang 23 is a different build, so no cache
+entry matched) missed all 6590 compiles and took 49 min 49 s with 20 jobs.
+M1a replaces it with
 `toolchains/p2996/` and the hash-keyed builder (D49, D85).
 
 ## Sources
@@ -1148,7 +1253,21 @@ IWYU's own) and took 215 s. M1a replaces it with
   `__config_site` as installed by `libc++-23-dev`.
 - clang-p2996: `bloomberg/clang-p2996` at `562409c7`;
   `docs/designs/level-1/research/p2996-linux.md`; `spikes/m0/README.md`
-  (M0 (c), (f), (h)).
+  (M0 (c), (f), (h)). The project and runtime list, offload and the CUDA
+  ELF flags: that tree's `llvm/`, `bolt/`, `flang/`, `libc/`, `openmp/`,
+  `offload/`, `libclc/`, `llvm-libgcc/` and `runtimes/` CMake files and
+  `llvm/lib/Object/ELFObjectFile.cpp`, at the lines cited.
+- LLVM 23 offload: `llvm/llvm-project` at `551bf48cf74f` (the apt
+  snapshot's commit): `openmp/docs/Building.md`, `openmp/device/`,
+  `clang/lib/Driver/ToolChains/{Cuda,CommonArgs}.cpp`,
+  `clang/include/clang/Basic/Cuda.h`, `llvm/lib/Object/ELFObjectFile.cpp`;
+  the contents of the apt `liboffload-23`, `libomp-23-dev` and other llvm-23
+  packages (`dpkg -c`), and of `LLVM-23.1.5-Linux-X64.tar.xz` (`tar -t`).
+- CUDA: NVIDIA's `redistrib_13.2.2.json` and `redistrib_12.9.2.json`
+  (<https://developer.download.nvidia.com/compute/cuda/redist/>), the source of
+  every archive digest in the image.
+- GPU offload runs (GO): commands run in the container on the PC on
+  2026-11-16, NVIDIA driver 615.78.08, GTX 1660 SUPER.
 - Docker: the default seccomp profile and capability behaviour as measured in
   V2 and DB2 (Docker 29.9.2, server commit `0367cbeb49`). Primary sources
   requested offline for openwiki (workspace `cpp-standard`): moby

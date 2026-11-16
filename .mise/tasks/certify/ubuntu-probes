@@ -308,7 +308,7 @@ want G5 && res G5 N/A "rule, no probe: C++ dependencies for GCC come from vcpkg 
 # --- P. clang-p2996 (source build) --------------------------------------------
 
 if [[ ! -x "$P" ]]; then
-  for id in P1 P2 P3 P4 P5 P6 P7 P8 P9 P10; do want $id && res $id FAIL "$P not found (mount the p2996 install at \$P2996)"; done
+  for id in P1 P2 P3 P4 P5 P6 P7 P8 P9 P10 P11 P12 P13 P14; do want $id && res $id FAIL "$P not found (mount the p2996 install at \$P2996)"; done
 else
   pv="$("$P" --version 2>&1)"
   if want P1; then
@@ -382,6 +382,92 @@ else
     o="$("$P" -std=c++26 -fuse-ld=lld p.cpp -o p10 2>&1 && ./p10)"
     [[ "$o" == ok ]] && res P10 PASS "ok with ld.lld" || res P10 FAIL "$(printf '%s' "$o" | head -1)"
   fi
+  # P11-P14: the projects and runtimes D136 (amended 2026-11-16) adds on Linux.
+  tri="$("$P" -print-target-triple 2>/dev/null)"
+  ld="$P2996/lib/$tri"
+  if want P11; then
+    printf 'program hello\n  print "(a)", "ok"\nend program hello\n' >hello.f90
+    if [[ ! -x "$P2996/bin/flang" ]]; then
+      res P11 FAIL "no flang in \$P2996/bin"
+    else
+      o="$("$P2996/bin/flang" hello.f90 -o p11 2>&1 && env -u LD_LIBRARY_PATH ./p11)"
+      [[ "$o" == ok ]] && res P11 PASS "$("$P2996/bin/flang" --version 2>&1 | head -1); hello.f90 runs" ||
+        res P11 FAIL "$(printf '%s' "$o" | head -1)"
+    fi
+  fi
+  if want P12; then
+    miss=""
+    for t in llvm-bolt perf2bolt merge-fdata; do [[ -e "$P2996/bin/$t" ]] || miss="$miss $t"; done
+    o="$("$P" -std=c++26 -O2 -Wl,--emit-relocs p.cpp -o p12 2>&1 && "$P2996/bin/llvm-bolt" p12 -o p12.bolt >p12.log 2>&1 && ./p12.bolt)"
+    [[ -z "$miss" && "$o" == ok ]] && res P12 PASS "llvm-bolt, perf2bolt, merge-fdata; BOLT rewrote an ELF that runs" ||
+      res P12 FAIL "missing:${miss:- none}; bolt: ${o:-$(tail -1 p12.log)}"
+  fi
+  if want P13; then
+    cat >omp.cpp <<'OMP'
+#include <omp.h>
+#include <cstdio>
+int main() {
+  int n = 0, dev = -1;
+#pragma omp parallel reduction(+ : n)
+  n += 1;
+#pragma omp target map(from : dev)
+  dev = omp_is_initial_device();
+  std::printf("threads=%d target_initial=%d\n", n, dev);
+}
+OMP
+    o="$("$P" -fopenmp -fopenmp-targets="$tri" omp.cpp -o p13 2>&1 && OMP_NUM_THREADS=2 env -u LD_LIBRARY_PATH ./p13)"
+    lib="$(readlink -f "$(ldd p13 2>/dev/null | awk '/libomp\.so/ {print $3; exit}')")"
+    [[ "$o" == "threads=2 target_initial=0" && "$lib" == "$(readlink -f "$P2996")"/* ]] &&
+      res P13 PASS "$o (CPU offload); libomp $lib" ||
+      res P13 FAIL "out '${o:0:100}'; libomp '${lib:-none}'"
+  fi
+  if want P14; then
+    a=""
+    for f in "$ld"/libllvmlibc.a "$P2996"/lib/libllvmlibc.a; do [[ -z "$a" && -f "$f" ]] && a="$f"; done
+    printf '#include <string.h>\n#include <stdio.h>\nint main(void){ const char *volatile s = "overlay"; printf("%%zu\\n", strlen(s)); }\n' >lc.c
+    o="$([[ -n "$a" ]] && "$P2996/bin/clang" lc.c "$a" -Wl,-y,strlen -o p14 2>&1 && ./p14)"
+    [[ -n "$a" && "$o" == *"libllvmlibc.a"*"definition of strlen"* && "$o" == *7 ]] &&
+      res P14 PASS "$a: strlen linked from LLVM libc (overlay); runs" || res P14 FAIL "archive '${a:-none}'; ${o:0:120}"
+  fi
+fi
+
+# --- GO. OpenMP GPU offload (D136, amended 2026-11-16) --------------------------
+# A target region that must run on the GPU: OMP_TARGET_OFFLOAD=MANDATORY makes a
+# host fallback a fatal error, and the region reports omp_is_initial_device().
+
+cat >gpu.cpp <<'GPU'
+#include <omp.h>
+#include <cstdio>
+int main() {
+  int initial = -1, sum = 0;
+#pragma omp target map(from : initial) map(tofrom : sum)
+  {
+    initial = omp_is_initial_device();
+    for (int i = 1; i <= 100; ++i) sum += i;
+  }
+  std::printf("devices=%d initial=%d sum=%d\n", omp_get_num_devices(), initial, sum);
+}
+GPU
+if [[ ! -e /dev/nvidia0 ]]; then
+  for id in GO1 GO2 GO3; do
+    want $id && res $id N/A "no NVIDIA GPU in the container (/dev/nvidia0 absent; Docker on the Mac has no GPU passthrough)"
+  done
+else
+  gpu_run() { # gpu_run ID LABEL BINARY COMPILE...: build, then run with offloading mandatory
+    local id="$1" label="$2" bin="$3" o r st
+    shift 3
+    o="$("$@" gpu.cpp -o "$bin" 2>&1 && OMP_TARGET_OFFLOAD=MANDATORY timeout 120 ./"$bin" 2>&1)"
+    st=$?
+    r="$(tail -1 <<<"$o")"
+    [[ $st == 0 && "$r" == devices=[1-9]*" initial=0 sum=5050" ]] && res "$id" PASS "$label: $r on sm_75" || res "$id" FAIL "$label: exit $st: $(tr '\n' ' ' <<<"$o" | cut -c1-200)"
+  }
+  if want GO1; then
+    if [[ -x "$P" ]]; then
+      gpu_run GO1 "p2996 + CUDA 12.9" go1 "$P" -fopenmp --offload-arch=sm_75 --cuda-path=/opt/cuda-12.9
+    else res GO1 FAIL "$P not found (mount the p2996 install at \$P2996)"; fi
+  fi
+  want GO2 && gpu_run GO2 "clang 23 + CUDA 13.2" go2 $L -fopenmp --offload-arch=sm_75 --cuda-path=/opt/cuda-13.2
+  want GO3 && gpu_run GO3 "GCC 16 nvptx-none" go3 $G -fopenmp -foffload=nvptx-none "-foffload-options=-fcf-protection=none -march=sm_75"
 fi
 
 # --- D. Debuggers ---------------------------------------------------------------

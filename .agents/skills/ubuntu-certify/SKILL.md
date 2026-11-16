@@ -61,7 +61,7 @@ that matches no check; 3 when the Mac's mise installs changed during the run
 
 ```bash
 MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail --ab --out docs/standard/reports/ubuntu-pc-$(date +%F).txt
-git diff --no-index docs/standard/reports/ubuntu-pc-2026-11-15.txt docs/standard/reports/ubuntu-pc-$(date +%F).txt
+git diff --no-index docs/standard/reports/ubuntu-pc-2026-11-16.txt docs/standard/reports/ubuntu-pc-$(date +%F).txt
 ```
 
 The report masks the Mac's home as `~`, the account as `<user>` and the ssh
@@ -81,7 +81,11 @@ Kept on purpose, labelled `org.cpp-standard.cert=1`:
 - volume `cpp-standard-p2996-<commit12>-<inputs12>`: the p2996 install,
   named after its build inputs (playbook, "Appendix: p2996 amd64 build").
   A new commit or changed input gets a new volume; an old one is never
-  overwritten.
+  overwritten. To check a scratch build first, mount it with
+  `CERT_P2996_VOL=<volume> mise run certify:ubuntu --only P,GO1`.
+- not kept, read from the host each run: the NVIDIA driver. GO (GPU offload) mounts the host's `libcuda` and
+  `libnvidia-ptxjitcompiler` read-only, matched to `nvidia-smi`'s version;
+  without an NVIDIA GPU in the container GO is N/A.
 - volume `cpp-standard-sccache`: the p2996 build's sccache cache
   (`build-linux.sh`). With it, a rebuild after an input change that leaves
   the sources alone took 93 s (all 6134 compiles hit), not 45 minutes.
@@ -95,7 +99,7 @@ minutes from `cpp-standard-sccache`, about 45 without it):
 DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker image ls --filter label=org.cpp-standard.cert=1
 DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume ls --filter label=org.cpp-standard.cert=1
 DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker image rm cpp-standard-cert-ubuntu:26.10
-DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume rm cpp-standard-cert-build cpp-standard-sccache cpp-standard-p2996-562409c79426-f3fb14942dd6
+DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume rm cpp-standard-cert-build cpp-standard-sccache cpp-standard-p2996-562409c79426-d3773989aa5d
 ```
 
 ## Reading the report
