@@ -70,9 +70,12 @@ else
   # SDK splits each C header: <stdio.h> includes <_stdio.h>, which declares
   # puts. Without a mapping IWYU names <_stdio.h>. Each <_X.h> that <X.h>
   # includes directly maps to <X.h>, which IWYU's built-in C++ mappings then
-  # map to <cX>. <X.h> is "private" when libc++ has <cX> or when it is itself
-  # an underscore header, because IWYU stops with an assertion if one header
-  # is given two visibilities.
+  # map to <cX>. Any other <_X.h> (one that several headers share, such as
+  # <_locale_posix2008.h>, which declares newlocale) maps to every header in
+  # usr/include that includes it directly; IWYU follows the chain and picks
+  # one the file already includes. A target is "private" when libc++ has
+  # <cX> or when it is itself an underscore header, because IWYU stops with
+  # an assertion if one header is given two visibilities.
   imp="$work/stage/share/include-what-you-use/macos-sdk.imp"
   mkdir -p "${imp%/*}"
   (
@@ -80,20 +83,30 @@ else
     sep=""
     echo "["
     for p in _*.h; do
+      re="^[[:space:]]*#[[:space:]]*include[[:space:]]*<$p>"
       q="${p#_}"
-      [[ -f "$q" ]] || continue
-      grep -qE "^[[:space:]]*#[[:space:]]*include[[:space:]]*<$p>" "$q" || continue
-      vis=public
-      [[ "$q" == _* || -f "$llvm/include/c++/v1/c${q%.h}" ]] && vis=private
-      printf '%s  { "include": ["<%s>", "private", "<%s>", "%s"] }' "$sep" "$p" "$q" "$vis"
-      sep=$',\n'
+      if [[ -f "$q" ]] && grep -qE "$re" "$q"; then
+        targets=("$q")
+      else
+        targets=()
+        while IFS= read -r t; do
+          [[ "$t" == "$p" ]] || targets+=("$t")
+        done < <(grep -lE "$re" -- *.h | LC_ALL=C sort)
+      fi
+      for t in ${targets[@]+"${targets[@]}"}; do
+        vis=public
+        [[ "$t" == _* || -f "$llvm/include/c++/v1/c${t%.h}" ]] && vis=private
+        printf '%s  { "include": ["<%s>", "private", "<%s>", "%s"] }' "$sep" "$p" "$t" "$vis"
+        sep=$',\n'
+      done
     done
     printf '\n]\n'
   ) >"$imp"
-  grep -q '"<_stdio.h>", "private", "<stdio.h>"' "$imp" || {
-    echo "toolchain:iwyu-llvm23: the SDK mapping has no <_stdio.h> entry: $imp" >&2
+  if ! grep -q '"<_stdio.h>", "private", "<stdio.h>"' "$imp" ||
+    ! grep -q '"<_locale_posix2008.h>", "private", "<_xlocale.h>"' "$imp"; then
+    echo "toolchain:iwyu-llvm23: the SDK mapping lacks the <_stdio.h> or <_locale_posix2008.h> entry: $imp" >&2
     exit 2
-  }
+  fi
   mkdir -p "$root_dir"
   mv "$work/stage" "$prefix"
   echo "toolchain:iwyu-llvm23: built $prefix"
