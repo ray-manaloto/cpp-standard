@@ -912,24 +912,32 @@ next to the binary that sets the SDK, and the tarball's libc++ headers at
 against Homebrew's LLVM, so it does not count. Probe:
 `$IWYU23 --version`, then
 `$IWYU23 -std=c++26 -Xiwyu --mapping_file=$LLVM23/include/c++/v1/libcxx.imp -Xiwyu --mapping_file=<prefix>/share/include-what-you-use/macos-sdk.imp t3.cpp`
-on a file with an unused `<vector>` that calls `std::puts`. Expected:
-`include-what-you-use 0.27` on the same `clang version` the tarball's
-`clang --version` prints, the unused `<vector>` flagged with no `error:`,
-and `<cstdio>` kept for `puts`. PASS if all three, and P8 passes.
+on a file with an unused `<vector>` that calls `std::puts` and
+`newlocale`. Expected: `include-what-you-use 0.27` on the same
+`clang version` the tarball's `clang --version` prints, the unused
+`<vector>` flagged with no `error:`, `<cstdio>` kept for `puts` and
+`<clocale>` for `newlocale`, and no private `<_…>` header in the include
+list. PASS if all of these, and P8 passes.
 
 The SDK mapping (`macos-sdk.imp`). The SDK splits each C header in two:
 `<stdio.h>` includes `<_stdio.h>`, which declares `puts`. libc++'s mapping
 file does not cover the SDK, so without a mapping IWYU names the private
 `<_stdio.h>`. The build generates the mapping from the installed SDK: each
-`<_X.h>` that `<X.h>` includes directly maps to `<X.h>` (18 pairs on the
-27.2 SDK), and IWYU's built-in C++ mappings then map `<X.h>` to `<cX>`.
-`<X.h>` is marked private when libc++ has `<cX>`, because IWYU stops with
-an assertion if one header gets two visibilities. Use it for C++
-translation units only: in C, IWYU marks `<inttypes.h>` public and stops
-with that assertion. Private headers that several headers share are not
-mapped: for `newlocale` IWYU still names `<_locale_posix2008.h>`, which
-`<locale.h>` and `<xlocale.h>` both include. The report gives the p2996 half first, then the clang 23 half.
-Today (2026-11-15): PASS on the host, with `<cstdio>` kept for `puts`; in
+`<_X.h>` that `<X.h>` includes directly maps to `<X.h>`, and IWYU's
+built-in C++ mappings then map `<X.h>` to `<cX>`. Any other `<_X.h>`, one
+that several headers share, maps to every header in `usr/include` that
+includes it directly, and IWYU follows the chain. `<_locale_posix2008.h>`,
+which declares `newlocale`, maps to `<_locale.h>` and `<_xlocale.h>`, so
+IWYU names `<clocale>`, also in a file that included `<xlocale.h>` (POSIX
+2008 declares `newlocale` in `<locale.h>`). Likewise `ctermid`, in
+`<_ctermid.h>` under both `<stdio.h>` and `<unistd.h>`, gets `<cstdio>`, as
+POSIX has it. The 27.2 SDK gives 121 entries. A target is marked private
+when libc++ has `<cX>` or when it is itself an underscore header, because
+IWYU stops with an assertion if one header gets two visibilities. Use the
+mapping for C++ translation units only: in C, IWYU marks `<inttypes.h>`
+public and stops with that assertion. The report gives the p2996 half first, then the clang 23 half.
+Today (2026-11-15): PASS on the host, with `<cstdio>` kept for `puts` and
+`<clocale>` for `newlocale`; in
 the Tart guest (SDK 27.2) the clang 23 half passes the same way and the
 p2996 half waits for P8 (V3).
 
