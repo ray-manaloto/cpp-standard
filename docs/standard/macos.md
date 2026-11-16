@@ -121,7 +121,7 @@ upstream docs. List these as Linux-only; do not report them as missing.
 |---|---|---|
 | MemorySanitizer, DataFlowSanitizer, HWASan, MemProf, NSan, GWP-ASan, Scudo, SafeStack | compiler-rt does not build them for Darwin | ASan + UBSan; `MallocScribble`, `MallocGuardEdges`; `leaks` |
 | BOLT (installed, but useless on Mach-O) | reads ELF only | PGO (`-fprofile-generate` / `-fprofile-use`) |
-| GPU offloading (`#pragma omp target`, `-fopenmp-targets`) for p2996, clang 23 and GCC | LLVM's offload runtime (libomptarget) does not build on macOS (`offload/CMakeLists.txt:15-16` at `562409c7`: "libomptarget cannot be built on Windows and MacOS X"), and neither LLVM nor GCC has an Apple GPU target: GCC offloads only to `nvptx-none` and `amdgcn-amdhsa` (`gcc/doc/install.texi:2681-2690`, releases/gcc-16). The owner's rule (2026-11-16) is GPU offloading for every compiler that supports it on the host; on the Mac none does. The Ubuntu PC (NVIDIA) has it. | Metal (Apple's own GPU API) outside these compilers; CPU OpenMP (`-fopenmp`, `libomp.dylib`) |
+| GPU offloading (`#pragma omp target`, `-fopenmp-targets`) for p2996, clang 23 and GCC | LLVM's offload runtime (libomptarget) does not build on macOS (`offload/CMakeLists.txt:15-16` at `562409c7`: "libomptarget cannot be built on Windows and MacOS X"), and neither LLVM nor GCC has an Apple GPU target: GCC offloads only to `nvptx-none` and `amdgcn-amdhsa` (`gcc/doc/install.texi:2681-2690`, releases/gcc-16). An upstream RFC for an LLVM Metal/AIR target (2026-05) was judged "extremely unlikely" to be merged ([research note](../designs/level-1/research/apple-gpu-offload.md)). The owner's rule (2026-11-16) is GPU offloading for every compiler that supports it on the host. None of these three does on the Mac; the Ubuntu PC (NVIDIA) has it. | CPU OpenMP (`-fopenmp`, `libomp.dylib`). On hold (owner, 2026-11-16): AdaptiveCpp SYCL on Metal (experimental; a 2026-11-16 spike ran a SYCL kernel on the M2 Max, but stdpar fails on libc++) and chipStar (CUDA/HIP, experimental, needs Mesa KosmicKrisp), GO4-GO7. |
 | Linux `perf` | Linux kernel interface | `xctrace` Time Profiler and CPU Counters (R2) |
 | Valgrind (memcheck, callgrind, cachegrind) | no current arm64 Darwin port | ASan; `xctrace` Allocations and Leaks; `heap`, `vmmap` |
 | gdb | no arm64 Darwin target | lldb |
@@ -1036,6 +1036,89 @@ PASS if `p.json` is listed (verified).
 
 **R6. Benchmark timing.** `hyperfine --version` prints a version (B1).
 
+## GO. GPU offload
+
+**On hold (owner, 2026-11-16): "let's hold off on apple compiler offloading
+for now."** Nothing below is built on this Mac. `certify:macos` reports
+GO4-GO7 as N/A "on hold" and does not run their probes; to turn them back
+on, set `go_hold=no` in the task. The probes and the build task are kept as
+written. What was found, what was tried, and where to resume are in the
+[research note](../designs/level-1/research/apple-gpu-offload.md).
+
+The ids match `ubuntu.md`'s GO section, so one id means the same check on
+every platform: GO1-GO3 are OpenMP GPU offload with p2996, clang 23 and
+GCC 16. On the Mac all three are N/A. Clang has no Apple GPU target and
+libomptarget does not build on macOS. GCC offloads only to NVIDIA and AMD.
+See "What macOS cannot have".
+
+Owner rule (D136 as amended 2026-11-16): GPU offloading for every compiler
+that supports it on the host. GO4-GO7 cover the two compilers that do reach
+the Apple GPU, AdaptiveCpp (SYCL on Metal) and chipStar (CUDA/HIP). Both are
+experimental upstream. Each check proves that the work ran on the GPU: the
+runtime names the device, and every result is checked. These are host
+checks. In a Tart guest they report N/A, because the toolchains are built
+and certified on the host.
+
+Setup (once, not during certification; unrun at these pins):
+`mise run toolchain:acpp-metal` builds LLVM 21.1.8 with `libLLVM.dylib`.
+It then builds the pinned
+AdaptiveCpp commit (today `fe81de555a801f2847489e23ac9b638514966986`) with its Metal backend
+and metal-cpp `f567ed83` (tag `release/metal-cpp_macOS26_iOS26`). Both go
+under `~/.local/share/acpp-metal/`, with a `current` link. Set
+`export ACPP="$HOME/.local/share/acpp-metal/current"`. The probes keep
+AdaptiveCpp's JIT cache in the scratch dir
+(`export ACPP_APPDB_DIR="$PROBE/acpp-appdb"`, instead of the default
+`~/.acpp`), and they run acpp with `TMPDIR` in the scratch dir too.
+
+**GO1-GO3. OpenMP GPU offload with p2996, clang 23 and GCC 16.** N/A on
+macOS: there is no Apple GPU target (see above).
+
+**GO4. AdaptiveCpp sees the Apple GPU (host).** Probe:
+`"$ACPP/bin/acpp-info" -l` and `$ACPP/share/acpp-metal-inputs.txt`. Expected:
+`Loaded backend 1: Metal`, `Found device: Apple M2 Max` (this host), built
+from the commit above. PASS if a Metal backend lists an Apple device and the
+build is from the pinned commit.
+
+**GO5. A SYCL kernel runs on the GPU (host).** Probe: `acpp_sycl.cpp`
+(appendix): `"$ACPP/bin/acpp" -O2 acpp_sycl.cpp -o acpp_sycl && ./acpp_sycl`.
+It selects the GPU (`sycl::gpu_selector_v`), computes `a*a+1` on 1,048,576
+floats in shared memory, and checks every result on the host. Expected:
+`device: Apple M2 Max (Metal (platform 0))` and `sycl: 0/1048576 wrong`,
+exit 0. PASS if the device is an Apple Metal device and no result is wrong.
+AdaptiveCpp's Metal backend has no `double`, emulates 64-bit atomics, and
+has no `printf` in kernels (`doc/install-metal.md`). The first run warns that
+it JIT-compiled new binaries; that warning is expected.
+
+**GO6. `std::transform` offloaded with `--acpp-stdpar` (host).** Probe:
+`acpp_stdpar.cpp` (appendix), built with
+`--acpp-stdpar --acpp-stdpar-unconditional-offload`, so the runtime cannot
+fall back to the CPU. It is run with `ACPP_DEBUG_LEVEL=3`. PASS if
+`stdpar: 0/1048576 wrong`, exit 0, and the debug log shows the Metal queue
+submitting a kernel (`metal_queue: Submitting kernel...`,
+`src/runtime/metal/metal_queue.cpp:734`). In the 2026-11-16 spike it
+failed. With the hold lifted it reports FAIL, marked **known upstream** (it
+does not fail strict mode or V3): AdaptiveCpp's stdpar supports only libstdc++
+(`doc/stdpar.md:8`), and the Mac uses libc++. The compile stops at
+`include/AdaptiveCpp/hipSYCL/std/stdpar/detail/execution_fwd.hpp:14:10:
+fatal error: 'pstl/execution_defs.h' file not found`. Pointing the probe at
+GCC 16's libstdc++ makes it compile, but the link then fails
+(`Undefined symbols ... hipsycl::rt::result::what[abi:cxx11]() const`),
+because the AdaptiveCpp runtime is built against libc++. A libstdc++
+runtime alone would not fix this: the runtime passes `std::string` to the JIT
+translator, which links a libLLVM built against libc++ (research note,
+section 4). On the Mac, write GPU code as SYCL (GO5).
+
+**GO7. chipStar runs a HIP kernel on the GPU (host).** chipStar compiles CUDA
+and HIP to SPIR-V. Its only route to an Apple GPU that upstream tests is its
+native Vulkan backend on Mesa KosmicKrisp (Vulkan on Metal), and that backend
+needs LLVM 24+, which is not released yet. Its documented macOS setup
+(PoCL) runs on the CPU only. The clvk and MoltenVK route shown at IWOCL 2026
+has no build recipe, and Khronos has deprecated MoltenVK. The owner chose the
+KosmicKrisp route (2026-11-16), to be built after AdaptiveCpp. With the hold
+lifted, GO7 reports FAIL `chipStar not built` until then. PASS, once built: `hipcc` compiles a HIP
+kernel, the runtime names the KosmicKrisp Apple device, and every result is
+right.
+
 ## V. Tart VM
 
 **V1. Tart (host).** Why: every tool is mise-managed. Tart is pinned in
@@ -1175,6 +1258,53 @@ int main(int argc, char**) {
 #include <cstdint>
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* d, size_t n) {
   return n > 0 && d[0] == 0xff ? 0 : 0;
+}
+```
+
+### Appendix: AdaptiveCpp SYCL probe
+
+```cpp
+// acpp_sycl.cpp: square 1M floats on the GPU with SYCL, check every result (GO5).
+#include <sycl/sycl.hpp>
+#include <cstdio>
+int main() {
+  sycl::queue q{sycl::gpu_selector_v};
+  auto dev = q.get_device();
+  std::printf("device: %s (%s)\n", dev.get_info<sycl::info::device::name>().c_str(),
+              dev.get_platform().get_info<sycl::info::platform::name>().c_str());
+  constexpr std::size_t n = 1 << 20;
+  float* a = sycl::malloc_shared<float>(n, q);
+  for (std::size_t i = 0; i < n; ++i) a[i] = float(i % 1000);
+  q.parallel_for(sycl::range<1>{n}, [=](sycl::id<1> i) { a[i] = a[i] * a[i] + 1.0f; }).wait();
+  std::size_t bad = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    float x = float(i % 1000);
+    bad += a[i] != x * x + 1.0f;
+  }
+  sycl::free(a, q);
+  std::printf("sycl: %zu/%zu wrong\n", bad, n);
+  return bad != 0 || !dev.is_gpu();
+}
+```
+
+### Appendix: AdaptiveCpp stdpar probe
+
+```cpp
+// acpp_stdpar.cpp: std::transform with par_unseq, offloaded by --acpp-stdpar (GO6).
+#include <algorithm>
+#include <cstdio>
+#include <execution>
+#include <vector>
+int main() {
+  constexpr std::size_t n = 1 << 20; // heap vectors: stack memory is never offloaded
+  std::vector<float> in(n), out(n);
+  for (std::size_t i = 0; i < n; ++i) in[i] = float(i % 1000);
+  std::transform(std::execution::par_unseq, in.begin(), in.end(), out.begin(),
+                 [](float x) { return x * x + 1.0f; });
+  std::size_t bad = 0;
+  for (std::size_t i = 0; i < n; ++i) bad += out[i] != in[i] * in[i] + 1.0f;
+  std::printf("stdpar: %zu/%zu wrong\n", bad, n);
+  return bad != 0;
 }
 ```
 
