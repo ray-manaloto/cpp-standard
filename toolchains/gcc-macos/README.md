@@ -77,9 +77,24 @@ library upgrade can no longer break an installed GCC.
     expected;
   - G6: `-g` with ASan links.
   - G5 is a rule, not a probe.
-- **The same recipe on Ubuntu 26.10 amd64** (configure without `--build` and `--with-sysroot`,
-  plus `--disable-multilib`) bootstraps in 32 minutes at `-j16` and links no gmp, mpfr, mpc,
-  isl or zstd.
+- **The same recipe on Ubuntu 26.10** (configure without `--build` and `--with-sysroot`, plus
+  `--disable-multilib`; bootstrap compiler is the archive `gcc-16`), 2026-11-16, in a throwaway
+  container from the pinned 26.10 image:
+
+  | | amd64 (the PC) | arm64 (the Mac's Docker Desktop) |
+  |---|---|---|
+  | Limits | `--cpus 16 --memory 48g`, `-j16` | `--cpus 4 --memory 16g`, `-j4` |
+  | Bootstrap | exit 0, "Comparison successful" | exit 0, "Comparison successful" |
+  | Wall time | 32 min (no load pauses) | 67 min, of which 18 min paused for host load (49 min running) |
+  | Disk at the end (build 11G) | 15 GB | 16 GB |
+  | `ldd` on `cc1plus`, `lto1`, `f951` | no gmp, mpfr, mpc, isl or zstd | no gmp, mpfr, mpc, isl or zstd |
+  | Banner | GMP 6.3.0, MPFR 4.2.2, MPC 1.3.1, isl-0.24 | the same |
+  | Ubuntu playbook G2 (`members=2`, `import std ok`) | PASS | PASS |
+  | Ubuntu playbook G4 (ASan, TSan, UBSan, LSan) | PASS | PASS |
+
+  G2 and G4 also pass with the archive `g++-16` on both architectures. They also pass when the
+  recipe GCC is given Ubuntu's default hardening flags explicitly. No behavior difference showed
+  up between the two.
 
 Not done yet: installing this build as the real `current`. Until then, `current` is the first
 D33 build. **The job count** of the first D33 build was not recorded; `build.sh` defaults to
@@ -111,8 +126,8 @@ It also:
 - **No TSan or LSan,** and ASan hangs with `detect_leaks=1` (design, Risks; D33).
 - **LTO objects stay with this compiler.** `--without-zstd` leaves zlib as the only LTO
   compression ("Supported LTO compression algorithms: zlib"). The Ubuntu 26.10 archive `g++-16`
-  uses zstd. The same recipe built on Ubuntu 26.10 amd64 (2026-11-16) and the archive `g++-16`
-  can't LTO-link each other's `-flto` objects:
+  uses zstd. The same recipe built on Ubuntu 26.10 (amd64 and arm64, 2026-11-16) and the
+  archive `g++-16` can't LTO-link each other's `-flto` objects:
   - the recipe's `lto1` stops with "compiler does not support ZSTD LTO compression";
   - the archive's `lto1` hits an internal compiler error, "original not compressed with zstd".
 

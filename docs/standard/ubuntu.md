@@ -420,8 +420,8 @@ The same rule covers LTO objects: they are linked only by the compiler that
 made them. The archive `g++-16` compresses LTO bytecode with zstd ("Supported
 LTO compression algorithms: zlib zstd"). The macOS recipe in
 `toolchains/gcc-macos/` is built `--without-zstd` ("zlib" only). Built on
-this image (2026-11-16, amd64), the two fail both ways on the same two-file
-`-flto` program:
+this image (2026-11-16, amd64 and arm64, the same result on both), the two
+fail both ways on the same two-file `-flto` program:
 
 | Objects compiled by | LTO-linked by | Result |
 |---|---|---|
