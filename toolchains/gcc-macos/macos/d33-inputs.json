@@ -1,0 +1,13 @@
+{
+  "gcc_tarball": "e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e",
+  "darwin_patch": "578a78ae0bc62a02f260b6a20c7f23e71deee16ed644e9cb5619247be4df5a71",
+  "patch_from": "Homebrew/homebrew-core 4a334d2f90f786c3fc86cbc9cf72b2f13961b078 Patches/gcc/gcc-16.2.0.diff",
+  "deps": "gmp 6.3.0;mpfr 4.2.2;libmpc 1.4.1;isl 0.28;zstd 1.5.7_1;make 4.4.1;",
+  "xcode": "Xcode 27.2 Build version 27B52 ",
+  "sdk": "27.2 /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+  "bootstrap_cc": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+  "ld": "@(#)PROGRAM:ld PROJECT:ld-27106.1",
+  "arch": "arm64 darwin27.2.0",
+  "configure_args": "70cb94b92c3ffaf76152032980ed0c9f491f7d70fac9b38354c24b2f214fcb6f",
+  "make_args": "BOOT_LDFLAGS=-Wl,-headerpad_max_install_names LDFLAGS_FOR_TARGET=-Wl,-headerpad_max_install_names"
+}
