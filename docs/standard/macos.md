@@ -60,7 +60,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | Area | State | Workaround until fixed |
 |---|---|---|
 | clang-p2996 `562409c7`: reflection, `import std` through CMake, ASan, TSan, libc++ hardening `extensive`, assertions | PASS | none needed |
-| GCC 16.2.0, the D33 source build (`~/.local/share/gcc-d33/current`): `-freflection`, `import std` through CMake, Xcode SDK sysroot | PASS (G1, G2, G3) | none needed; it loads Homebrew's `gmp`, `mpfr`, `libmpc`, `isl` and `zstd`, so a `brew upgrade` that changes their library versions needs a rebuild (G1); programs it builds load `libstdc++` from the build's own hashed folder, so keep that folder or link with `-static-libstdc++ -static-libgcc` (G1) |
+| GCC 16.2.0, the D33 source build (`~/.local/share/gcc-d33/current`): `-freflection`, `import std` through CMake, Xcode SDK sysroot | PASS (G1, G2, G3) | none needed; it links only macOS system libraries, so `brew upgrade` cannot break it (G1); programs it builds load `libstdc++` from the build's own hashed folder, so keep that folder or link with `-static-libstdc++ -static-libgcc` (G1) |
 | GCC 16.2.0: TSan, LSan | not on macOS (G4): not built for aarch64 Darwin | use p2996 or clang for TSan |
 | GCC with Homebrew C++ libraries (Boost and others) | FAIL: crashes at run time | build C++ dependencies with vcpkg, one triplet per compiler (K1) |
 | clang 23.1.5, the LLVM release tarball (D38): config file, its own libc++, `import std`, sanitizers, both linkers, lldb | PASS (C1–C9, DB2) | none needed; `clang`, `clang++` and `lldb` are the tarball's only inside this repository (C9) |
@@ -310,21 +310,26 @@ by real path, into the tarball's `bin`. Today (2026-11-15): PASS.
 Expected: `16.2.0`, built by cpp-standard (D33; recipe and pins in
 `toolchains/gcc-macos/`). The certify task uses
 `~/.local/share/gcc-d33/current/bin/g++-16` when it exists, else the
-`g++-16` on `PATH`. Today (2026-11-15): PASS on the D33 build
-`16.2.0-9f99e2b94d93` (pkgversion `cpp-standard GCC 16.2.0 (D33
-9f99e2b94d93)`), installed beside Homebrew GCC, which is untouched. Caveat:
-its `cc1plus` links Homebrew's `gmp`, `mpfr`, `libmpc`, `isl` and `zstd`
-dynamically (`otool -L`), so a `brew upgrade` that changes one of their
-library versions (for example `libisl.23`) breaks the compiler until it is
-rebuilt with a new inputs hash. Second caveat: a program it links loads
-`libstdc++.6.dylib` through `@rpath`, and the rpaths it records are the
-build's hashed folder (`~/.local/share/gcc-d33/16.2.0-9f99e2b94d93/lib` and
-its `lib/gcc/aarch64-apple-darwin27/16`), not `current` (`otool -l`,
-`LC_RPATH`, 2026-11-15). Removing that folder after a rebuild breaks every
-program built with it. Keep old build folders while programs built with
+`g++-16` on `PATH`. Today (2026-11-16): PASS on the D33 build
+`16.2.0-71abf0a170ab` (pkgversion `cpp-standard GCC 16.2.0 (D33
+71abf0a170ab)`), installed beside Homebrew GCC, which is untouched. It
+builds gmp, mpfr, mpc and isl in-tree, without zstd (#78), so `cc1`,
+`cc1plus`, `lto1` and `f951` link only `/usr/lib/libSystem.B.dylib`,
+`libz.1.dylib` and `libiconv.2.dylib` (`otool -L`): a `brew upgrade` no
+longer affects it. Caveat: a program it links loads `libstdc++.6.dylib`
+through `@rpath`, and the rpaths it records are the build's hashed folder
+(`~/.local/share/gcc-d33/16.2.0-71abf0a170ab/lib` and its
+`lib/gcc/aarch64-apple-darwin27/16`), not `current` (`otool -l`,
+`LC_RPATH`, 2026-11-16). Removing that folder after a rebuild breaks every
+program built with it. That happened once: the first D33 build,
+`16.2.0-9f99e2b94d93`, which linked Homebrew's `gmp`, `mpfr`, `libmpc`,
+`isl` and `zstd`, was removed on 2026-11-16 with no copy kept, so programs
+linked by it no longer start; rebuild them. Its LTO objects cannot be reused
+either: the new build has no zstd, and fails on them with "compiler does
+not support ZSTD LTO compression". Keep old build folders while programs built with
 them are in use, or link with `-static-libstdc++ -static-libgcc`: the
 program then depends only on `/usr/lib/libSystem.B.dylib` (`otool -L`) and
-runs (checked 2026-11-15).
+runs (checked 2026-11-15, and again on 71abf0a170ab on 2026-11-16).
 
 **G2. Reflection and `import std`.** Probe: compile `refl.cpp` from
 [Appendix: reflection probe](#appendix-reflection-probe) with

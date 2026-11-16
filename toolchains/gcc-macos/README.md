@@ -96,8 +96,10 @@ library upgrade can no longer break an installed GCC.
   recipe GCC is given Ubuntu's default hardening flags explicitly. No behavior difference showed
   up between the two.
 
-Not done yet: installing this build as the real `current`. Until then, `current` is the first
-D33 build. **The job count** of the first D33 build was not recorded; `build.sh` defaults to
+Installed as `current` on 2026-11-16 (56 min at `-j6`); macOS G1, G2, G4 and G6 pass on it.
+The first D33 build, `9f99e2b94d93`, was then removed with no copy kept: programs it linked no
+longer start, and its LTO objects fail in this build ("compiler does not support ZSTD LTO
+compression"). **The job count** of the first D33 build was not recorded; `build.sh` defaults to
 the CPU count.
 
 ## Guards
