@@ -111,6 +111,60 @@ The three driver mounts are the PC's NVIDIA libraries at the version
 `nvidia-smi` reports (GO); the host paths are where its distribution keeps
 them.
 
+### Setting up with mise bootstrap
+
+The image is one way to get the end state. The other is
+[`mise.ubuntu.toml`](../../mise.ubuntu.toml), a mise environment file that
+installs the image's apt part on any fresh Ubuntu 26.10 container or host,
+as root. The whole sequence, from a bare `ubuntu:26.10` container:
+
+```sh
+apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git
+# mise 2026.11.8 (mise.toml's min_version), checked against the release's SHASUMS256.txt
+v=2026.11.8 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+u=https://github.com/jdx/mise/releases/download/v$v
+curl -fsSLO "$u/mise-v$v-linux-$a.tar.gz"
+curl -fsSL "$u/SHASUMS256.txt" | grep " ./mise-v$v-linux-$a.tar.gz$" | sha256sum -c - &&
+  tar -xzf "mise-v$v-linux-$a.tar.gz" && install -m 0755 mise/bin/mise /usr/local/bin/mise
+git clone https://github.com/ray-manaloto/cpp-standard && cd cpp-standard
+mise trust && mise -E ubuntu bootstrap --yes
+```
+
+git goes in the first line on purpose: `mise bootstrap --from <repo>` can
+install git itself, but with recommended packages, 68 more of them including
+systemd (measured 2026-11-16).
+
+It holds:
+
+- a `pre-packages` apt setting that turns off recommended packages, as the
+  image does;
+- the apt.llvm.org source with its key fingerprint, written as a deb822
+  file with the key inline, so gnupg is not needed (A7 checks it);
+- `APT::Snapshot "20261116T000000Z"`, so apt reads the Ubuntu archive from
+  snapshot.ubuntu.com as it was at that time: Ubuntu's live -updates and
+  -security indexes drop a version when the next one ships, so exact pins of
+  update versions (curl, git, ca-certificates) would stop installing. Bump
+  the date with the pins to take newer security fixes. apt.llvm.org has no
+  snapshots and is read live;
+- the image's apt packages: the Ubuntu archive ones pinned exactly, and LLVM
+  23 as `latest`, because apt.llvm.org deletes old snapshots within days
+  (D27). Probe C1 records the snapshot in the report;
+- a hook running `mise run ubuntu:clangd`, which installs only `bin/clangd`
+  and `lib/clang` from the llvmorg-23.1.5 tarball into `/opt/llvm-23.1.5`,
+  checked against the Dockerfile's sha256.
+
+Measured on the PC on 2026-11-16, in an unprivileged container: the whole
+sequence took 10 minutes from the live Ubuntu mirror and 31 minutes with
+the snapshot, 22 of them downloading 381 MB from snapshot.ubuntu.com at
+about 283 kB/s. A second run takes seconds and changes nothing. gnupg, which
+the image installs only to check the LLVM key, is left out: mise checks
+the fingerprint itself. Not covered
+yet: clang-p2996, IWYU 0.27, the clang 23 NVPTX runtime and CUDA (see "The
+end state"). **Never run it in a `--privileged` container,** and pass `-e
+container=docker` to any container that runs apt: installing these packages
+runs procps' `sysctl --system`, which a privileged container applies to the
+host's kernel (it happened on the PC on 2026-11-16).
+
 ## Usable today (the PC, 2026-11-16)
 
 You can start a C++26 project in this container now. These results came from
@@ -256,9 +310,15 @@ level names and which are supported come from this glibc's own loader
 Armv8.6-A): `asimd atomics crc32 aes sha2 asimddp lrcpc i8mm bf16` in
 `/proc/cpuinfo` and no `sve` (Apple cores have none). PASS if so.
 
-**A7. apt.llvm.org source.** Probe: `cat /etc/apt/sources.list.d/llvm.list`
-and `gpg --show-keys --with-colons /usr/share/keyrings/apt-llvm.gpg`.
-Expected: `llvm-toolchain-resolute-23 main` and the key fingerprint
+**A7. apt.llvm.org source.** Two layouts. The image's: `cat
+/etc/apt/sources.list.d/llvm.list` and `gpg --show-keys --with-colons
+/usr/share/keyrings/apt-llvm.gpg`. A `mise -E ubuntu bootstrap` machine's
+(see [Setting up with mise bootstrap](#setting-up-with-mise-bootstrap)): the
+deb822 file `/etc/apt/sources.list.d/mise-llvm.sources`, whose `Signed-By`
+holds the key inline and which needs no gnupg. There the probe computes the
+OpenPGP v4 fingerprint itself: SHA-1 over 0x99, the two-byte length and the
+public-key packet (RFC 9580 section 5.5.4.2). Expected for either:
+`llvm-toolchain-resolute-23 main` and the key fingerprint
 `6084F3CF814B57C1CF12EFD515CF4D18AF4F7421` (M0 (f)). PASS if both.
 
 ## B. Build tools
