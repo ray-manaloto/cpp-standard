@@ -557,8 +557,10 @@ fi
 if [[ -x "$P2996/bin/lldb-p2996" ]]; then
   if want DB3; then
     s="$(tmo 60 "$P2996/bin/lldb-p2996" -b -o 'script print(40+2)' 2>&1 | tail -1)"
-    rp="$(otool -l "$P2996/lib/liblldb.dylib" 2>/dev/null | grep -A2 LC_RPATH | grep -m1 'mise/installs/python/3.15/lib' | awk '{print $2}')"
-    py="$HOME/.local/share/mise/installs/python/3.15/lib/libpython3.15.dylib"
+    # The rpath names mise's Python 3.15 either by its alias (3.15) or by the exact version the build
+    # resolved (3.15.N, as in the Tart guest's build); the libpython must be in that directory.
+    rp="$(otool -l "$P2996/lib/liblldb.dylib" 2>/dev/null | grep -A2 LC_RPATH | grep -m1 -E 'mise/installs/python/3\.15(\.[0-9]+)?/lib' | awk '{print $2}')"
+    py="${rp:-$HOME/.local/share/mise/installs/python/3.15/lib}/libpython3.15.dylib"
     [[ "$s" == 42 && -n "$rp" && -e "$py" ]] && res DB3 PASS "script 42; rpath $rp; libpython3.15.dylib present" ||
       res DB3 FAIL "script '$s'; rpath '${rp:-none}'; libpython $([[ -e "$py" ]] && echo present || echo missing)"
   fi

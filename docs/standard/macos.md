@@ -95,13 +95,16 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 ### The p2996 build configuration
 
 From the LLVM sources at `562409c7` (`llvm/CMakeLists.txt`,
-`runtimes/CMakeLists.txt`, `compiler-rt/cmake/config-ix.cmake`) and LLVM's
-official macOS release script:
+`runtimes/CMakeLists.txt`, `compiler-rt/cmake/config-ix.cmake`), LLVM's
+official macOS release script, and the dotfiles p2996 build's initial cache
+(`python/toolchains/p2996/src/p2996/bootstrap.cmake`), which sets the two
+lists below; checked in the `CMakeCache.txt` of the host and Tart guest builds
+(2026-11-15):
 
 | Setting | Value | Why |
 |---|---|---|
-| `LLVM_ENABLE_PROJECTS` | `clang;clang-tools-extra;lld;lldb;mlir;polly` | Everything a C++ developer uses. Polly (loop optimiser) and MLIR are kept on request. **flang, BOLT and LLVM libc are dropped**: flang is not C++; BOLT reads only ELF (`bolt/README.md:12`), so it cannot optimise a Mach-O binary; LLVM's macOS release leaves out flang and BOLT. |
-| `LLVM_ENABLE_RUNTIMES` | `libunwind;libcxxabi;libcxx;compiler-rt` | libc++ with `import std`, and the sanitizer, profile and fuzzer runtimes (the XRay runtime is built too, but does not work on Darwin, T7). (`openmp` is optional; `offload` does not build on Apple.) |
+| `LLVM_ENABLE_PROJECTS` | `clang;clang-tools-extra;lld;lldb;mlir;polly;bolt;flang` | Every LLVM project that builds on macOS (D136 as amended 2026-11-16; dotfiles DL-756, DL-757). Polly (loop optimiser) and MLIR are kept on request. flang (`flang-p2996`) and BOLT (`llvm-bolt-p2996`, `perf2bolt-p2996`) are installed but no check needs them: flang is not C++, and BOLT rewrites only ELF binaries (`bolt/README.md:12`), so it cannot optimise a Mach-O binary (see below). LLVM's own macOS release leaves both out; here they only make the build longer. Left out: libclc and offload (GPU device libraries), llvm-libgcc (Linux), cross-project-tests. |
+| `LLVM_ENABLE_RUNTIMES` | `libc;libunwind;libcxxabi;libcxx;compiler-rt;openmp;flang-rt` | libc++ with `import std`, and the sanitizer, profile and fuzzer runtimes (the XRay runtime is built too, but does not work on Darwin, T7). `libc` is LLVM libc's Darwin overlay, `lib/libllvmlibc.a`, beside the system libc, not a replacement for it. `openmp` installs `lib/libomp.dylib` (`-fopenmp`); `flang-rt` is flang's runtime (`lib/clang/21/lib/darwin/libflang_rt.runtime.a`). `offload` does not build on Apple. |
 | `LLVM_ENABLE_ASSERTIONS` | `ON` | The reflection frontend is experimental; an assertion reports a compiler bug instead of producing wrong code. Fixed at build time. |
 | `LIBCXX_HARDENING_MODE` | `extensive` | The default for every project. A project can change it (H1). No ABI effect (`libcxx/docs/Hardening.rst:40`). |
 | `LLVM_INSTALL_UTILS` | `ON` | Installs FileCheck, `not`, `count`, `yaml2obj` for lit-style tests and for reducing compiler bugs. |
@@ -117,7 +120,8 @@ upstream docs. List these as Linux-only; do not report them as missing.
 | Tool | Why not on macOS | Mac substitute |
 |---|---|---|
 | MemorySanitizer, DataFlowSanitizer, HWASan, MemProf, NSan, GWP-ASan, Scudo, SafeStack | compiler-rt does not build them for Darwin | ASan + UBSan; `MallocScribble`, `MallocGuardEdges`; `leaks` |
-| BOLT | reads ELF only | PGO (`-fprofile-generate` / `-fprofile-use`) |
+| BOLT (installed, but useless on Mach-O) | reads ELF only | PGO (`-fprofile-generate` / `-fprofile-use`) |
+| GPU offloading (`#pragma omp target`, `-fopenmp-targets`) for p2996, clang 23 and GCC | LLVM's offload runtime (libomptarget) does not build on macOS (`offload/CMakeLists.txt:15-16` at `562409c7`: "libomptarget cannot be built on Windows and MacOS X"), and neither LLVM nor GCC has an Apple GPU target: GCC offloads only to `nvptx-none` and `amdgcn-amdhsa` (`gcc/doc/install.texi:2681-2690`, releases/gcc-16). The owner's rule (2026-11-16) is GPU offloading for every compiler that supports it on the host; on the Mac none does. The Ubuntu PC (NVIDIA) has it. | Metal (Apple's own GPU API) outside these compilers; CPU OpenMP (`-fopenmp`, `libomp.dylib`) |
 | Linux `perf` | Linux kernel interface | `xctrace` Time Profiler and CPU Counters (R2) |
 | Valgrind (memcheck, callgrind, cachegrind) | no current arm64 Darwin port | ASan; `xctrace` Allocations and Leaks; `heap`, `vmmap` |
 | gdb | no arm64 Darwin target | lldb |
@@ -406,9 +410,9 @@ ls "$P2996/bin" | grep -cE '^(clangd|clang-tidy|clang-format|clang-include-clean
 "$P2996/bin/clang++-p2996" -O2 -mllvm -polly -c -x c++ /dev/null -o /dev/null && echo polly-ok
 ```
 
-Expected: `15` and `polly-ok`. Not expected after the D136 rebuild: `flang`,
-`llvm-bolt`, `perf2bolt` (today they are present; harmless, but they make the
-build longer).
+Expected: `15` and `polly-ok`. `flang-p2996`, `llvm-bolt-p2996` and
+`perf2bolt-p2996` are present too, because the build enables flang and BOLT
+(see the build configuration above); P5 does not count them.
 
 **P6. LLVM utilities.** Probe: `ls "$P2996/bin" | grep -E '^(FileCheck|not|count|yaml2obj)'`.
 PASS if all four (with or without the `-p2996` suffix). Today (2026-11-15):
@@ -436,7 +440,9 @@ linked into `view/` as `include-what-you-use-p2996`); on `-9f4a6fe02298`
 it was installed by hand. Pass libc++'s own mapping,
 `-Xiwyu --mapping_file=$P2996/include/c++/v1/libcxx.imp`, or IWYU suggests
 private headers such as `<__vector/vector.h>`. IWYU does not model
-reflection; run it on files without `^^`.
+reflection; run it on files without `^^`. In the Tart guest (2026-11-16):
+PASS, the same version line, on the guest's own build of `562409c`
+(`-91b8d791a0cf`, built there with the dotfiles builder, V3).
 
 **P9. Coverage tools match the compiler.** Why: a `.gcda` from p2996 must be
 read by p2996's own `llvm-cov`. Probe:
@@ -486,12 +492,16 @@ exit code. Today (2026-11-15): PASS, `lldb version 23.1.5` and
 
 ```sh
 "$P2996/bin/lldb-p2996" -b -o 'script print(40+2)'
-otool -l "$P2996/lib/liblldb.dylib" | grep -A2 LC_RPATH | grep path
-ls "$HOME/.local/share/mise/installs/python/3.15/lib/libpython3.15.dylib"
+rp="$(otool -l "$P2996/lib/liblldb.dylib" | grep -A2 LC_RPATH |
+  grep -m1 -E 'mise/installs/python/3\.15(\.[0-9]+)?/lib' | awk '{print $2}')"
+ls "$rp/libpython3.15.dylib"
 ```
 
-Expected: `42`, an `LC_RPATH` entry `.../mise/installs/python/3.15/lib`, and
-that directory holds `libpython3.15.dylib`. PASS if all three. Today: PASS on
+Expected: `42`, an `LC_RPATH` entry `.../mise/installs/python/3.15/lib` (the
+alias) or `.../python/3.15.N/lib` (the exact version a build resolved, as
+in the Tart guest), and that directory holds `libpython3.15.dylib`. PASS if
+all three. An exact-version rpath breaks when mise replaces that patch
+release; the alias does not. Today: PASS on
 the p2996 build that carries fix 1 (2026-11-14): `42`, and the second
 `LC_RPATH` is `.../mise/installs/python/3.15/lib`. A build without fix 1
 fails with `dyld: Library not loaded: @rpath/libpython3.15.dylib`, because
@@ -576,6 +586,23 @@ disk` and `satisfies its Designated Requirement`, and
 `current` points at a build's `view/` folder, where debugserver is linked
 as `bin/debugserver-p2996`; hence `'debugserver*'`. To check a build before
 it becomes `current`, set `P2996` to that build's `<prefix>/view`.
+
+Attaching a debugger asks the `system.privilege.taskport` authorization
+right. Its default rule wants the password of a `_developer` member in a
+dialog, "Developer Tools Access is trying to take control of another
+process", and keeps the answer for 10 hours. On the host the owner answers
+it in the login session. A headless guest (`tart run --no-graphics`) shows
+that dialog where nobody can answer it, so `task_for_pid` waits for ever:
+lldb stops after `run`, Apple's own Xcode lldb and debugserver too, and
+the guest log ends at `[LaunchAttach] about to task_for_pid`. Each
+unanswered dialog also stays queued. In the guest only (V3 setup), give the
+right the built-in `is-developer` rule, which checks the `_developer` group
+without a password, then restart the guest once to clear queued dialogs:
+`sudo security authorizationdb write system.privilege.taskport is-developer`.
+Do not change the host's rule. In the guest (2026-11-16), after that step:
+PASS on `-91b8d791a0cf`, before and after it became `current`
+(`Authority=lldb_codesign`, `verify --strict` ok, `breakpoint 1.1`, the
+build's own debugserver); before it, FAIL with `stop no`.
 
 Today (2026-11-15): PASS on `current`, `-d688c1d4bd0f` (`previous` is
 `-9f4a6fe02298`): `Authority=lldb_codesign`, `verify --strict` ok,
@@ -937,9 +964,9 @@ IWYU stops with an assertion if one header gets two visibilities. Use the
 mapping for C++ translation units only: in C, IWYU marks `<inttypes.h>`
 public and stops with that assertion. The report gives the p2996 half first, then the clang 23 half.
 Today (2026-11-15): PASS on the host, with `<cstdio>` kept for `puts` and
-`<clocale>` for `newlocale`; in
-the Tart guest (SDK 27.2) the clang 23 half passes the same way and the
-p2996 half waits for P8 (V3).
+`<clocale>` for `newlocale`. In the Tart guest (SDK 27.2, 2026-11-16):
+PASS, both halves (P8 PASS on the guest's own p2996 build; the clang 23
+half the same as the host).
 
 **T4. Sanitizers.** C6, G4 and P4. Also present and expected to link:
 `-fsanitize=realtime` (RTSan), `-fsanitize=type` (TySan),
@@ -1053,15 +1080,34 @@ Setup: `tart clone` the image by digest, `tart run --no-graphics`, and run
 every command with `tart exec` (the image has the Tart guest agent). Put
 mise first on PATH from its release tarball, checked against the release's
 `SHASUMS256.txt`, clone this repository, run `mise install --locked`, and
-build GCC (D33) and p2996 (D30) in the guest.
-Today: FAIL. First full guest run (2026-11-15, macOS 27.2 26B123,
+build GCC (D33) and p2996 (D30) in the guest. For p2996: give the guest the
+tools the dotfiles builder takes from a global config (same versions as the
+host: cmake, ninja, sccache, uv, Python 3.15, conda swig, doxygen and
+zstd-static, lua, opam with the switch `llvm` holding OCaml 5.2.1,
+ocamlfind and ctypes), clone dotfiles, create the `lldb_codesign`
+certificate with LLVM's `lldb/scripts/macos-setup-codesign.sh`, grow the
+guest disk to 200 GB (`tart set --disk-size 200`; macOS grows the APFS
+container itself), and run `mise run //p2996:build --commit <pin> --jobs 2`
+(4 jobs pushed the host's 5-minute load past 11). Then the debugger step
+in DB5 (`system.privilege.taskport` to `is-developer`, one restart),
+`//p2996:install --keep-current`, DB5, and a plain install.
+Today: FAIL, only G1 left (2026-11-16, after the guest built p2996
+`562409c` as `-91b8d791a0cf`, about 2 hours 15 minutes at 2-4 jobs, with one pause for host load and two restarts): 50 PASS, 4 FAIL,
+10 N/A. P1-P9, L1-L3, E2, T2, H2, T4, R3-R5, DB4, DB5, P8 and both halves
+of T3 pass. FAIL: G1 (the image's Homebrew GCC; the D33 build is not
+done in the guest), P10 (known upstream, not counted), DB3 (the guest's
+build records Python as `python/3.15.2/lib`, not the `3.15` alias; the
+check now accepts both, see DB3), and V3 itself. The run installed
+nothing. Rerun alone after the DB3 change: DB3 PASS in the guest and on
+the host.
+Earlier: first full guest run (2026-11-15, macOS 27.2 26B123,
 Xcode 27.2), with no source builds yet: 31 FAIL. A3 and A6 pass. B1, B3, C4,
 K2 and R6 failed because the build tools came only from the host's global
 config; they pass since `.mise/conf.d/build.toml`. G1 rejects the image's
 Homebrew GCC. P1-P10, L1-L3, E2, T2, H2, T4, R3-R5 wait for the p2996
-build. The run installed nothing. T3's clang 23 half passes in the guest
+build. The run installed nothing. T3's clang 23 half passed in the guest
 since `toolchain:iwyu-llvm23` (built there against the guest's tarball); its
-p2996 half waits for P8.
+p2996 half waited for P8.
 
 ## Report
 
