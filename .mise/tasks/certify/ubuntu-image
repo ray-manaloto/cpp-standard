@@ -1,14 +1,31 @@
 #!/usr/bin/env bash
-#MISE description="Build the Ubuntu 26.10 amd64 image that certify:ubuntu certifies, on the PC's Docker"
+#MISE description="Build the Ubuntu 26.10 image that certify:ubuntu certifies: amd64 on the PC's Docker, or arm64 on this Mac with --local"
 #USAGE flag "--tag <ref>" help="Image tag (default: cpp-standard-cert-ubuntu:26.10)"
+#USAGE flag "--local" help="Build linux/arm64 on this Mac's Docker Desktop (4 ninja jobs) instead of linux/amd64 on the PC"
 #
-# Builds docs/standard/ubuntu-cert.Dockerfile on the Docker host named by
-# CERT_UBUNTU_SSH (an ssh destination), so nothing is built on the Mac. This
+# Builds docs/standard/ubuntu-cert.Dockerfile. By default on the Docker host
+# named by CERT_UBUNTU_SSH (an ssh destination), so nothing is built on the
+# Mac; with --local, natively for arm64 on the Mac (no emulation), which is a
+# heavy job on a shared machine: run it only in an agreed load window. This
 # is the setup step: certify:ubuntu itself installs nothing.
 set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
-dest="${CERT_UBUNTU_SSH:?set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC)}"
 tag="${usage_tag:-cpp-standard-cert-ubuntu:26.10}"
-DOCKER_HOST="ssh://$dest" docker build --platform linux/amd64 -t "$tag" -f - "$root/docs/standard" \
+if [[ "${usage_local:-false}" == true ]]; then
+  # This Mac's Docker Desktop, whatever DOCKER_HOST or the current context say.
+  unset DOCKER_HOST
+  export DOCKER_CONTEXT=desktop-linux
+  [[ "$(docker info -f '{{.OperatingSystem}} {{.Architecture}}' 2>/dev/null)" == "Docker Desktop aarch64" ]] || {
+    echo "certify:ubuntu-image --local: needs this Mac's Docker Desktop (context desktop-linux) running on Apple silicon" >&2
+    exit 2
+  }
+  platform=linux/arm64
+  args=(--build-arg BUILD_JOBS=4)
+else
+  export DOCKER_HOST="ssh://${CERT_UBUNTU_SSH:?set CERT_UBUNTU_SSH to the ssh destination of the Docker host (the PC)}"
+  platform=linux/amd64
+  args=()
+fi
+docker build --platform "$platform" ${args[@]+"${args[@]}"} -t "$tag" -f - "$root/docs/standard" \
   <"$root/docs/standard/ubuntu-cert.Dockerfile"
-DOCKER_HOST="ssh://$dest" docker image inspect -f '{{.Id}}' "$tag"
+docker image inspect -f '{{.Id}}' "$tag"

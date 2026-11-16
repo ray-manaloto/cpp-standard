@@ -1,19 +1,22 @@
 ---
 name: ubuntu-certify
-description: Run the Ubuntu 26.10 amd64 C++ environment certification (docs/standard/ubuntu.md) in its container on the PC's Docker, read the PASS/FAIL/N/A report, and refresh the committed baseline. Use it whenever someone asks to certify, check, verify or re-run the Ubuntu or Linux playbook or checklist, asks "is the Linux container ready for C++", "is the container near native", "what is failing on Ubuntu", after any change to the image (ubuntu-cert.Dockerfile, its pins or tool lock), the p2996 build inputs (docs/standard/ubuntu-p2996/), the docker run flags, or the PC's Docker or kernel, and before calling the Linux environment done.
+description: Run the Ubuntu 26.10 C++ environment certification (docs/standard/ubuntu.md) in its container, amd64 on the PC's Docker or arm64 in this Mac's Docker Desktop (--local), read the PASS/FAIL/N/A report, and refresh the committed baseline. Use it whenever someone asks to certify, check, verify or re-run the Ubuntu or Linux playbook or checklist, asks "is the Linux container ready for C++", "is the container near native", "what is failing on Ubuntu", after any change to the image (ubuntu-cert.Dockerfile, its pins or tool lock), the p2996 build inputs (docs/standard/ubuntu-p2996/), the docker run flags, or the PC's Docker or kernel, and before calling the Linux environment done.
 ---
 
 # Ubuntu certification
 
 `docs/standard/ubuntu.md` is the playbook: one check per item (A1 to V6),
-each with a probe and a PASS rule. It runs in an Ubuntu 26.10 amd64 container
-on the PC's Docker; the PC's own OS is Omarchy, so kernel-dependent lines say
-`[host kernel]`. Three mise tasks:
+each with a probe and a PASS rule. It runs in an Ubuntu 26.10 container:
+amd64 on the PC's Docker (the PC's own OS is Omarchy), or arm64 in the
+Mac's Docker Desktop with `--local` (the Docker host is then Docker
+Desktop's Linux VM); kernel-dependent lines say `[host kernel]`. To launch
+and use the arm64 container rather than certify it, see `ubuntu-arm64-run`.
+Three mise tasks:
 
 | Task | Runs on | Does |
 |---|---|---|
-| `certify:ubuntu-image` | the PC's Docker | builds `docs/standard/ubuntu-cert.Dockerfile` (the setup; exact apt pins, `mise install --locked` from `docs/standard/ubuntu-cert-tools/`) |
-| `certify:ubuntu` | the Mac, reaching the PC over ssh | starts the container with the playbook's flags, runs the probes, prints the report |
+| `certify:ubuntu-image` | the PC's Docker (`--local`: arm64 on the Mac) | builds `docs/standard/ubuntu-cert.Dockerfile` (the setup; exact apt pins, `mise install --locked` from `docs/standard/ubuntu-cert-tools/`) |
+| `certify:ubuntu` | the Mac, reaching the PC over ssh (`--local`: the Mac's Docker Desktop) | starts the container with the playbook's flags, runs the probes, prints the report |
 | `certify:ubuntu-probes` | inside the container (hidden) | the checks themselves; `certify:ubuntu` copies it in |
 
 The probe sources (refl.cpp, san.cpp, fuzz.cpp, dap.cpp, dap_probe.py,
@@ -32,9 +35,11 @@ export CERT_UBUNTU_SSH=<the PC's tailnet name or ssh alias>
 ```
 
 Without it the tasks exit 2 with `certify: set CERT_UBUNTU_SSH to the ssh
-destination of the Docker host (the PC)`. Docker commands go to the PC
-through `DOCKER_HOST=ssh://$CERT_UBUNTU_SSH`; nothing builds or runs on the
-Mac.
+destination of the Docker host (the PC), or pass --local`. Docker commands
+go to the PC through `DOCKER_HOST=ssh://$CERT_UBUNTU_SSH`; nothing builds or
+runs on the Mac. With `--local` (arm64) no ssh is used and everything runs
+in the Mac's Docker Desktop: only in a load window agreed with
+chief-of-staff.
 
 ## Run it
 
@@ -61,7 +66,10 @@ that matches no check; 3 when the Mac's mise installs changed during the run
 
 ```bash
 MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail --ab --out docs/standard/reports/ubuntu-pc-$(date +%F).txt
-git diff --no-index docs/standard/reports/ubuntu-pc-2026-11-16.txt docs/standard/reports/ubuntu-pc-$(date +%F).txt
+git diff --no-index docs/standard/reports/ubuntu-pc-2026-11-16-multiarch.txt docs/standard/reports/ubuntu-pc-$(date +%F).txt
+# arm64, in a load window on the Mac:
+MISE_AUTO_INSTALL=0 mise run certify:ubuntu --local --allow-fail --out docs/standard/reports/ubuntu-mac-arm64-$(date +%F).txt
+git diff --no-index docs/standard/reports/ubuntu-mac-arm64-2026-11-16.txt docs/standard/reports/ubuntu-mac-arm64-$(date +%F).txt
 ```
 
 The report masks the Mac's home as `~`, the account as `<user>` and the ssh
@@ -79,7 +87,7 @@ Kept on purpose, labelled `org.cpp-standard.cert=1`:
   rebuild with fresh pins exists.
 - volume `cpp-standard-cert-build`: build trees (V4).
 - volume `cpp-standard-p2996-<commit12>-<inputs12>`: the p2996 install,
-  named after its build inputs (playbook, "Appendix: p2996 amd64 build").
+  named after its build inputs (playbook, "Appendix: p2996 build").
   A new commit or changed input gets a new volume; an old one is never
   overwritten. To check a scratch build first, mount it with
   `CERT_P2996_VOL=<volume> mise run certify:ubuntu --only P,GO1`.
@@ -137,4 +145,12 @@ DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume rm cpp-standard-cert-build cpp-
 - The image's tools come from `/opt/cpp-standard-tools` via
   `MISE_GLOBAL_CONFIG_FILE`; it never runs `mise use -g`. To change a tool,
   edit `docs/standard/ubuntu-cert-tools/mise.toml` and regenerate its lock
-  inside the image with `mise lock --platform linux-x64`.
+  inside an arm64 container from the image, against a copy of the folder,
+  with `MISE_GLOBAL_CONFIG_FILE=<copy>/mise.toml MISE_TRUSTED_CONFIG_PATHS=<copy>
+  mise lock --global --platform linux-x64,linux-arm64`, and copy the lock
+  back. Never `mise lock` on the Mac itself: it rewrites the global lock.
+- arm64 on the Mac: `--local` needs an arm64 local Docker; the host-side
+  probes run in Docker Desktop's VM through `nsenter` from a privileged
+  helper container. R2 is N/A (no hardware PMU in the VM), R3 samples
+  `cpu-clock`, GO and V6 are N/A, and H2 expects SIGTRAP (133). The
+  playbook gives each per-architecture difference in its check's row.

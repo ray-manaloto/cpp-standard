@@ -4,7 +4,7 @@
 #USAGE flag "--only <ids>" help="Run only these checks: comma-separated ids or section prefixes (A3,DB,C)"
 #USAGE flag "--probes <dir>" help="Directory with the probe sources extracted from the playbook appendix"
 #
-# Runs inside the Ubuntu 26.10 amd64 container. `certify:ubuntu` (the
+# Runs inside the Ubuntu 26.10 container (amd64 on the PC, arm64 on the Mac). `certify:ubuntu` (the
 # launcher) starts the container with the playbook's docker run flags, copies
 # this script and the probe sources in, and assembles the report. This script
 # prints only check lines, `<id> PASS|FAIL|N/A <evidence>`, plus `HDR key=value`
@@ -30,11 +30,13 @@ probes="${usage_probes:-${PROBES:-}}"
 }
 only=",${usage_only:-},"
 P2996="${P2996:-/opt/p2996}"
-CLANGD="${CLANGD:-/opt/LLVM-23.1.5-Linux-X64/bin/clangd}"
+CLANGD="${CLANGD:-/opt/llvm-23.1.5/bin/clangd}"
 BUILD_DIR="${BUILD_DIR:-/build}"
 EXPECT_DIGEST="${EXPECT_DIGEST:-}"            # the base digest the playbook names (A2)
 IMAGE_BASE="${IMAGE_BASE:-}"                  # the image's org.opencontainers.image.base.digest label
 HOST_BINFMT_X86="${HOST_BINFMT_X86:-unknown}" # yes/no: qemu-x86_64 registered on the host
+HOST_ARCH="${HOST_ARCH:-unknown}"             # uname -m of the Docker host (the PC, or Docker Desktop's VM)
+ARCH="$(uname -m)"                            # x86_64 or aarch64: the per-architecture rows
 HOST_THREADS="${HOST_THREADS:-}"              # nproc on the host
 PIN="${PIN:-}"                                # the p2996 commit the playbook pins
 L=clang++-23 G=g++-16 P="$P2996/bin/clang++"
@@ -115,8 +117,15 @@ best_ms() { # best_ms CMD...: the fastest of 5 runs on cores 2-5, in ms (hyperfi
     python3 -I "$PROBE/hf_best.py" "$PROBE/hf.json" | tr -d " "
 }
 instr_u() { # instr_u CMD...: user-space instructions retired (perf stat)
-  perf stat -x, -e instructions:u -- "$@" 2>&1 >/dev/null | awk -F, '/instructions/ {print $1; exit}'
+  perf stat -x, -e instructions:u -- "$@" 2>&1 >/dev/null | awk -F, '/instructions/ && $1 ~ /^[0-9]+$/ {print $1; exit}'
 }
+# The hardware PMUs the kernel exposes (empty in Docker Desktop's VM, which has none).
+PMU="" PMU_ALL=""
+for d in /sys/bus/event_source/devices/*; do
+  [[ -e "$d" ]] || continue
+  PMU_ALL="$PMU_ALL${d##*/} "
+  case "${d##*/}" in software | tracepoint | kprobe | uprobe | breakpoint) ;; *) PMU="$PMU${d##*/} " ;; esac
+done
 
 printf '#include <print>\nint main(){std::println("ok");}\n' >p.cpp
 printf 'int* p;\nint main(){ p = new int[4]; p = nullptr; }\n' >leak.cpp
@@ -127,7 +136,9 @@ printf 'int* p;\nint main(){ p = new int[4]; p = nullptr; }\n' >leak.cpp
 . /etc/os-release
 printf 'HDR os=%s\nHDR kernel=%s\n' "$PRETTY_NAME" "$(uname -r)"
 printf 'HDR glibc=%s\n' "$(ldd --version | head -1 | awk '{print $NF}')"
-printf 'HDR cpu=%s\n' "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
+cpu_name="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
+[[ -n "$cpu_name" ]] || cpu_name="$(uname -m), CPU part $(awk -F: '/CPU part/ {gsub(/ /,"",$2); print $2; exit}' /proc/cpuinfo) (model not visible)"
+printf 'HDR cpu=%s\n' "$cpu_name"
 
 if want A1; then
   [[ "$VERSION_ID" == 26.10 && "$VERSION_CODENAME" == stonking ]] && res A1 PASS "$PRETTY_NAME ($VERSION_CODENAME)" ||
@@ -138,16 +149,30 @@ if want A2; then
     res A2 FAIL "image base label '${IMAGE_BASE:-none}', playbook digest '${EXPECT_DIGEST:-none}'"
 fi
 if want A3; then
-  a="$(dpkg --print-architecture) $(uname -m)"
-  [[ "$a" == "amd64 x86_64" && "$HOST_BINFMT_X86" == no ]] && res A3 PASS "$a; no qemu-x86_64 in the host's binfmt_misc: native" ||
-    res A3 FAIL "$a; qemu-x86_64 registered on the host: $HOST_BINFMT_X86"
+  a="$(dpkg --print-architecture) $ARCH"
+  if [[ "$ARCH" == aarch64 ]]; then
+    # arm64: native when the Docker host is aarch64 too; a qemu-x86_64 handler there
+    # (Docker Desktop registers one) only runs x86 images, never this one.
+    [[ "$a" == "arm64 aarch64" && "$HOST_ARCH" == aarch64 ]] && res A3 PASS "$a; Docker host $HOST_ARCH: native (qemu-x86_64 on the host: $HOST_BINFMT_X86, unused by an arm64 image)" ||
+      res A3 FAIL "$a; Docker host $HOST_ARCH"
+  else
+    [[ "$a" == "amd64 x86_64" && "$HOST_BINFMT_X86" == no ]] && res A3 PASS "$a; no qemu-x86_64 in the host's binfmt_misc: native" ||
+      res A3 FAIL "$a; qemu-x86_64 registered on the host: $HOST_BINFMT_X86"
+  fi
 fi
 want A4 && res A4 N/A "kernel $(uname -r), shared with the host; recorded, not certified $HK"
 if want A5; then
   g="$(ldd --version | head -1)"
   [[ "$g" == *" 2.44" ]] && res A5 PASS "$g" || res A5 FAIL "$g (want 2.44)"
 fi
-if want A6; then
+if want A6 && [[ "$ARCH" == aarch64 ]]; then
+  # Apple M2 (Armv8.6-A): the features the arm64 targets in U rely on; no SVE (Apple cores have none).
+  miss="" extra=""
+  for f in asimd atomics crc32 aes sha2 asimddp lrcpc i8mm bf16; do grep -qw "$f" /proc/cpuinfo || miss="$miss $f"; done
+  grep -qw sve /proc/cpuinfo && extra=" sve"
+  [[ -z "$miss" && -z "$extra" ]] && res A6 PASS "asimd atomics crc32 aes sha2 asimddp lrcpc i8mm bf16 present; no sve" ||
+    res A6 FAIL "missing:${miss:- none}; unexpected:${extra:- none}"
+elif want A6; then
   hw="$(/lib64/ld-linux-x86-64.so.2 --help | sed -n 's/^ *\(x86-64-v[0-9]\) (supported, searched)/\1/p' | tr '\n' ' ')"
   miss="" extra=""
   for f in avx2 bmi2 fma adx sha_ni vaes vpclmulqdq; do grep -qw "$f" /proc/cpuinfo || miss="$miss $f"; done
@@ -240,14 +265,17 @@ else
       res C4 FAIL "libc++: ${a:-$(tail -1 cm_c4.log)}; libstdc++: ${b:-$(tail -1 cm_c4b.log)}"
   fi
   if want C5; then
-    d="$($L -print-resource-dir)/lib/x86_64-pc-linux-gnu"
+    d="$($L -print-runtime-dir)"
     [[ -d "$d" ]] || d="$($L -print-resource-dir)/lib/linux"
     miss=""
-    for r in asan tsan msan lsan ubsan_standalone dfsan hwasan memprof nsan rtsan tysan scudo_standalone \
-      gwp_asan safestack cfi fuzzer profile xray; do
-      compgen -G "$d/libclang_rt.$r*x86_64*" >/dev/null || compgen -G "$d/libclang_rt.$r.a" >/dev/null || miss="$miss $r"
+    rts="asan tsan msan lsan ubsan_standalone dfsan hwasan memprof nsan rtsan tysan scudo_standalone gwp_asan safestack cfi fuzzer profile xray"
+    # compiler-rt builds memprof and nsan for x86_64 only
+    # (compiler-rt/cmake/Modules/AllSupportedArchDefs.cmake:94,96 at LLVM 551bf48cf74f).
+    [[ "$ARCH" == aarch64 ]] && rts="${rts/ memprof nsan/}"
+    for r in $rts; do
+      compgen -G "$d/libclang_rt.$r*$ARCH*" >/dev/null || compgen -G "$d/libclang_rt.$r.a" >/dev/null || miss="$miss $r"
     done
-    [[ -z "$miss" ]] && res C5 PASS "all 18 runtimes incl. Linux-only msan dfsan hwasan memprof nsan scudo gwp_asan safestack" ||
+    [[ -z "$miss" ]] && res C5 PASS "all $(wc -w <<<"$rts") runtimes for $ARCH incl. Linux-only msan dfsan hwasan$([[ "$ARCH" == x86_64 ]] && echo " memprof nsan") scudo gwp_asan safestack" ||
       res C5 FAIL "missing:$miss"
   fi
   if want C6; then
@@ -577,9 +605,11 @@ if want H2; then
     d="$(run h_p)"
   fi
   # h0 must run and end normally: 0-125 (126/127: did not run; 128+: a signal).
-  if [[ -z "$cbad" && "$def" == 2 && "$a" -le 125 && "$b" == 132 && "$c" == 134 && "$d" == 132 ]]; then
-    res H2 PASS "apt libc++ default NONE (2): no trap; EXTENSIVE: exit 132 (SIGILL); _GLIBCXX_ASSERTIONS: 134 (SIGABRT); p2996 default: 132"
-  else res H2 FAIL "${cbad:+compile failed:$cbad; }apt default $def exit $a (want 0-125); extensive $b (want 132); glibcxx $c (want 134); p2996 $d (want 132)"; fi
+  # __builtin_trap is ud2 on x86 (SIGILL, 132) and brk on AArch64 (SIGTRAP, 133).
+  [[ "$ARCH" == aarch64 ]] && tr_=133 trn=SIGTRAP || tr_=132 trn=SIGILL
+  if [[ -z "$cbad" && "$def" == 2 && "$a" -le 125 && "$b" == "$tr_" && "$c" == 134 && "$d" == "$tr_" ]]; then
+    res H2 PASS "apt libc++ default NONE (2): no trap; EXTENSIVE: exit $tr_ ($trn); _GLIBCXX_ASSERTIONS: 134 (SIGABRT); p2996 default: $tr_"
+  else res H2 FAIL "${cbad:+compile failed:$cbad; }apt default $def exit $a (want 0-125); extensive $b (want $tr_); glibcxx $c (want 134); p2996 $d (want $tr_)"; fi
 fi
 
 # --- K. Dependencies -------------------------------------------------------------
@@ -669,22 +699,35 @@ if want R1; then
   v="$(perf --version 2>&1)"
   [[ "$v" == "perf version"* ]] && res R1 PASS "$v (linux-perf $(dpkg-query -W -f '${Version}' linux-perf)) $HK" || res R1 FAIL "${v:-perf not found} $HK"
 fi
-if want R2; then
+if want R2 && [[ -z "${PMU// /}" ]]; then
+  res R2 N/A "no hardware PMU: /sys/bus/event_source/devices has only $PMU_ALL(Docker Desktop's VM exposes none) $HK"
+elif want R2; then
   o="$(perf stat -x, -e cycles,instructions,cache-misses,branch-misses -- ./rp 2>&1 >/dev/null)"
   n="$(grep -cE '^[0-9]+,' <<<"$o")"
   [[ "$n" == 4 ]] && res R2 PASS "cycles, instructions, cache-misses, branch-misses counted (--privileged); outside the Level-1 gate (D46) $HK" ||
     res R2 FAIL "$n of 4 counters: $(head -1 <<<"$o") $HK"
 fi
 if want R3; then
-  perf record -q -F 999 -g -o r3.data -- ./rp >/dev/null 2>&1
+  # Without a hardware PMU, sample on the software cpu-clock event instead.
+  # cpu-clock is a timer: it cannot sample rp, which ends in about a millisecond,
+  # so it profiles a loop of about 0.3 s instead.
+  r3ev=() evname=cycles r3bin=./rp
+  if [[ -z "${PMU// /}" ]]; then
+    printf 'int main(){ volatile unsigned long s = 0; for (unsigned long i = 0; i < 400000000; ++i) s += i; return s == 1; }\n' >r3.cpp
+    $G -O1 r3.cpp -o r3loop >/dev/null 2>&1
+    r3ev=(-e cpu-clock) evname="cpu-clock on a 0.3 s loop (no hardware PMU)" r3bin=./r3loop
+  fi
+  perf record -q -F 999 -g ${r3ev[@]+"${r3ev[@]}"} -o r3.data -- "$r3bin" >/dev/null 2>&1
   s="$(perf report -i r3.data --stdio 2>/dev/null | grep -c '%')"
-  [[ "$s" -ge 1 ]] && res R3 PASS "perf record + report: $s sample lines $HK" || res R3 FAIL "perf record wrote no samples $HK"
+  [[ "$s" -ge 1 ]] && res R3 PASS "perf record ($evname) + report: $s sample lines $HK" || res R3 FAIL "perf record wrote no samples $HK"
 fi
 if want R4; then
   printf 'int dot(const int*a,const int*b,int n){int s=0;for(int i=0;i<n;++i)s+=a[i]*b[i];return s;}\n' >k.cpp
-  o="$($L -O2 -march=znver3 -S k.cpp -o k.s 2>&1 && llvm-mca-23 -mcpu=znver3 k.s 2>/dev/null | grep -m1 Iterations)"
-  q="$([[ -x "$P" ]] && "$P" -O2 -march=znver3 -S k.cpp -o kp.s 2>&1 && "$P2996/bin/llvm-mca" -mcpu=znver3 kp.s 2>/dev/null | grep -m1 Iterations)"
-  [[ "$o" == *100* && "$q" == *100* ]] && res R4 PASS "llvm-mca -mcpu=znver3: Iterations 100 (clang 23 and p2996)" || res R4 FAIL "clang23: ${o:-fail}; p2996: ${q:-fail}"
+  # The machine's own CPU model: Zen 3 on the PC, Apple M2 on the Mac.
+  [[ "$ARCH" == aarch64 ]] && cpu=apple-m2 cf=-mcpu=apple-m2 || cpu=znver3 cf=-march=znver3
+  o="$($L -O2 "$cf" -S k.cpp -o k.s 2>&1 && llvm-mca-23 -mcpu="$cpu" k.s 2>/dev/null | grep -m1 Iterations)"
+  q="$([[ -x "$P" ]] && "$P" -O2 "$cf" -S k.cpp -o kp.s 2>&1 && "$P2996/bin/llvm-mca" -mcpu="$cpu" kp.s 2>/dev/null | grep -m1 Iterations)"
+  [[ "$o" == *100* && "$q" == *100* ]] && res R4 PASS "llvm-mca -mcpu=$cpu: Iterations 100 (clang 23 and p2996)" || res R4 FAIL "clang23: ${o:-fail}; p2996: ${q:-fail}"
 fi
 if want R5; then
   $L -std=c++26 -ftime-trace -c p.cpp -o p.o >/dev/null 2>&1
@@ -702,8 +745,16 @@ fi
 
 # --- U. CPU target --------------------------------------------------------------------
 
-targets="x86-64 x86-64-v3 x86-64-v3+tune znver3"
-tflags() { case "$1" in x86-64) echo "-march=x86-64" ;; x86-64-v3) echo "-march=x86-64-v3" ;; x86-64-v3+tune) echo "-march=x86-64-v3 -mtune=znver3" ;; znver3) echo "-march=znver3" ;; esac }
+# Per architecture: amd64 compares the portable baseline, x86-64-v3 (D137), and
+# the PC's Zen 3; arm64 (proposed, decided in the PR) compares Armv8-A, Armv8.2-A,
+# Armv8.6-A (the M2's level) and -mcpu=apple-m2.
+if [[ "$ARCH" == aarch64 ]]; then
+  targets="armv8-a armv8.2-a armv8.6-a apple-m2" base=armv8.2-a best=apple-m2
+  tflags() { case "$1" in apple-m2) echo "-mcpu=apple-m2" ;; *) echo "-march=$1" ;; esac }
+else
+  targets="x86-64 x86-64-v3 x86-64-v3+tune znver3" base=x86-64-v3 best=znver3
+  tflags() { case "$1" in x86-64) echo "-march=x86-64" ;; x86-64-v3) echo "-march=x86-64-v3" ;; x86-64-v3+tune) echo "-march=x86-64-v3 -mtune=znver3" ;; znver3) echo "-march=znver3" ;; esac }
+fi
 if want U1; then
   bad=""
   for t in $targets; do
@@ -712,14 +763,37 @@ if want U1; then
     # shellcheck disable=SC2046
     $L -O2 $(tflags "$t") -c -x c++ /dev/null -o /dev/null 2>/dev/null || bad="$bad clang:$t"
   done
-  nat="$($G -march=native -Q --help=target 2>/dev/null | awk '$1=="-march=" {print $2; exit}')"
-  [[ -z "$bad" && "$nat" == znver3 ]] && res U1 PASS "both compilers accept x86-64, x86-64-v3, -mtune=znver3, znver3; gcc -march=native = $nat" ||
-    res U1 FAIL "rejected:${bad:- none}; -march=native = ${nat:-?}"
+  if [[ "$ARCH" == aarch64 ]]; then
+    nat="$($G -mcpu=native -Q --help=target 2>/dev/null | awk '$1=="-mcpu=" {print $2; exit}')" natf=-mcpu=native
+  else
+    nat="$($G -march=native -Q --help=target 2>/dev/null | awk '$1=="-march=" {print $2; exit}')" natf=-march=native
+  fi
+  if [[ "$ARCH" == aarch64 ]]; then
+    # Docker Desktop's VM hides the CPU model (MIDR part 0x000), so -mcpu=native
+    # cannot name the M2; the rule is that every target builds, and native is recorded.
+    part="$(awk -F: '/CPU part/ {gsub(/ /,"",$2); print $2; exit}' /proc/cpuinfo)"
+    [[ -z "$bad" ]] && res U1 PASS "both compilers accept $(tr ' ' , <<<"$targets"); gcc $natf = ${nat:-?} (CPU part $part in the VM: model not visible)" ||
+      res U1 FAIL "rejected:$bad; $natf = ${nat:-?}"
+  else
+    [[ -z "$bad" && "$nat" == "$best" ]] && res U1 PASS "both compilers accept $(tr ' ' , <<<"$targets"); gcc $natf = $nat" ||
+      res U1 FAIL "rejected:${bad:- none}; $natf = ${nat:-?} (want $best)"
+  fi
 fi
 if want U2; then
-  g="$(diff <($G -march=x86-64-v3 -Q --help=target | awk '$2=="[enabled]" && $1 ~ /^-m/ {print $1}' | sort) \
-    <($G -march=znver3 -Q --help=target | awk '$2=="[enabled]" && $1 ~ /^-m/ {print $1}' | sort) | sed -n 's/^> -m//p' | tr '\n' ' ')"
-  res U2 N/A "znver3 adds over x86-64-v3 (gcc): ${g% }; a -march=znver3 binary needs these on every machine that runs it"
+  if [[ "$ARCH" == aarch64 ]]; then
+    # GCC's -Q --help=target lists no AArch64 extensions, so compare clang's feature macros.
+    # shellcheck disable=SC2046
+    g="$(diff <($L $(tflags "$base") -dM -E -x c++ /dev/null | grep -o '__ARM_FEATURE_[A-Z0-9_]*' | sort -u) \
+      <($L $(tflags "$best") -dM -E -x c++ /dev/null | grep -o '__ARM_FEATURE_[A-Z0-9_]*' | sort -u) | sed -n 's/^> __ARM_FEATURE_//p' | tr '\n' ' ')"
+    g="${g% }"
+    res U2 N/A "$best adds over $base (clang __ARM_FEATURE_ macros): ${g:-none}; a $best binary needs these on every machine that runs it"
+  else
+    # shellcheck disable=SC2046
+    g="$(diff <($G $(tflags "$base") -Q --help=target | awk '$2=="[enabled]" && $1 ~ /^-m/ {print $1}' | sort) \
+      <($G $(tflags "$best") -Q --help=target | awk '$2=="[enabled]" && $1 ~ /^-m/ {print $1}' | sort) | sed -n 's/^> -m//p' | tr '\n' ' ')"
+    g="${g% }"
+    res U2 N/A "$best adds over $base (gcc): ${g:-none}; a $best binary needs these on every machine that runs it"
+  fi
 fi
 if want U3; then
   out="" ref="" bad=""
@@ -732,7 +806,10 @@ if want U3; then
     r="$("./b_$t")"
     [[ -z "$ref" ]] && ref="$r"
     [[ "$r" == "$ref" ]] || bad="$bad $t:output"
-    out="$out $t=$(best_ms "./b_$t")ms/$(instr_u "./b_$t")i"
+    iu="$(instr_u "./b_$t")"
+    # No count: "no PMU" only when the kernel exposes none; otherwise perf failed.
+    [[ -n "$iu" ]] || { [[ -z "${PMU// /}" ]] && iu="no PMU, no " || iu="perf failed, no "; }
+    out="$out $t=$(best_ms "./b_$t")ms/${iu}i"
   done
   [[ -z "$bad" ]] && res U3 N/A "[timing] gcc -O2 bench, best of 5 on cores 2-5:$out" || res U3 FAIL "[timing]$bad;$out"
 fi

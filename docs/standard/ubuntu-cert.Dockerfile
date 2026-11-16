@@ -1,10 +1,12 @@
-# The Ubuntu 26.10 amd64 container that docs/standard/ubuntu.md certifies.
+# The Ubuntu 26.10 container (amd64 and arm64) that docs/standard/ubuntu.md certifies.
 # A stand-in until the M1a base and tools images exist (D45, D49, D73):
 # the same base digest and toolchain sources, with every package pinned to the
 # exact version the playbook was run against. apt.llvm.org deletes old
 # snapshots within days (D12), so a rebuild after that needs new LLVM pins;
 # the image ID in the report header is the record of what was certified.
-# Build: mise run certify:ubuntu-image (on the Docker host, amd64 only).
+# Build: mise run certify:ubuntu-image: amd64 on the PC's Docker, or with --local
+# arm64 on the Mac's Docker Desktop. Each arch-specific download is picked by
+# TARGETARCH and checked against its own digest.
 # The LLVM 23 snapshot every stage installs from (declared before the first
 # FROM so the IWYU stage sees it too).
 # Bumped 2026-11-16 from the c47d7823685a snapshot, which apt.llvm.org had
@@ -20,7 +22,9 @@ ARG LLVM_VER
 # apt.llvm.org's signing key, checked by fingerprint (M0 (f)).
 ARG LLVM_SIGNER_FPR=6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
 ARG MISE_VER=2026.11.8
-ARG MISE_SHA256=d2d5a46f507bba772686e2c8f2316b3a4439dac49a37a30db5c0e7bb077c5431
+ARG MISE_SHA256_AMD64=d2d5a46f507bba772686e2c8f2316b3a4439dac49a37a30db5c0e7bb077c5431
+ARG MISE_SHA256_ARM64=b36da3c4892380325d44dee3678ba618de191254d8a4aed8011ee66b28a6cbd7
+ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -51,9 +55,10 @@ RUN curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /us
     && rm -rf /var/lib/apt/lists/*
 
 # mise from its release tarball, checked by digest. A stand-in for D73's packslip install.
-RUN curl -fsSLo /tmp/mise.tar.gz \
-      "https://github.com/jdx/mise/releases/download/v${MISE_VER}/mise-v${MISE_VER}-linux-x64.tar.gz" \
-    && echo "${MISE_SHA256}  /tmp/mise.tar.gz" | sha256sum -c - \
+RUN case "$TARGETARCH" in amd64) a=x64 h="$MISE_SHA256_AMD64" ;; arm64) a=arm64 h="$MISE_SHA256_ARM64" ;; *) exit 1 ;; esac \
+    && curl -fsSLo /tmp/mise.tar.gz \
+      "https://github.com/jdx/mise/releases/download/v${MISE_VER}/mise-v${MISE_VER}-linux-${a}.tar.gz" \
+    && echo "${h}  /tmp/mise.tar.gz" | sha256sum -c - \
     && tar -C /tmp -xzf /tmp/mise.tar.gz && install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise \
     && rm -rf /tmp/mise /tmp/mise.tar.gz
 # The tool set and its linux-x64 lock (ubuntu-cert-tools/). --locked fails the
@@ -72,6 +77,8 @@ WORKDIR /root
 FROM base AS iwyu
 ARG LLVM_VER
 ARG IWYU_COMMIT=c9cbc836a1af631610266c53cf1671b1671a0fdc
+# BUILD_JOBS caps ninja (empty: its default); the Mac build passes 4.
+ARG BUILD_JOBS
 RUN apt-get update && apt-get install -y --no-install-recommends \
       llvm-23-dev="$LLVM_VER" libclang-23-dev="$LLVM_VER" libclang-cpp23-dev="$LLVM_VER" \
     && rm -rf /var/lib/apt/lists/*
@@ -79,7 +86,7 @@ RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/includ
     && git -C /src checkout -q FETCH_HEAD && test "$(git -C /src rev-parse HEAD)" = "$IWYU_COMMIT" \
     && cmake -G Ninja -S /src -B /b -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23 \
          -DCMAKE_C_COMPILER=clang-23 -DCMAKE_CXX_COMPILER=clang++-23 -DCMAKE_INSTALL_PREFIX=/opt/iwyu-llvm23 \
-    && ninja -C /b install
+    && ninja -C /b ${BUILD_JOBS:+-j"$BUILD_JOBS"} install
 
 # The OpenMP NVPTX device runtime for clang 23 (GPU offload, D136 amended
 # 2026-11-16): neither apt.llvm.org (no nvptx64-nvidia-cuda files in any
@@ -89,6 +96,7 @@ RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/includ
 FROM base AS llvm23-offload
 ARG LLVM_VER
 ARG LLVM23_COMMIT
+ARG BUILD_JOBS
 RUN [[ "$LLVM_VER" == *"+${LLVM23_COMMIT:0:12}-"* ]] \
     && apt-get update && apt-get install -y --no-install-recommends \
       llvm-23-dev="$LLVM_VER" libclang-23-dev="$LLVM_VER" libclang-cpp23-dev="$LLVM_VER" \
@@ -105,7 +113,7 @@ RUN git init -q /src && git -C /src remote add origin https://github.com/llvm/ll
          -DCMAKE_C_COMPILER_WORKS=ON -DCMAKE_CXX_COMPILER_WORKS=ON \
          -DLLVM_BINARY_DIR=/usr/lib/llvm-23 -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON \
          -DCMAKE_INSTALL_PREFIX=/opt/llvm23-offload \
-    && ninja -C /b install \
+    && ninja -C /b ${BUILD_JOBS:+-j"$BUILD_JOBS"} install \
     && test -f /opt/llvm23-offload/lib/nvptx64-nvidia-cuda/libomptarget-nvptx.bc
 
 # NVIDIA's CUDA redistributables, for clang's GPU offload (ptxas, nvlink,
@@ -118,15 +126,21 @@ RUN git init -q /src && git -C /src remote add origin https://github.com/llvm/ll
 # Neither is on PATH.
 FROM base AS cuda
 ARG CUDA_REDIST=https://developer.download.nvidia.com/compute/cuda/redist
-ARG CUDA13_NVCC=13.2.86:b04e5ca5b41f8b5629ce5f16930920e6af437f32c9777fcb67e0361f732b6f43
-ARG CUDA13_NVVM=13.2.86:029fc2a43904a2208a83dfd5834c4c343394d1117279f849863ae94208a88b8a
-ARG CUDA13_CUDART=13.2.86:d6be2b3546fa93e5dec9e3d118d31f9540d0b7af5319ee3c6726f202dfc5b5d4
-ARG CUDA12_NVCC=12.9.86:7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35
-ARG CUDA12_CUDART=12.9.79:1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99
-# get PREFIX PACKAGE VERSION:SHA256 fetches one archive, checks it, unpacks it.
-RUN get() { \
-      local h="${3#*:}" f="$2-linux-x86_64-${3%%:*}-archive"; \
-      curl -fsSLo "/tmp/$f.tar.xz" "$CUDA_REDIST/$2/linux-x86_64/$f.tar.xz" \
+# VERSION:SHA256-linux-x86_64:SHA256-linux-sbsa (arm64). On arm64 the toolkits
+# are there for compiling, but GO is N/A: no GPU reaches Docker on the Mac.
+ARG TARGETARCH
+ARG CUDA13_NVCC=13.2.86:b04e5ca5b41f8b5629ce5f16930920e6af437f32c9777fcb67e0361f732b6f43:0ae0716074fb8ca9a2eaebb0acd1425d8a41904ace1320793bbad270c3ce043f
+ARG CUDA13_NVVM=13.2.86:029fc2a43904a2208a83dfd5834c4c343394d1117279f849863ae94208a88b8a:14eb9d4d180f8466b3eb25e6801f48b7790b614a19528b876ec5d1b98abf05a1
+ARG CUDA13_CUDART=13.2.86:d6be2b3546fa93e5dec9e3d118d31f9540d0b7af5319ee3c6726f202dfc5b5d4:30d07b79d832b517cedced78a9e1aa63ebfaa8d71e4df6d1943cdf33fe563400
+ARG CUDA12_NVCC=12.9.86:7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35:0aa1fce92dbae76c059c27eefb9d0ffb58e1291151e44ff7c7f1fc2dd9376c0d
+ARG CUDA12_CUDART=12.9.79:1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99:8b422a3b2cb8452cb678181b0bf9d7aa7342df168b5319c5488ae3b8514101fc
+# get PREFIX PACKAGE VERSION:SHA-X86_64:SHA-SBSA fetches one archive, checks it, unpacks it.
+RUN case "$TARGETARCH" in amd64) p=linux-x86_64 ;; arm64) p=linux-sbsa ;; *) exit 1 ;; esac \
+    && get() { \
+      local v h f h_x h_s; IFS=: read -r v h_x h_s <<<"$3"; \
+      if [[ "$p" == linux-x86_64 ]]; then h="$h_x"; else h="$h_s"; fi; \
+      f="$2-$p-$v-archive"; \
+      curl -fsSLo "/tmp/$f.tar.xz" "$CUDA_REDIST/$2/$p/$f.tar.xz" \
         && echo "$h  /tmp/$f.tar.xz" | sha256sum -c - \
         && mkdir -p "$1" && tar -C "$1" --strip-components=1 -xJf "/tmp/$f.tar.xz" && rm "/tmp/$f.tar.xz"; \
     } \
@@ -143,15 +157,20 @@ RUN get() { \
     && rm -rf /tmp/c13 /tmp/c12 && du -sh /opt/cuda-13.2 /opt/cuda-12.9
 
 FROM base
-ARG CLANGD_TARBALL=LLVM-23.1.5-Linux-X64
-ARG CLANGD_SHA256=f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a
+ARG TARGETARCH
+ARG CLANGD_SHA256_AMD64=f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a
+ARG CLANGD_SHA256_ARM64=44f1e4b7a125b2763d56386a199928dd57ec32e151cc6042dce2f7b0da7bb651
 # clangd: apt.llvm.org's clangd-23 needs libabsl20260107, which 26.10 does not
 # have (E2). Until a stonking suite exists, clangd comes from the nearest LLVM
 # release tarball, checked against GitHub's published digest.
-RUN curl -fsSLo /tmp/llvm.tar.xz \
-      "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.5/${CLANGD_TARBALL}.tar.xz" \
-    && echo "${CLANGD_SHA256}  /tmp/llvm.tar.xz" | sha256sum -c - \
-    && tar -C /opt -xJf /tmp/llvm.tar.xz "${CLANGD_TARBALL}/bin/clangd" "${CLANGD_TARBALL}/lib/clang" \
+# Unpacked to /opt/llvm-23.1.5 on both architectures.
+RUN case "$TARGETARCH" in amd64) t=LLVM-23.1.5-Linux-X64 h="$CLANGD_SHA256_AMD64" ;; \
+      arm64) t=LLVM-23.1.5-Linux-ARM64 h="$CLANGD_SHA256_ARM64" ;; *) exit 1 ;; esac \
+    && curl -fsSLo /tmp/llvm.tar.xz \
+      "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.5/${t}.tar.xz" \
+    && echo "${h}  /tmp/llvm.tar.xz" | sha256sum -c - \
+    && mkdir /opt/llvm-23.1.5 \
+    && tar -C /opt/llvm-23.1.5 --strip-components=1 -xJf /tmp/llvm.tar.xz "${t}/bin/clangd" "${t}/lib/clang" \
     && rm /tmp/llvm.tar.xz
 COPY --from=iwyu /opt/iwyu-llvm23/ /opt/iwyu-llvm23/
 RUN ln -s /opt/iwyu-llvm23/bin/include-what-you-use /usr/local/bin/include-what-you-use \

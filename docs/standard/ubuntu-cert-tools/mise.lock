@@ -2,6 +2,26 @@
 
 lockfile_version = 4
 
+[conda-packages.linux-arm64."_openmp_mutex-4.5-20_gnu"]
+url = "https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda"
+checksum = "sha256:a2527b1d81792a0ccd2c05850960df119c2b6d8f5fdec97f2db7d25dc23b1068"
+
+[conda-packages.linux-arm64."libgcc-16.2.0-h205dda4_7"]
+url = "https://conda.anaconda.org/conda-forge/linux-aarch64/libgcc-16.2.0-h205dda4_7.conda"
+checksum = "sha256:eae7a3449d5a3b5351c5427137c076cc3fc826645c7bfc42dc10772b783826f1"
+
+[conda-packages.linux-arm64."libgomp-16.2.0-h8acb6b2_7"]
+url = "https://conda.anaconda.org/conda-forge/linux-aarch64/libgomp-16.2.0-h8acb6b2_7.conda"
+checksum = "sha256:4406fd67c5beeb99b9372f9bf07aa3e40ca141e337eceebac3ff64aa72799494"
+
+[conda-packages.linux-arm64."libiconv-1.18-h1ea5142_3"]
+url = "https://conda.anaconda.org/conda-forge/linux-aarch64/libiconv-1.18-h1ea5142_3.conda"
+checksum = "sha256:d22c666eb887afd2119aac2110e23a0e817e9391bda99293421f7c46dab1564c"
+
+[conda-packages.linux-arm64."libstdcxx-16.2.0-hef695bb_7"]
+url = "https://conda.anaconda.org/conda-forge/linux-aarch64/libstdcxx-16.2.0-hef695bb_7.conda"
+checksum = "sha256:b241a3acfa9cdb1359112864a1241225533c92642de3000d52ae65ef5d3a9786"
+
 [conda-packages.linux-x64."_openmp_mutex-4.5-20_gnu"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda"
 checksum = "sha256:1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9"
@@ -27,6 +47,12 @@ version = "4.5.0"
 backend = "aqua:Kitware/CMake"
 specifiers = ["4.5.0"]
 
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:0c8447e7bba9701467b5ac6155d157aa9e309e71af4981f78bd4b9176107f553"
+checksum_source = "mise-versions"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+url_api = "https://api.github.com/repos/Kitware/CMake/releases/assets/740685187"
+
 [tools.cmake."platforms.linux-x64"]
 checksum = "sha256:81f0d5b0960fb6adc8197030ffc827fba937640d51e73e39e0e9e40d88c66f6f"
 checksum_source = "mise-versions"
@@ -41,6 +67,17 @@ specifiers = ["1.18.0"]
 [tools."conda:doxygen".options]
 channel = "conda-forge"
 
+[tools."conda:doxygen"."platforms.linux-arm64"]
+checksum = "sha256:22845330574b7a2c84e0aa88b3ec8cbaab927dbc55195677c89ca65e00b04174"
+url = "https://conda.anaconda.org/conda-forge/linux-aarch64/doxygen-1.18.0-py310hfa0866d_0.conda"
+conda_deps = [
+    "libiconv-1.18-h1ea5142_3",
+    "libstdcxx-16.2.0-hef695bb_7",
+    "libgcc-16.2.0-h205dda4_7",
+    "_openmp_mutex-4.5-20_gnu",
+    "libgomp-16.2.0-h8acb6b2_7",
+]
+
 [tools."conda:doxygen"."platforms.linux-x64"]
 checksum = "sha256:aa8efe84767d1f628f439749df5bd1d369cad6ef1a6cc2922ffc75238e62f07a"
 url = "https://conda.anaconda.org/conda-forge/linux-64/doxygen-1.18.0-py310hb664d3d_0.conda"
@@ -51,6 +88,27 @@ conda_deps = [
     "_openmp_mutex-4.5-20_gnu",
     "libgomp-16.2.0-he0feb66_7",
 ]
+
+[[tools."github:microsoft/vcpkg-tool"]]
+version = "2026-10-29"
+backend = "github:microsoft/vcpkg-tool"
+specifiers = ["2026-10-29"]
+
+[tools."github:microsoft/vcpkg-tool".options]
+additional_asset_patterns = "vcpkg-standalone-bundle.tar.gz"
+asset_pattern = "vcpkg-glibc-arm64"
+
+[tools."github:microsoft/vcpkg-tool"."platforms.linux-arm64"]
+checksum = "sha256:e59a1f42de574dbceec05e4f90630898a33150f27c5a999e0f2d9b80a17001e3"
+url = "https://github.com/microsoft/vcpkg-tool/releases/download/2026-10-29/vcpkg-glibc-arm64"
+url_api = "https://api.github.com/repos/microsoft/vcpkg-tool/releases/assets/690264305"
+provenance = "github-attestations"
+
+[[tools."github:microsoft/vcpkg-tool"."platforms.linux-arm64".additional_artifacts]]
+checksum = "sha256:3e128d4e44dfb0400bfef92d00e259a7095db2a2ca218e0c483145aa16e41b62"
+url = "https://github.com/microsoft/vcpkg-tool/releases/download/2026-10-29/vcpkg-standalone-bundle.tar.gz"
+url_api = "https://api.github.com/repos/microsoft/vcpkg-tool/releases/assets/690264684"
+provenance = "github-attestations"
 
 [[tools."github:microsoft/vcpkg-tool"]]
 version = "2026-10-29"
@@ -78,6 +136,12 @@ version = "2.0.0"
 backend = "aqua:sharkdp/hyperfine"
 specifiers = ["2.0.0"]
 
+[tools.hyperfine."platforms.linux-arm64"]
+checksum = "sha256:f8244d1e17f8da23ee6b3ae2cdc04a6a185a450f6b74e09bff12e498038fcbc9"
+checksum_source = "mise-versions"
+url = "https://github.com/sharkdp/hyperfine/releases/download/v2.0.0/hyperfine-v2.0.0-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/619832203"
+
 [tools.hyperfine."platforms.linux-x64"]
 checksum = "sha256:ae2beda2ac99c098427e4f755244552daf20e514422889cca6d44421e2d93c87"
 checksum_source = "mise-versions"
@@ -89,6 +153,12 @@ version = "3.0.0"
 backend = "aqua:rui314/mold"
 specifiers = ["3.0.0"]
 
+[tools.mold."platforms.linux-arm64"]
+checksum = "sha256:52c759d3689babaea4c42af2f31062a74ab83e17ffb5a8090232534c67b70577"
+checksum_source = "mise-versions"
+url = "https://github.com/rui314/mold/releases/download/v3.0.0/mold-3.0.0-aarch64-linux.tar.gz"
+url_api = "https://api.github.com/repos/rui314/mold/releases/assets/612121952"
+
 [tools.mold."platforms.linux-x64"]
 checksum = "sha256:6c90d4a474c7c0409dfb575be03a5345878ac14fdba18de8b40fa58c60121189"
 checksum_source = "mise-versions"
@@ -99,6 +169,12 @@ url_api = "https://api.github.com/repos/rui314/mold/releases/assets/612122001"
 version = "1.13.2"
 backend = "aqua:ninja-build/ninja"
 specifiers = ["1.13.2"]
+
+[tools.ninja."platforms.linux-arm64"]
+checksum = "sha256:fd2cacc8050a7f12a16a2e48f9e06fca5c14fc4c2bee2babb67b58be17a607fc"
+checksum_source = "mise-versions"
+url = "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux-aarch64.zip"
+url_api = "https://api.github.com/repos/ninja-build/ninja/releases/assets/318864579"
 
 [tools.ninja."platforms.linux-x64"]
 checksum = "sha256:5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6"
@@ -117,6 +193,11 @@ version = "3.14.8"
 backend = "core:python"
 specifiers = ["3.14.8"]
 
+[tools.python."platforms.linux-arm64"]
+checksum = "sha256:6519109a1bed8cff79aad3a6df880c95dde153e2c4c9713846476fa344d94049"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261020/cpython-3.14.8+20261020-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
 [tools.python."platforms.linux-x64"]
 checksum = "sha256:b88a4ac994ac55c35a03a3672103618d5c5d5bf342db7b2093b8d328b6516b42"
 url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261020/cpython-3.14.8+20261020-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
@@ -126,6 +207,12 @@ provenance = "github-attestations"
 version = "0.19.0"
 backend = "aqua:mozilla/sccache"
 specifiers = ["0.19.0"]
+
+[tools.sccache."platforms.linux-arm64"]
+checksum = "sha256:3e47fc4a71b1ddd1b4294a0de9d34498922fdf41e3cd0bda5df3954e3d6deb9d"
+checksum_source = "mise-versions"
+url = "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/671950692"
 
 [tools.sccache."platforms.linux-x64"]
 checksum = "sha256:aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd"
@@ -137,6 +224,12 @@ url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/67195107
 version = "0.13.8"
 backend = "aqua:astral-sh/uv"
 specifiers = ["0.13.8"]
+
+[tools.uv."platforms.linux-arm64"]
+checksum = "sha256:74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.8/uv-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/740313629"
+provenance = "github-attestations"
 
 [tools.uv."platforms.linux-x64"]
 checksum = "sha256:5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91"
