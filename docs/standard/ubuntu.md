@@ -849,6 +849,16 @@ Level-1 gate: D46 moves the PMU check to Level 2, and only callgrind
 instruction counts (R7) are Level 1. arm64 on the Mac: N/A. Docker
 Desktop's VM exposes no hardware PMU (`/sys/bus/event_source/devices` holds
 only `breakpoint kprobe software tracepoint uprobe`); the line lists them.
+A hardware PMU is an event source with a CPU cycle event, `events/cpu-cycles`
+(x86) or `events/cpu_cycles` (arm64); `msr`, `power` and `amd_iommu` have
+none. With no hardware PMU, R2 is N/A only on arm64, where Docker
+Desktop's VM can never have one. On x86_64 it is FAIL: that is the PC or a KVM
+guest on it (D65), where a missing PMU is a missing VM setting, and the line
+names the fix, `<cpu mode='host-passthrough'/>` or `<pmu state='on'/>`
+with `host-model`. Measured 2026-11-16 in an Ubuntu 26.10 VM on the PC with
+`host-model` and no `<pmu>`: it has only `breakpoint kprobe msr software
+tracepoint uprobe`, so the old probe counted `msr` as a PMU and failed on
+perf's own error instead.
 U3's `instructions:u` counts are absent there for the same reason.
 
 **R3. Sampling (container on the PC's Omarchy kernel).** Probe:
@@ -976,9 +986,19 @@ unprivileged (D48). Tuning down, from the table: `--cap-add PERFMON` alone
 gives perf; lldb then needs ASLR left on (section D).
 
 **V3. Process and memory limits (container on the PC's Omarchy kernel).**
-Probe: `cat /sys/fs/cgroup/pids.max; ulimit -n; ulimit -l; df -h /dev/shm;
-cat /proc/1/comm`. PASS if `pids.max` is `max` or at least 32768, the
-kernel's default `pid_max`. Today: `pids.max` is 76881 with or without
+Probe: the smallest `pids.max` on the path from the process's own cgroup
+(`/proc/self/cgroup`) up to `/sys/fs/cgroup`, then `ulimit -n; ulimit -l;
+df -h /dev/shm; cat /proc/1/comm`. PASS if that `pids.max` is `max` (no
+limit set) or at least 32768, the kernel's default `pid_max`. In a container
+with its own cgroup namespace (Docker's default) the path is `/`, so this
+reads `/sys/fs/cgroup/pids.max` as before; with `--cgroupns=host` it is the
+container's `docker-<id>.scope`. Without a cgroup v2 entry (cgroup v1) V3
+FAILs rather than guess; a host or
+VM's root cgroup has no `pids.max` file, and its limits sit on the slices
+below it (on the PC, `user-1000.slice` has 169139). systemd scales those
+slice limits with memory: in a 2 GB Ubuntu 26.10 VM on the PC,
+`user-1000.slice` has 4983, so V3 FAILs there (2026-11-16); a D65 runner VM
+needs more memory or a higher `TasksMax`. Today: `pids.max` is 76881 with or without
 `--pids-limit -1`: the host's systemd `DefaultTasksMax` (15% of the
 kernel's task limit) sets it, not Docker. Host values on 2026-11-15:
 `systemctl show -p DefaultTasksMax` 76881, `kernel.threads-max` 512544,

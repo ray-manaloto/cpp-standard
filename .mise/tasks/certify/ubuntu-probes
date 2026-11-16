@@ -119,12 +119,15 @@ best_ms() { # best_ms CMD...: the fastest of 5 runs on cores 2-5, in ms (hyperfi
 instr_u() { # instr_u CMD...: user-space instructions retired (perf stat)
   perf stat -x, -e instructions:u -- "$@" 2>&1 >/dev/null | awk -F, '/instructions/ && $1 ~ /^[0-9]+$/ {print $1; exit}'
 }
-# The hardware PMUs the kernel exposes (empty in Docker Desktop's VM, which has none).
+# The hardware PMUs: event sources the kernel registered with a CPU cycle event, cpu-cycles on
+# x86 (arch/x86/events/core.c) and cpu_cycles on arm64 (drivers/perf/arm_pmuv3.c). Other sources,
+# such as msr, power or amd_iommu, have no cycle counter, and a VM without a vPMU still has them,
+# so they do not count. Empty in Docker Desktop's VM and in a VM without a vPMU.
 PMU="" PMU_ALL=""
 for d in /sys/bus/event_source/devices/*; do
   [[ -e "$d" ]] || continue
   PMU_ALL="$PMU_ALL${d##*/} "
-  case "${d##*/}" in software | tracepoint | kprobe | uprobe | breakpoint) ;; *) PMU="$PMU${d##*/} " ;; esac
+  [[ -e "$d/events/cpu-cycles" || -e "$d/events/cpu_cycles" ]] && PMU="$PMU${d##*/} "
 done
 
 printf '#include <print>\nint main(){std::println("ok");}\n' >p.cpp
@@ -699,8 +702,12 @@ if want R1; then
   v="$(perf --version 2>&1)"
   [[ "$v" == "perf version"* ]] && res R1 PASS "$v (linux-perf $(dpkg-query -W -f '${Version}' linux-perf)) $HK" || res R1 FAIL "${v:-perf not found} $HK"
 fi
-if want R2 && [[ -z "${PMU// /}" ]]; then
-  res R2 N/A "no hardware PMU: /sys/bus/event_source/devices has only $PMU_ALL(Docker Desktop's VM exposes none) $HK"
+if want R2 && [[ -z "${PMU// /}" && "$ARCH" == aarch64 ]]; then
+  res R2 N/A "no hardware PMU: no event source in /sys/bus/event_source/devices has a cpu_cycles event (${PMU_ALL% }); Docker Desktop's VM exposes none $HK"
+elif want R2 && [[ -z "${PMU// /}" ]]; then
+  # x86_64 is the PC, or a KVM guest on it (D65), where a PMU is always possible: a guest without
+  # one has a missing setting, which must show, not pass as N/A.
+  res R2 FAIL "no hardware PMU: no event source has a cpu-cycles event (${PMU_ALL% }); in a KVM guest, give it a vPMU: <cpu mode='host-passthrough'/>, or <pmu state='on'/> with host-model $HK"
 elif want R2; then
   o="$(perf stat -x, -e cycles,instructions,cache-misses,branch-misses -- ./rp 2>&1 >/dev/null)"
   n="$(grep -cE '^[0-9]+,' <<<"$o")"
@@ -859,10 +866,27 @@ if want V2; then
     res V2 FAIL "CapEff $ce (perfmon $perfmon, sys_admin $sysadmin); seccomp $sc $HK"
 fi
 if want V3; then
-  pm="$(cat /sys/fs/cgroup/pids.max)"
+  # The tightest pids.max on this process's cgroup path, from its own cgroup up to the root. In a
+  # container (a cgroup namespace) the path is / and its pids.max is the container's limit. On a
+  # host or VM it is under a slice (user.slice/user-1000.slice/...), and the root cgroup has no
+  # pids.max file at all: only kernel.pid_max limits it.
+  cg="$(awk -F: '$1 == 0 {print $3; exit}' /proc/self/cgroup)"
+  pm=max at="none set"
+  p="/sys/fs/cgroup${cg%/}"
+  while :; do
+    if [[ -r "$p/pids.max" ]]; then
+      v="$(cat "$p/pids.max")"
+      if [[ "$v" != max ]] && [[ "$pm" == max || "$v" -lt "$pm" ]]; then pm=$v at="${p#/sys/fs/cgroup}" at="${at:-/}"; fi
+    fi
+    [[ "$p" == /sys/fs/cgroup ]] && break
+    p="${p%/*}"
+  done
   ok=no
   [[ "$pm" == max || "$pm" -ge 32768 ]] && ok=yes
-  ev="pids.max $pm; nofile $(ulimit -n); memlock $(ulimit -l); /dev/shm $(df -h /dev/shm | awk 'NR==2 {print $2}'); pid 1 $(cat /proc/1/comm)"
+  # No unified (0::) line means cgroup v1 or no cgroup information: the walk above saw nothing, so
+  # "max" would be a false PASS. Ubuntu 26.10 runs cgroup v2 only.
+  [[ -n "$cg" ]] || ok=no pm="unknown" at="no cgroup v2 entry in /proc/self/cgroup"
+  ev="pids.max $pm ($at; pid_max $(cat /proc/sys/kernel/pid_max)); nofile $(ulimit -n); memlock $(ulimit -l); /dev/shm $(df -h /dev/shm | awk 'NR==2 {print $2}'); pid 1 $(cat /proc/1/comm)"
   [[ $ok == yes ]] && res V3 PASS "$ev $HK" || res V3 FAIL "$ev (pids.max below the kernel's default pid_max 32768) $HK"
 fi
 if want V4; then
