@@ -1798,7 +1798,7 @@ fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 
 # image/base.inputs.toml (P)
 image = "ubuntu:26.10@sha256:<64 hex>"
-mise = "<exact mise version>"   # the only mise pin, first value 2026.11.8 (D99); the Mac golden image reads it too (D73, D86)
+mise = "<exact mise version>"   # the only mise pin, first value 2026.11.8 (D99), now 2026.11.9 (D146); the Mac golden image reads it too (D73, D86)
 mise_signer = "ps1_<key id>"    # packslip key for the mise install
 packslip_image = "ghcr.io/jdx/packslip@sha256:<64 hex>"
 

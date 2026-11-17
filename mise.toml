@@ -2,7 +2,7 @@
 # settings only: tool pins live in .mise/conf.d/*.toml fragments and every
 # task is its own file under .mise/tasks/ (D93), so parallel changes rarely
 # touch the same file.
-min_version = "2026.11.8"
+min_version = "2026.11.9"
 
 [settings]
 # A fixed cutoff instead of the default 24h age, so `mise lock` gives the

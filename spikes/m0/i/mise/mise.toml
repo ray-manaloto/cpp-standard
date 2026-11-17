@@ -1,5 +1,5 @@
 # M0 (i) spike config (environment-standard.md section 10). Deleted after M0.
-min_version = "2026.11.8"
+min_version = "2026.11.9"
 
 [settings]
 # A fixed cutoff instead of the default 24h age: mise lock passes it to
