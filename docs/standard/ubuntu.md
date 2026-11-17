@@ -123,8 +123,8 @@ as root. The whole sequence, from a bare `ubuntu:26.10` container:
 
 ```sh
 apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git
-# mise 2026.11.8 (mise.toml's min_version), checked against the release's SHASUMS256.txt
-v=2026.11.8 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+# mise 2026.11.9 (mise.toml's min_version), checked against the release's SHASUMS256.txt
+v=2026.11.9 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
 u=https://github.com/jdx/mise/releases/download/v$v
 curl -fsSLO "$u/mise-v$v-linux-$a.tar.gz"
 curl -fsSL "$u/SHASUMS256.txt" | grep " ./mise-v$v-linux-$a.tar.gz$" | sha256sum -c - &&
@@ -311,7 +311,7 @@ To launch and use the container, the `ubuntu-arm64-run` skill
 | include-what-you-use 0.27 | `include-what-you-use/include-what-you-use` at `c9cbc836a1af` (tag 0.27, the `clang_23` head), built in the image's `iwyu` stage against `llvm-23-dev` and `libclang-23-dev` of the same snapshot | **yes** | T3: no package of IWYU for LLVM 23 exists; the archive `iwyu` is 0.23 on clang 19 (B2). Installed in `/opt/iwyu-llvm23`, linked into `/usr/local/bin`. |
 | clang-p2996 + libc++ + IWYU 0.25 | `bloomberg/clang-p2996` at the pinned commit, with IWYU `791e69ea4662` (the `clang_21` head) as an LLVM external project, built in a container on the PC | **yes** | The reflection reference compiler (D30, D32); no prebuilt binary exists. Mounted read-only from a volume, not baked into the image (D49). |
 | binutils 2.47, make 4.4.1, gdb 17.2, valgrind 3.27.1, linux-perf 7.3.0, cppcheck 2.21.0 | 26.10 archive | no | D45, D105, D19. |
-| mise 2026.11.8 | the release tarball, checked by sha256 | no | D99. A stand-in for D73's packslip install until the M1a base image exists. |
+| mise 2026.11.9 | the release tarball, checked by sha256 | no | D99, D146. A stand-in for D73's packslip install until the M1a base image exists. |
 | CMake 4.5.0, Ninja 1.13.2, sccache 0.19.0, vcpkg-tool 2026-10-29, gcovr 8.8, Doxygen 1.18.0, hyperfine 2.0.0, mold 3.0.0, uv 0.13.8, Python 3.14.8 | mise, from [`ubuntu-cert-tools/`](ubuntu-cert-tools/): `mise.toml` and its linux-x64 `mise.lock`, installed with `mise install --locked` | no | The Mac's versions (B1), plus mold. Python is there because a locked `pypi:` install (gcovr) needs a mise-managed interpreter. `--locked` refuses any tool or download not in the lock (checked: adding `jq` to the config makes the install fail). The image points `MISE_GLOBAL_CONFIG_FILE` at that `mise.toml` instead of changing a global config. |
 
 [`ubuntu-cert.Dockerfile`](ubuntu-cert.Dockerfile) is the setup: it installs

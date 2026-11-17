@@ -248,8 +248,8 @@ jobs:
       contents: read
     container: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
     env:
-      MISE_VERSION: 2026.11.8
-      MISE_SHA256: b36da3c4892380325d44dee3678ba618de191254d8a4aed8011ee66b28a6cbd7
+      MISE_VERSION: 2026.11.9
+      MISE_SHA256: cf2900bfb4279f8d8f8a19d5c27bf1bde826b3e742182f3f67511c588498c786
     steps:
       - name: Install mise (pinned version and digest)
         run: |
@@ -285,7 +285,8 @@ jobs:
           MISE_CEILING_PATHS="$(dirname "$PWD")"
           export MISE_CEILING_PATHS MISE_TRUSTED_CONFIG_PATHS="$PWD"
           # The committed lock was generated from nothing on the Mac host with
-          # mise 2026.11.8. Remove it, so mise resolves everything again.
+          # mise 2026.11.8; 2026.11.9 regenerates the same files (D146). Remove
+          # it, so mise resolves everything again.
           cp -a .mise "$RUNNER_TEMP/mac"
           # mise lock needs uv on PATH for the PyPI sidecars; install the
           # pinned uv from the committed lock first.
