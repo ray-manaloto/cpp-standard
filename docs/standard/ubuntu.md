@@ -99,7 +99,9 @@ The container runs with these flags, which `certify:ubuntu` encodes (V2
 explains each one):
 
 ```sh
-docker run --privileged --hostname cert -v cpp-standard-cert-build:/build \
+docker run --cap-add PERFMON --security-opt seccomp=docs/standard/ubuntu-seccomp.json \
+  -e container=docker --hostname cert -v cpp-standard-cert-build:/build \
+  --device /dev/nvidia0 --device /dev/nvidiactl --device /dev/nvidia-uvm --device /dev/nvidia-uvm-tools \
   -v cpp-standard-p2996-562409c79426-d3773989aa5d:/opt/p2996:ro \
   -v /usr/lib/libcuda.so.<driver>:/usr/lib/x86_64-linux-gnu/libcuda.so.1:ro \
   -v /usr/lib/libcuda.so.<driver>:/usr/lib/x86_64-linux-gnu/libcuda.so:ro \
@@ -107,7 +109,8 @@ docker run --privileged --hostname cert -v cpp-standard-cert-build:/build \
   cpp-standard-cert-ubuntu:26.10
 ```
 
-The three driver mounts are the PC's NVIDIA libraries at the version
+Never `--privileged` (V2). The four devices are the PC's NVIDIA compute
+nodes, and the three driver mounts are the PC's NVIDIA libraries at the version
 `nvidia-smi` reports (GO); the host paths are where its distribution keeps
 them.
 
@@ -272,7 +275,7 @@ running the probes below on the PC.
 | `clangd-23` from apt.llvm.org | FAIL (E2): needs `libabsl20260107`, which 26.10 does not have | clangd 23.1.5 from the LLVM release tarball (in the image); its version differs from the apt clang 23.1.6 snapshot |
 | The archive's `iwyu` package | not usable (B2, T3): IWYU 0.23 on clang 19, and it installs the archive `clang` 22, which takes over `cc`, `c++` and `clang++` | leave it out (the image does); the image builds IWYU 0.27 against LLVM 23 instead (T3) |
 | GCC `<stacktrace>` | links only with `-lstdc++exp` (L4) | add `-lstdc++exp` to GCC targets that use it |
-| perf, and lldb's default launch (ASLR off) | need more than Docker's default seccomp profile (V2) | the container runs `--privileged` (D137); without it, see V2 |
+| perf, and lldb's default launch (ASLR off) | need more than Docker's default seccomp profile (V2) | `--cap-add PERFMON` and the seccomp profile `ubuntu-seccomp.json` (V2, D140) |
 | CPU target | `-march=x86-64-v3` (U3, D137) | none needed |
 | Build trees | on the volume `/build` (V4) | none needed |
 
@@ -351,8 +354,8 @@ MLIR, BOLT, openmp and the libc overlay need nothing more. The script is in
 | Item | Why | What to do |
 |---|---|---|
 | Ubuntu's own kernel | a container runs on the host's kernel (Omarchy 7.2.15 here) | label kernel-dependent results; never compare them with an Ubuntu host's |
-| perf events | Docker's default seccomp profile refuses `perf_event_open` unless the container has `CAP_PERFMON` (V2) | `--privileged` (D137); `--cap-add PERFMON` alone is enough for perf |
-| Disabling ASLR (`personality(ADDR_NO_RANDOMIZE)`), which lldb does by default | refused by Docker's default seccomp profile, with or without `CAP_PERFMON` or `CAP_SYS_PTRACE` (V2) | `--privileged` (D137); without it, debug with ASLR on: `settings set target.disable-aslr false`, and `"disableASLR": false` for lldb-dap |
+| perf events | Docker's default seccomp profile refuses `perf_event_open` unless the container has `CAP_PERFMON` (V2) | `--cap-add PERFMON` (V2) |
+| Disabling ASLR (`personality(ADDR_NO_RANDOMIZE)`), which lldb does by default | refused by Docker's default seccomp profile, with or without `CAP_PERFMON` or `CAP_SYS_PTRACE` (V2) | `ubuntu-seccomp.json`: Docker's default profile plus `personality(0x40000)` (V2); without it, debug with ASLR on: `settings set target.disable-aslr false`, and `"disableASLR": false` for lldb-dap |
 | Host CPU settings (governor, boost, SMT, THP) | set on the host | report them (V5); change them only on the host, through dotfiles-lead |
 
 ## A. Host and OS
@@ -713,8 +716,10 @@ Desktop passes no GPU through, so GO1-GO3 are N/A on arm64; the arm64 image
 still carries the CUDA toolkits (`linux-sbsa` archives), so offload code
 compiles there.
 
-**The container's GPU.** `--privileged` already exposes `/dev/nvidia0`,
-`/dev/nvidiactl` and `/dev/nvidia-uvm`. The user-space driver must match the
+**The container's GPU.** `certify:ubuntu` passes the compute device nodes
+with `--device`: `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm` and
+`/dev/nvidia-uvm-tools`, the ones the PC's CDI spec lists without the
+display-only `nvidia-modeset` and `/dev/dri`. The user-space driver must match the
 host's kernel module exactly, so `certify:ubuntu` mounts the host's own,
 read-only, after checking it has the version `nvidia-smi` reports:
 `libcuda.so.<driver>` as both `libcuda.so.1` and `libcuda.so` (both offload
@@ -723,9 +728,10 @@ plugins `dlopen("libcuda.so")`, the unversioned name:
 LLVM 23), and `libnvidia-ptxjitcompiler.so.<driver>` as
 `libnvidia-ptxjitcompiler.so.1` (the driver compiles GCC's PTX with it;
 without it libgomp stops with "Cannot map target functions or variables").
-The report header names the driver. The upgrade path is CDI: the NVIDIA
-container toolkit on the host (through dotfiles-lead), then
-`--device nvidia.com/gpu=all`.
+The report header names the driver. The PC has the NVIDIA container toolkit 1.20.1 and a CDI spec
+(`/var/run/cdi/nvidia.yaml`), so `--device nvidia.com/gpu=all` is the later
+step. Its spec mounts the libraries at the host's `/usr/lib` paths, not
+Ubuntu's `/usr/lib/x86_64-linux-gnu`, which has not been tested yet.
 
 **The flags per compiler** (for the GPU presets, when the reference project adds them):
 
@@ -756,16 +762,19 @@ GPUs.
 ## D. Debuggers
 
 Three debuggers: gdb (GCC's), LLVM 23 lldb, and p2996's lldb. The
-container runs `--privileged` (D137), so each debugger launches with its
-defaults. Under Docker's default seccomp profile instead,
+container runs with `ubuntu-seccomp.json` (V2), which adds the one
+`personality` value the debuggers need, so each debugger launches with its
+defaults. Under Docker's default seccomp profile,
 `personality(ADDR_NO_RANDOMIZE)` is refused: lldb, which disables ASLR by
 default, then fails with `error: Cannot launch '<program>': personality set
 failed: Operation not permitted`, lldb-dap with `configurationDone: resume
 request failed - process already running`, and gdb only warns ("Error
 disabling address space randomization: Operation not permitted") and runs.
-Neither `CAP_PERFMON` nor `CAP_SYS_PTRACE` changes that; only
-`--security-opt seccomp=unconfined` or `--privileged` does (measured,
-2026-11-15). To tune the flags down later, debug with ASLR on:
+Neither `CAP_PERFMON` nor `CAP_SYS_PTRACE` changes that; a seccomp profile that allows it does
+(`seccomp=unconfined` and `--privileged` were measured on 2026-11-15). lldb
+calls `personality(ADDR_NO_RANDOMIZE | <current>)`
+(`lldb/source/Host/posix/ProcessLauncherPosixFork.cpp:53-64` at
+llvmorg-23.1.5), which is `0x40000` in the container. To tune the flags down later, debug with ASLR on:
 `settings set target.disable-aslr false` (in `~/.lldbinit`) and
 `"disableASLR": false` in an lldb-dap launch configuration, both of which
 work under the default profile (measured). Attaching to a running process
@@ -992,8 +1001,8 @@ runs against it.
 **R2. Hardware counters (container on the PC's Omarchy kernel).** Why: D35
 takes hardware counters from the PC. Probe:
 `perf stat -x, -e cycles,instructions,cache-misses,branch-misses -- ./p`.
-PASS if all four are counted. Needs `CAP_PERFMON`, which `--privileged`
-includes (V2). Outside the
+PASS if all four are counted. Needs `CAP_PERFMON`, which the container gets with
+`--cap-add PERFMON` (V2). Outside the
 Level-1 gate: D46 moves the PMU check to Level 2, and only callgrind
 instruction counts (R7) are Level 1. arm64 on the Mac: N/A. Docker
 Desktop's VM exposes no hardware PMU (`/sys/bus/event_source/devices` holds
@@ -1102,16 +1111,16 @@ Probe: `cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max; nproc`.
 Expected: `max 100000`, `max`, and 24 (the host's thread count). PASS if so.
 `certify:ubuntu` passes no `--cpus`, `--memory` or `--cpuset-cpus`.
 
-**V2. Privileged, and what each narrower flag gives (container on the PC's
-Omarchy kernel).** Why: Docker's default seccomp profile refuses `perf_event_open`
+**V2. Not privileged: one flag per need (container on the PC's Omarchy
+kernel).** Why: Docker's default seccomp profile refuses `perf_event_open`
 unless the container holds `CAP_PERFMON` (or `CAP_SYS_ADMIN`); the host's
 `perf_event_paranoid` is 2 (user-space counts only without
 `CAP_PERFMON`; linux v7.2 `Documentation/admin-guide/perf-security.rst`).
 The host's Yama `ptrace_scope` is 1 (`/proc/sys/kernel/yama/ptrace_scope`):
 a process may trace only its descendants unless it holds `CAP_SYS_PTRACE`
 (`Documentation/admin-guide/LSM/Yama.rst`). lldb launches its inferior as
-a child (DB2, DB4), which level 1 allows, and `--privileged` holds
-`CAP_SYS_PTRACE` for attach. Measured on 2026-11-15 with `perf stat -e
+a child (DB2, DB4), which level 1 allows; attaching to a process that is not a
+child would need `CAP_SYS_PTRACE`, which the container does not get. Measured on 2026-11-15 with `perf stat -e
 instructions:u` and `perf record` on the same binary:
 
 | Flags | perf | lldb `run` (ASLR off) |
@@ -1122,17 +1131,40 @@ instructions:u` and `perf record` on the same binary:
 | `--security-opt seccomp=unconfined` | user-only counts (paranoid 2) | works |
 | `--privileged` | user and kernel counts | works |
 
-The owner chose `--privileged` (D137: "get it to work, it is always easier
-to tune down"), so perf and the debuggers' defaults work without
-workarounds. Probe: `grep -E '^(CapEff|Seccomp):' /proc/self/status`. PASS
-if `CapEff` has bit 38 (`CAP_PERFMON`) and bit 21 (`CAP_SYS_ADMIN`) and
-`Seccomp` is 0 (no filter): the `--privileged` container. Security cost: the
-container has every capability, every host device and no syscall filter,
-so it can read host-wide performance data and kernel addresses (the host
-has `kptr_restrict=0`) and can change the host. It is for the dev and
-certification container only, never the CI runner containers, which stay
-unprivileged (D48). Tuning down, from the table: `--cap-add PERFMON` alone
-gives perf; lldb then needs ASLR left on (section D).
+D137 first chose `--privileged` ("get it to work, it is always easier to
+tune down"). D140 tunes it down, because a privileged container that runs
+apt applied Ubuntu's sysctl defaults to the PC itself, and the agents rule
+now forbids `--privileged` on the PC. The container gets:
+
+- `--cap-add PERFMON` for perf (the table's second row).
+- `--security-opt seccomp=docs/standard/ubuntu-seccomp.json` for the
+  debuggers' default launch. Docker's default profile allows `personality`
+  with only five argument values (0, 8, 0x20000, 0x20008 and the 0xffffffff
+  query; moby docker-v29.9.2 `vendor/github.com/moby/profiles/seccomp/default.json`
+  L530-L594), for every capability set, so no `--cap-add` helps. lldb and
+  the sanitizers pass `ADDR_NO_RANDOMIZE | <current>`, `0x40000` here. The
+  file is that `default.json` (sha256
+  `785b2429264afba4d594320337cb17f144f3c7d51585f9805eef72e28f4f9334`) with
+  one rule added: `personality` with argument 0 equal to `262144`. It is under
+the Apache License 2.0 (`ubuntu-seccomp.LICENSE`). A custom
+  profile replaces Docker's default completely
+  (`daemon/seccomp_linux.go` L46-L57), so the file has to be refreshed from
+  the new `default.json` when the PC's Docker is upgraded;
+  `certify:ubuntu` warns when the Docker version differs from the one the
+  file came from.
+- ptrace of the debuggers' own children needs nothing: the default profile
+  allows `ptrace` without a capability on kernels 4.8 and later
+  (`default.json` L428-L438).
+- `-e container=docker`, so procps' post-install skips `sysctl --system`
+  if anything ever runs apt inside it.
+- The GPU's device nodes with `--device` (GO).
+
+Probe: `grep -E '^(CapEff|Seccomp):' /proc/self/status` and
+`setarch $(uname -m) -R cat /proc/self/personality`. PASS if `CapEff` has bit
+38 (`CAP_PERFMON`) and not bit 21 (`CAP_SYS_ADMIN`), `Seccomp` is 2 (a filter
+is on) and the personality reads `00040000` (ASLR off was allowed). The
+container cannot change the host's sysctls or see its devices beyond the
+four GPU nodes. The CI runner containers stay unprivileged (D48).
 
 **V3. Process and memory limits (container on the PC's Omarchy kernel).**
 Probe: the smallest `pids.max` on the path from the process's own cgroup

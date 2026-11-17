@@ -108,13 +108,21 @@ label="${usage_name:-pc}"
 [[ "$local_docker" == true && -z "${usage_name:-}" ]] && label=mac-arm64
 image="${usage_image:-cpp-standard-cert-ubuntu:26.10}"
 
-# The docker run flags the playbook certifies (section V). --privileged, by the
-# owner's choice (D137: "get it to work, it is always easier to tune down"):
-# perf, and lldb's default launch with ASLR off, work without workarounds. The
-# narrowest flag measured for perf alone is --cap-add PERFMON (V2's table).
-# No cgroup limits (V1), build trees on a volume (V4).
+# The docker run flags the playbook certifies (section V). Never --privileged
+# (the agents rule "No --privileged containers on the PC"): each need gets its
+# one flag. perf: --cap-add PERFMON (Docker's default seccomp profile allows
+# perf_event_open with CAP_PERFMON; the host's perf_event_paranoid still
+# applies). lldb's default launch and the sanitizers turn off ASLR with
+# personality(ADDR_NO_RANDOMIZE | current), which the default profile refuses
+# for every capability, so the container uses docs/standard/ubuntu-seccomp.json:
+# Docker 29.9.2's default profile plus that one value. ptrace needs no flag
+# (allowed on kernels >= 4.8). The docker CLI reads the profile file locally,
+# so it works with DOCKER_HOST=ssh://. container=docker makes procps' postinst
+# skip `sysctl --system` if anything ever runs apt in it. No cgroup limits (V1),
+# build trees on a volume (V4).
 build_vol=cpp-standard-cert-build # labelled org.cpp-standard.cert=1
-RUN_FLAGS="--privileged --hostname cert -v $build_vol:/build"
+seccomp_profile="$root/docs/standard/ubuntu-seccomp.json"
+RUN_FLAGS="--cap-add PERFMON --security-opt seccomp=$seccomp_profile -e container=docker --hostname cert -v $build_vol:/build"
 TIMING_IDS="U3 U4 V4"
 
 pin="$(grep -oE 'pinned commit \(today `[0-9a-f]{40}' "$doc" | grep -oE '[0-9a-f]{40}' | head -1)"
@@ -222,9 +230,15 @@ if [[ "$local_docker" == true ]]; then
   host_kernel_desc="Docker Desktop's Linux VM kernel on this Mac"
 else host_kernel_desc="the PC's Omarchy kernel"; fi
 docker_ver="$(docker version -f '{{.Server.Version}}' 2>/dev/null)"
+# The seccomp profile is a copy of one Docker release's default, and a custom
+# profile replaces the default entirely, so a newer Docker's fixes do not reach
+# it. Refresh it on every Docker upgrade (docs/standard/ubuntu.md V2).
+profile_docker=29.9.2
+[[ "$docker_ver" == "$profile_docker" ]] || echo "certify: WARNING: Docker $docker_ver, but ubuntu-seccomp.json is Docker $profile_docker's default plus one rule; refresh it (ubuntu.md V2)" >&2
 docker volume inspect "$build_vol" >/dev/null 2>&1 || docker volume create --label org.cpp-standard.cert=1 "$build_vol" >/dev/null
-# GPU offload (GO): the host's NVIDIA user-space driver, read-only. --privileged
-# already exposes /dev/nvidia*; the libraries must match the host's kernel
+# GPU offload (GO): the compute device nodes (the ones the host's CDI spec lists,
+# without the display-only nvidia-modeset and /dev/dri) and the host's NVIDIA
+# user-space driver, read-only. The libraries must match the host's kernel
 # module exactly, so they come from the host, never from the image. Both
 # offload plugins dlopen the unversioned libcuda.so
 # (offload/plugins-nextgen/cuda/dynamic_cuda/cuda.cpp), and GCC's PTX is
@@ -241,6 +255,7 @@ if [[ -n "$gpu_driver" ]]; then
       gpu_mount="" && break
     }
     gpu_mount="$gpu_mount -v $src:$ml/$lib.so.1:ro"
+    [[ "$lib" == libcuda ]] && gpu_mount="$gpu_mount --device /dev/nvidia0 --device /dev/nvidiactl --device /dev/nvidia-uvm --device /dev/nvidia-uvm-tools"
     [[ "$lib" == libcuda ]] && gpu_mount="$gpu_mount -v $src:$ml/libcuda.so:ro"
   done
 fi
@@ -409,7 +424,7 @@ fix_for() {
     DB4 | DB5) echo "the p2996 install (P)" ;;
     GO*) echo "the host NVIDIA driver (nvidia-smi on the Docker host), the image's CUDA toolkits and offload runtimes (mise run certify:ubuntu-image), and the p2996 install for GO1 (docs/standard/ubuntu.md, GO)" ;;
     T3) echo "rebuild the image (mise run certify:ubuntu-image; stage iwyu builds IWYU 0.27); if the LLVM 23 snapshot is gone, move LLVM_VER and recertify (docs/standard/ubuntu.md, T3)" ;;
-    V2) echo "run the container with --privileged (certify:ubuntu does)" ;;
+    V2) echo "run the container with --cap-add PERFMON and docs/standard/ubuntu-seccomp.json (certify:ubuntu does)" ;;
     *) echo "see $1 in docs/standard/ubuntu.md" ;;
   esac
 }
@@ -417,7 +432,7 @@ report() {
   printf 'Ubuntu certification  %s  %s\n' "$label" "$(date +%F)"
   printf '%s  kernel %s (container on %s)  glibc %s\n' "$(hdr os)" "$(hdr kernel)" "$host_kernel_desc" "$(hdr glibc)"
   printf 'CPU %s  Docker %s  image %s\n' "$(hdr cpu)" "$docker_ver" "${image_id:7:12}"
-  printf 'docker run flags: %s%s%s\n' "$RUN_FLAGS" "${p2996_mount:+ -v $p2996_vol:/opt/p2996:ro}" "${gpu_mount:+ (+ host NVIDIA driver $gpu_driver: libcuda, libnvidia-ptxjitcompiler, read-only)}"
+  printf 'docker run flags: %s%s%s\n' "${RUN_FLAGS//"$root"\//}" "${p2996_mount:+ -v $p2996_vol:/opt/p2996:ro}" "${gpu_mount:+ (+ the 4 NVIDIA compute device nodes and host NVIDIA driver $gpu_driver: libcuda, libnvidia-ptxjitcompiler, read-only)}"
   [[ -n "$busy_note" ]] && printf 'Timing pass: %s\n' "$busy_note"
   [[ -n "$rc_inner" ]] && printf 'Probe passes exited non-zero:%s (the report is incomplete)\n' "$rc_inner"
   printf '[host kernel] marks a kernel-dependent check: it ran in a container on %s, not Ubuntu'"'"'s.\n' "$host_kernel_desc"
