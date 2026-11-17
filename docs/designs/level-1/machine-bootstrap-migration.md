@@ -72,10 +72,13 @@ The PC also holds files that no config manages. These are read-only findings by 
 | `/usr/local/sbin/hw-watch`, `hw-heartbeat`, `hw-notify` and their timers and services | Hardware watch and alerts | #641 |
 | `/usr/local/sbin/h1-pump-full`, `h1-radfan-curve` and their services | The cooling pump and radiator fan curves. Losing them is a thermal risk. | #641 |
 | `/usr/local/bin/ntfy-qr` | Notification helper | #641 |
-| `/usr/local/bin/mkinitcpio` | A wrapper that shadows the real `mkinitcpio`, which runs at every kernel update | The owner decides; see the open questions |
 
 Omarchy's own units (snapper, limine, btrfs-scrub) belong to the operating system and are not part of
-this move.
+this move. So does `/usr/local/bin/mkinitcpio`, which the first listing counted as unmanaged. It belongs to
+the package `limine-mkinitcpio-hook` 1.40.0, which Omarchy installs as a dependency, and it matches the
+package's copy (`pacman -Qkk`). It runs the real `mkinitcpio`. After a preset rebuild it warns that the
+Limine boot entries were not updated and offers to run `limine-mkinitcpio`. The owner ruled on
+2026-11-16 to leave it to Omarchy: "Leave it to Omarchy (Recommended)".
 
 dotfiles also holds C++ toolchain parts that D17 already retires from dotfiles:
 
@@ -220,6 +223,3 @@ Each gets its own plan section, with checks and undo, when it starts.
   glaze, cpp-utilities and dotfiles need no workflow change. dotfiles-lead agrees.
 - **The GitHub App key.** *Recommended:* it stays at `/etc/gha-runner/app.pem` on the PC, outside any
   repository, and only the code that reads it moves. dotfiles-lead agrees.
-- **The `mkinitcpio` wrapper.** Does the wrapper that shadows the real `mkinitcpio` come under config
-  (#641), or is it removed? This is the owner's call. Its source and purpose are read before it is
-  asked.
