@@ -1,7 +1,7 @@
 # Lint and hook tools for hk.pkl. hk matches the global pin; hk.pkl amends
 # the hk package of the same version.
 [tools]
-hk = "2.12.0"
+hk = "2.13.0"
 pkl = "0.33.0"
 jactionlint = "2.6.0"
 zizmor = "1.32.0"
