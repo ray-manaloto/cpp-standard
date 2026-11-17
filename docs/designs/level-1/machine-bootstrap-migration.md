@@ -147,18 +147,40 @@ reads, so it can run beside dotfiles' doctor.
 The PC still selects dotfiles' `pc` environment, so a plain `mise -E pc` plan in the checkout would load
 both files. It would then pass even if cpp-standard's copy left an entry out. The check therefore
 leaves dotfiles' file out of that one command through an environment override, not an edit to
-`miserc.local.toml`. Before Phase 2, settle from mise's source:
+`miserc.local.toml`. Both source questions are settled, from mise v2026.11.9 and a scratch run:
 
-- which override does that;
-- how mise merges two declarations of the same system file or service.
+- **The override is `MISE_IGNORED_CONFIG_PATHS`, naming dotfiles' file through the global config
+  folder:** `${XDG_CONFIG_HOME:-$HOME/.config}/mise/config.pc.toml`. Every config path, global ones
+  included, passes the `ignored_config_paths` filter (`src/config/mod.rs:3179`, `:3714`). For global
+  config the filter compares the path as written, without following links
+  (`src/config/config_file/mod.rs:1167-1171`, `:1108-1111`). So the checkout's resolved path does not
+  match, and a scratch run with that spelling kept the file. The variable replaces any
+  `ignored_config_paths` in a miserc rather than adding to it (`src/env.rs:194-199`), so the PC's miserc
+  is read first. `MISE_GLOBAL_CONFIG_FILE` would replace all global config with one file
+  (`src/config/mod.rs:3743-3744`), and `MISE_CONFIG_DIR` would move the whole folder.
+- **Two declarations of the same key:** within one config hierarchy, which here is the checkout plus the
+  global config, the declaration with the highest precedence is kept whole and the other is ignored without
+  an error. That holds for files (`crates/mise-system/src/managed_files.rs:404-406`, `:444`),
+  directories (`:516`) and services (`crates/mise-system/src/services_common.rs:157-160`). Packages
+  merge by key, the more local file winning each one (`crates/mise-system/src/lib.rs:506-508`). Between
+  independent `[bootstrap].config_roots`, a different declaration makes mise refuse
+  (`managed_files.rs:370-381`, `services_common.rs:127-137`).
 
 How Phase 2 is checked and undone:
 
-- *Check:* the plan from the checkout, with dotfiles' `pc` file left out, shows no change on the PC.
-  This is the no-op switchover that #633's user story 6 asks for.
+- *Check:* the plan from the checkout, with dotfiles' `pc` file left out, shows no change on the PC,
+  and `mise -E pc config ls --json` lists the checkout's `mise.pc.toml` but not dotfiles' file. The
+  plan alone could not show that the override took effect. When both files load, the checkout's
+  declaration wins, so it names itself as each entry's `origin.config` either way. This is the
+  no-op switchover that #633's user story 6 asks for. Like every mise run, it records the config
+  files it loaded in mise's state folder (`src/config/mod.rs:4338`). It writes no trust state.
 - *Undo:* remove the checkout.
 
-**Phase 3: the switch.** In one window:
+**Phase 3: the switch.** Until it, dotfiles' `config.pc.toml` is still the one that applies, and nothing
+compares it with `mise.pc.toml`. A dotfiles change made after the copy would be lost at the switch.
+So the window starts by checking the copy again. `mise.pc.toml` is diffed against dotfiles main: every byte
+after the header must match, and the parsed entries must be equal. The Phase 2 plan check is then rerun.
+In one window:
 
 1. The PC stops selecting `pc` in dotfiles' untracked `miserc.local.toml`.
 2. dotfiles removes `config.pc.toml` and the moved doctor parts.

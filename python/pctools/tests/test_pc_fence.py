@@ -2,18 +2,18 @@
 
 # Ticket #741. The answers follow what iptables v1.8.13 (nf_tables) printed on the PC for
 # `sudo -n iptables -t mangle -S` and `sudo -n ip6tables -t mangle -S` (2026-11-17): tailscaled's CONNMARK rules in
-# PREROUTING and OUTPUT, and the fence's drops.
-#
-# TODO(Phase 2): two of dotfiles' fence tests wait for the pc environment.  # noqa: FIX002, TD003
-# Phase 2 of docs/designs/level-1/machine-bootstrap-migration.md brings over dotfiles' check that pcfence.DROPS
-# spells the drops as the pc environment's rules files and slot template do, and its Docker fence tier (the rules
-# files on real iptables). Both read the pc environment's config, which reaches this repository in Phase 2; until
-# then they run in dotfiles.
+# PREROUTING and OUTPUT, and the fence's drops. The last test reads the pc environment's own config, mise.pc.toml.
+# dotfiles' Docker fence tier (the rules files on real iptables in a throwaway container) does not come here: Docker
+# never runs on the Mac for this repository.
 
 import json
+import shlex
+import tomllib
 from pathlib import Path
 
 import pytest
+
+from pctools import pcfence
 
 from .test_pc_doctor import FENCE4, FENCE6, answer, doctor
 
@@ -139,3 +139,29 @@ def test_sudo_never_prompts(ssh: Path, capfd: pytest.CaptureFixture[str]) -> Non
         ["sudo", "-n", "iptables", "-t", "mangle", "-S"],
         ["sudo", "-n", "ip6tables", "-t", "mangle", "-S"],
     ]
+
+
+# The pc environment (mise.pc.toml at the repository root): its rules files and the slot template's ExecStartPre
+# checks spell the same drops as the doctor counts.
+CONFIG = Path(__file__).resolve().parents[3] / "mise.pc.toml"
+FILES = tomllib.loads(CONFIG.read_text())["bootstrap"]["files"]
+
+
+def checks() -> list[list[str]]:
+    """The slot template's iptables checks, each as the argv systemd runs (systemd splits words as shlex does here)."""
+    unit = FILES["/etc/systemd/system/gha-slot@.service"]["content"]
+    pre = [shlex.split(text.removeprefix("ExecStartPre=")) for text in unit.splitlines() if "ExecStartPre=" in text]
+    return [argv for argv in pre if "tables" in argv[0]]
+
+
+def test_the_doctor_the_unit_and_the_slot_checks_name_the_same_drops() -> None:
+    # One rule, three places: the rules files add it (-A), the slot template checks it (-C), the doctor counts it as
+    # -S prints it.
+    added = {
+        program: [text for text in FILES[f"/etc/gha-runner/{name}"]["content"].splitlines() if text.startswith("-A ")]
+        for program, name in (("iptables", "fence.rules"), ("ip6tables", "fence6.rules"))
+    }
+    assert added == {program: list(drops) for program, drops in pcfence.DROPS.items()}
+    assert len(checks()) == 3
+    checked = [[argv[0].rsplit("/", 1)[1], " ".join(argv[3:]).replace("-C ", "-A ", 1)] for argv in checks()]
+    assert checked == [[program, rule] for program, drops in pcfence.DROPS.items() for rule in drops]
