@@ -8,7 +8,7 @@ amends "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.
 
 import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Builtins.pkl"
 
-min_hk_version = "2.12.0"
+min_hk_version = "2.13.0"
 
 // Locks and the lock sidecars mise generates are not hand-written, and
 // vendored upstream patches must stay byte-exact for git apply. A toolchain's recorded
