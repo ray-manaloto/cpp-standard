@@ -4,9 +4,9 @@
 // local hook refuses. The package version matches hk in .mise/conf.d/lint.toml
 // and the global pin. Step options follow risu729/hk-config: strict exits,
 // pedantic audits, pinact before ghalint and zizmor.
-amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
 
-import "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Builtins.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Builtins.pkl"
 
 min_hk_version = "2.12.0"
 
