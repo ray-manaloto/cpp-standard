@@ -783,7 +783,7 @@ elif want R2 && [[ -z "${PMU// /}" ]]; then
 elif want R2; then
   o="$(perf stat -x, -e cycles,instructions,cache-misses,branch-misses -- ./rp 2>&1 >/dev/null)"
   n="$(grep -cE '^[0-9]+,' <<<"$o")"
-  [[ "$n" == 4 ]] && res R2 PASS "cycles, instructions, cache-misses, branch-misses counted (--privileged); outside the Level-1 gate (D46) $HK" ||
+  [[ "$n" == 4 ]] && res R2 PASS "cycles, instructions, cache-misses, branch-misses counted (CAP_PERFMON); outside the Level-1 gate (D46) $HK" ||
     res R2 FAIL "$n of 4 counters: $(head -1 <<<"$o") $HK"
 fi
 if want R3; then
@@ -933,9 +933,12 @@ fi
 if want V2; then
   ce="$(awk '/^CapEff/ {print $2}' /proc/self/status)" sc="$(awk '/^Seccomp:/ {print $2}' /proc/self/status)"
   perfmon=$(((16#$ce >> 38) & 1)) sysadmin=$(((16#$ce >> 21) & 1))
-  [[ $perfmon == 1 && $sysadmin == 1 && "$sc" == 0 ]] &&
-    res V2 PASS "CapEff $ce: all capabilities incl. PERFMON and SYS_ADMIN; no seccomp filter: --privileged (D137) $HK" ||
-    res V2 FAIL "CapEff $ce (perfmon $perfmon, sys_admin $sysadmin); seccomp $sc $HK"
+  # ASLR off through the profile's added personality value, as lldb and the sanitizers do it.
+  aslr=no
+  [[ "$(setarch "$ARCH" -R cat /proc/self/personality 2>/dev/null)" == 00040000 ]] && aslr=yes
+  [[ $perfmon == 1 && $sysadmin == 0 && "$sc" == 2 && $aslr == yes ]] &&
+    res V2 PASS "CapEff $ce: PERFMON, no SYS_ADMIN; seccomp filter on (mode 2); personality(ADDR_NO_RANDOMIZE) allowed: not privileged $HK" ||
+    res V2 FAIL "CapEff $ce (perfmon $perfmon, sys_admin $sysadmin); seccomp $sc; ASLR off $aslr $HK"
 fi
 if want V3; then
   # The tightest pids.max on this process's cgroup path, from its own cgroup up to the root. In a
