@@ -17,6 +17,7 @@ min_hk_version = "2.12.0"
 exclude = List("**/*.lock", "**/.mise/locks/**", "**/*.patch", "toolchains/*/macos/*-inputs.json")
 
 local shellFiles = List(new FileSelector { glob = List("**/*.sh", "**/*.bash", ".mise/tasks/**") })
+local pctoolsFiles = List("python/pctools/**", ".mise/tasks/pc/**", ".mise/tasks/pctools/**")
 
 local gateSteps = new Mapping<String, Step> {
   // GitHub Actions: correctness, then pins, then policy and security.
@@ -52,9 +53,34 @@ local gateSteps = new Mapping<String, Step> {
     diagnostic_format = "gcc"
   }
 
+  // Python: the pctools package (python/pctools, the pc:doctor task). ruff and ruff format find
+  // the package's pyproject.toml for each file; ty is told the project, so it reads the package's
+  // .venv, which pctools-sync makes first. The tests (100% line and branch coverage) and the
+  // models.py drift check run through the package's mise tasks.
+  ["pctools-sync"] {
+    glob = pctoolsFiles
+    check = "mise run pctools:sync"
+  }
+  ["ruff"] = Builtins.ruff
+  ["ruff-format"] = Builtins.ruff_format
+  ["ty"] = (Builtins.ty) {
+    depends = List("pctools-sync")
+    check = "ty check --project python/pctools"
+  }
+  ["pctools-codegen"] {
+    depends = List("pctools-sync")
+    glob = pctoolsFiles
+    check = "mise run pctools:codegen --check"
+  }
+  ["pctools-test"] {
+    depends = List("pctools-sync")
+    glob = pctoolsFiles
+    check = "mise run pctools:test"
+  }
+
   // Config and docs.
   ["mise"] = (Builtins.mise) {
-    glob = List("mise.toml", ".mise/conf.d/*.toml", "spikes/**/mise.toml")
+    glob = List("mise.toml", "mise.ci.toml", ".mise/conf.d/*.toml", "spikes/**/mise.toml")
   }
   ["mise-tasks"] {
     glob = List("mise.toml", ".mise/tasks/**")
@@ -72,7 +98,11 @@ local gateSteps = new Mapping<String, Step> {
   ["typos"] = Builtins.typos
   ["ryl"] = Builtins.ryl
   ["ryl-format"] = Builtins.ryl_format
-  ["jq"] = Builtins.jq
+  // jq sorts keys. The pctools schema's property order is the order of pc:doctor's JSON fields,
+  // and pc-kernel.json's is the order the doctor passes the keys to sysctl, so both keep theirs.
+  ["jq"] = (Builtins.jq) {
+    exclude = List("python/pctools/schema/*.json", "python/pctools/src/pctools/data/*.json")
+  }
   ["editorconfig-checker"] = Builtins.editorconfig_checker
   ["betterleaks"] = Builtins.betterleaks
 

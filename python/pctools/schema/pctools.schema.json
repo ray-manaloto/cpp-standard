@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "pctools",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "Types of the pctools package; mise run pctools:codegen writes src/pctools/models.py from this file.",
+  "$defs": {
+    "Failure": {
+      "description": "Why a command stopped, printed as one JSON line on stderr.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "type": "string",
+          "description": "The lines the shell task printed, joined by newlines."
+        }
+      }
+    },
+    "Result": {
+      "description": "One pc-doctor check: pass, fail (it saw the problem) or unknown (it could not look).",
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "unknown"
+      ]
+    },
+    "PcDoctorLine": {
+      "description": "One pc-doctor stdout line per check: the result contract every pc:doctor check shares (spec #729).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check",
+        "result",
+        "detail",
+        "culprits"
+      ],
+      "properties": {
+        "check": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The check's name, such as bootstrap-plan."
+        },
+        "result": {
+          "$ref": "#/$defs/Result"
+        },
+        "detail": {
+          "type": "string",
+          "description": "One sentence: what it saw, or why it could not look."
+        },
+        "culprits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What failed, each named so it can be quoted: <kind>:<name> for a bootstrap entry."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "What the check found that is not a failure, such as a waiting update: <source>:<name> <old> -> <new>."
+        }
+      }
+    },
+    "PcKernelBaseline": {
+      "description": "The boot values of the five PC kernel settings spec #729 guards, by sysctl name (data/pc-kernel.json).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel.kptr_restrict",
+        "kernel.sysrq",
+        "kernel.printk",
+        "kernel.core_pattern",
+        "fs.protected_regular"
+      ],
+      "properties": {
+        "kernel.kptr_restrict": {
+          "type": "string"
+        },
+        "kernel.sysrq": {
+          "type": "string"
+        },
+        "kernel.printk": {
+          "type": "string"
+        },
+        "kernel.core_pattern": {
+          "type": "string"
+        },
+        "fs.protected_regular": {
+          "type": "string"
+        }
+      }
+    },
+    "BootstrapId": {
+      "description": "What a bootstrap entry manages: its kind (file, service, ...) and name (a path, a unit).",
+      "type": "object",
+      "required": [
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "BootstrapOrigin": {
+      "description": "Where a bootstrap entry was declared: the config environments of its file.",
+      "type": "object",
+      "required": [
+        "environment"
+      ],
+      "properties": {
+        "environment": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "BootstrapPlanReport": {
+      "description": "What pc-doctor reads of mise bootstrap plan --json (mise 2026.11.8): every planned resource.",
+      "type": "object",
+      "required": [
+        "resources"
+      ],
+      "properties": {
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BootstrapEntry"
+          }
+        }
+      }
+    },
+    "BootstrapStatusReport": {
+      "description": "What pc-doctor reads of mise bootstrap status --json (mise 2026.11.8): its files and services parts.",
+      "type": "object",
+      "required": [
+        "files",
+        "services"
+      ],
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BootstrapEntry"
+          }
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BootstrapEntry"
+          },
+          "description": "System services, such as the runner slot instances (#636)."
+        }
+      }
+    },
+    "BootstrapEntry": {
+      "description": "The fields pc-doctor reads from one entry of mise bootstrap plan or status --json (mise 2026.11.8).",
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/BootstrapId"
+        },
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "noop, create, update, remove or unknown."
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BootstrapOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where it was declared; null for an entry no config file declares."
+        }
+      }
+    },
+    "CdiSpecDirs": {
+      "description": "docker info --format '{{json .CDISpecDirs}}': Docker's CDI folders (#732), absolute so none reads as a find expression.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^/"
+      }
+    },
+    "CdiMount": {
+      "description": "One mount of a CDI spec's container edits; pc-doctor's gpu line reads only the host side.",
+      "type": "object",
+      "required": [
+        "hostPath"
+      ],
+      "properties": {
+        "hostPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The PC path bound into the container."
+        }
+      }
+    },
+    "CdiContainerEdits": {
+      "description": "The container edits of a CDI spec or of one device in it: the mounts are what pc-doctor reads.",
+      "type": "object",
+      "properties": {
+        "mounts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/CdiMount"
+          },
+          "default": null
+        }
+      }
+    },
+    "CdiDevice": {
+      "description": "One device of a CDI spec, such as nvidia.com/gpu=all's \"all\".",
+      "type": "object",
+      "properties": {
+        "containerEdits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CdiContainerEdits"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "CdiSpec": {
+      "description": "What pc-doctor's gpu line reads of a CDI spec file (cdiVersion 0.7.0, written by nvidia-ctk cdi generate).",
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "The device kind, such as nvidia.com/gpu."
+        },
+        "containerEdits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CdiContainerEdits"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "devices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/CdiDevice"
+          },
+          "default": null
+        }
+      }
+    },
+    "DockerContainer": {
+      "description": "The fields pc-doctor's privileged-containers line reads from one object of docker container inspect (Docker 29.9).",
+      "type": "object",
+      "required": [
+        "Id",
+        "Name",
+        "Config",
+        "HostConfig"
+      ],
+      "properties": {
+        "Id": {
+          "type": "string",
+          "description": "The full 64-hex id, as docker ps --no-trunc lists it."
+        },
+        "Name": {
+          "type": "string",
+          "description": "The container's name with docker's leading slash, such as /web."
+        },
+        "Config": {
+          "$ref": "#/$defs/DockerConfig"
+        },
+        "HostConfig": {
+          "$ref": "#/$defs/DockerHostConfig"
+        }
+      }
+    },
+    "DockerConfig": {
+      "description": "The part of a container's Config pc-doctor reads: the image it was started from.",
+      "type": "object",
+      "required": [
+        "Image"
+      ],
+      "properties": {
+        "Image": {
+          "type": "string"
+        }
+      }
+    },
+    "DockerHostConfig": {
+      "description": "The part of a container's HostConfig pc-doctor reads: whether it was started with --privileged.",
+      "type": "object",
+      "required": [
+        "Privileged"
+      ],
+      "properties": {
+        "Privileged": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

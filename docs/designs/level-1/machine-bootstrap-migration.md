@@ -101,7 +101,8 @@ dotfiles also holds C++ toolchain parts that D17 already retires from dotfiles:
   own reviewed pull request.
 - Later, machine environments for the Mac and for Ubuntu amd64 and arm64. Today cpp-standard has
   project environments for Ubuntu (`mise.ubuntu.toml`, `mise.ubuntu-cache.toml`) and none for
-  machines.
+  machines. A third environment, `mise.ci.toml`, is loaded only by CI's lint job (`MISE_ENV=ci`). It
+  pins Python and uv on Linux for the `pctools` gate, so `mise -E ubuntu bootstrap` never installs them.
 
 **Stays in dotfiles:**
 

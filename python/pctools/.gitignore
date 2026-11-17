@@ -1,0 +1,7 @@
+# The package environment (pctools:sync) and what its tests and checks leave.
+.venv/
+.coverage
+.coverage.*
+.pytest_cache/
+.ruff_cache/
+__pycache__/

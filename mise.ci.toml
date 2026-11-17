@@ -1,0 +1,6 @@
+# CI's tools beyond mise.toml's (MISE_ENV=ci, set by ci.yml's lint job): Python and uv for the pctools gate on Linux.
+# The Mac gets the same pins from .mise/conf.d/build.toml. They live here, not in a conf.d fragment, so `mise -E
+# ubuntu bootstrap` (which installs every pinned tool) and the Ubuntu images do not gain them.
+[tools]
+python = { version = "3.14.8", os = ["linux"] }
+uv = { version = "0.13.8", os = ["linux"] }

@@ -340,6 +340,29 @@ checksum = "sha256:f0f1402b45a8a655fc78c8ee62462fddcb9dc8717a022e79700d07e44fd18
 url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261020/cpython-3.14.8+20261020-aarch64-apple-darwin-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
+[[tools.ruff]]
+version = "0.17.5"
+backend = "aqua:astral-sh/ruff"
+specifiers = ["0.17.5"]
+
+[tools.ruff."platforms.linux-arm64"]
+checksum = "sha256:4d959d4322a8cd3effe11e9fc6743da1dbb41cd0b2476e433b6e6bfd9a69b626"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.5/ruff-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/740496838"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.linux-x64"]
+checksum = "sha256:7d261fc981a784668e19e9fa6ad437bfd95b67f2dc263fc1eab87d54d72fcc90"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.5/ruff-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/740497139"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.macos-arm64"]
+checksum = "sha256:4ffadabec5c5fee1ddb2eecac0787ffe6fa18c665b73da9258b84211f40c5829"
+url = "https://github.com/astral-sh/ruff/releases/download/0.17.5/ruff-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ruff/releases/assets/740496814"
+provenance = "github-attestations"
+
 [[tools.rumdl]]
 version = "0.3.4"
 backend = "aqua:rvben/rumdl"
@@ -452,6 +475,29 @@ provenance = "github-attestations"
 checksum = "sha256:035be0afc61549adbe9ce6b6ab582cfff99bcd6b86f38f847149c3819dc89d33"
 url = "https://github.com/tombi-toml/tombi/releases/download/v1.11.2/tombi-cli-1.11.2-aarch64-apple-darwin.tar.gz"
 url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/731865806"
+provenance = "github-attestations"
+
+[[tools.ty]]
+version = "0.0.102"
+backend = "aqua:astral-sh/ty"
+specifiers = ["0.0.102"]
+
+[tools.ty."platforms.linux-arm64"]
+checksum = "sha256:c026cb215269f1c0f62e49afb722f1945cf0c868f54da1c94a8f7cf4c7365f9d"
+url = "https://github.com/astral-sh/ty/releases/download/0.0.102/ty-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ty/releases/assets/741278045"
+provenance = "github-attestations"
+
+[tools.ty."platforms.linux-x64"]
+checksum = "sha256:2ffb60d6b2f83cb02cfb183af86fefcb411dd5f6f710eac699dc25a19105b563"
+url = "https://github.com/astral-sh/ty/releases/download/0.0.102/ty-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ty/releases/assets/741278340"
+provenance = "github-attestations"
+
+[tools.ty."platforms.macos-arm64"]
+checksum = "sha256:da0fead6652ab9e5b1837e0ed057123e478ffc022292fce041e6b4513a63b6b7"
+url = "https://github.com/astral-sh/ty/releases/download/0.0.102/ty-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/ty/releases/assets/741278006"
 provenance = "github-attestations"
 
 [[tools.typos]]

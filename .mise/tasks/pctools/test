@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="pctools' real tests (no mocking library) at 100% line and branch coverage; extra args go to pytest"
+#MISE dir="{{config_root}}/python/pctools"
+#MISE depends=["pctools:sync"]
+#USAGE arg "[args]..." help="Arguments for pytest" var=#true
+set -euo pipefail
+# Serial: the suite takes seconds, so no xdist worker pool.
+exec .venv/bin/python -I -m pytest "$@"
