@@ -165,6 +165,95 @@ container=docker` to any container that runs apt: installing these packages
 runs procps' `sysctl --system`, which a privileged container applies to the
 host's kernel (it happened on the PC on 2026-11-16).
 
+### Using an apt cache (optional)
+
+snapshot.ubuntu.com is slow, so a machine that bootstraps often can fetch
+through an apt-cacher-ultra caching proxy instead. It is opt-in:
+[`mise.ubuntu-cache.toml`](../../mise.ubuntu-cache.toml) applies only with
+`-E ubuntu,ubuntu-cache`, so CI and the image never depend on a cache. The
+proxy address comes from an environment variable:
+
+```sh
+mise trust && CPP_STANDARD_APT_CACHE=http://<cache host>:3142 mise -E ubuntu,ubuntu-cache bootstrap --yes
+```
+
+On a machine already bootstrapped with `-E ubuntu`, first delete
+`/etc/apt/sources.list.d/mise-llvm.sources`. The cache env changes that
+source's URI, and on Ubuntu 26.10 mise cannot change an existing apt source
+(the `install` bug below).
+
+The address stays out of the repository. mise renders the variable into
+`/etc/apt/apt.conf.d/39-apt-cache-proxy`, a file template. If the variable
+is unset, the template fails to render. mise then stops before it writes or
+removes any file, so a rerun that forgets the variable leaves a working
+setup alone. The env file's pre-packages hook also stops on an empty value,
+because the rewritten sources work only through a proxy. It has to be a
+real process environment variable: an `[env]` entry in `mise.local.toml`
+does not reach bootstrap file templates (tested with mise 2026.11.8). One env file per environment is mise's intended pattern: its
+author has said bootstrap gets no more per-entry selectors (jdx/mise
+discussion #15148), and apt source URIs are not templates.
+
+To stop using the cache, delete the two apt.conf files and the llvm source,
+then bootstrap without the cache env:
+
+```sh
+rm /etc/apt/apt.conf.d/39-apt-cache-proxy /etc/apt/apt.conf.d/40-apt-cache-routes \
+   /etc/apt/sources.list.d/mise-llvm.sources
+mise -E ubuntu bootstrap --yes
+```
+
+That run writes the llvm source fresh with `https://` (tested 2026-11-17: 4 s,
+then `apt-get update` with no warnings).
+
+The source file has to be deleted first, both ways, because of a bug in Ubuntu 26.10's
+`install`, which is uutils coreutils 0.12.0. mise writes an apt source with
+`install -m 0644 /dev/stdin <file>`. That works when the file is new, but
+uutils 0.12.0 fails with "No such file or directory" when the file already
+exists; GNU `install` 9.10 (`gnuinstall`, package `gnu-coreutils`) does not.
+uutils fixed it after 0.12.0 (uutils/coreutils#12407). Until a fixed release
+reaches Ubuntu, any change to an apt source in `mise.ubuntu.toml` on an
+existing machine, such as a new LLVM suite, needs the same step: delete
+`/etc/apt/sources.list.d/mise-<name>.sources`, then bootstrap.
+
+Both upstreams are HTTPS only: `http://snapshot.ubuntu.com/` and
+`http://apt.llvm.org/` answer with a 301 to https. So a plain
+`Acquire::http::Proxy` caches nothing. The env file rewrites both to the
+`http://HTTPS///<host>/<path>` form, which apt sends to the proxy as plain
+http and the proxy fetches over https. apt still checks every index and
+package against the signed InRelease. A7 accepts the llvm source in either
+form.
+
+Two things found while setting it up (2026-11-16, apt 3.3.3):
+
+- **apt chooses the snapshot URL in two steps.** For the first fetch it uses
+  `Acquire::Snapshots::URI::Host::<host>`. Once it has read the InRelease's
+  `Origin: Ubuntu`, it switches to `Acquire::Snapshots::URI::Origin::Ubuntu`,
+  whose stock value is `https://snapshot.ubuntu.com/ubuntu/@SNAPSHOTID@/`.
+  With only the Host rules overridden, later updates go around the proxy
+  straight to https, and the lists end up under two URLs. Then `apt-cache
+  policy` shows no Ubuntu sources and `g++-16` is "not found". The env file
+  overrides both.
+- **snapshot.ubuntu.com has no by-hash files.** It answers 404 for
+  `dists/<suite>/<component>/<dir>/by-hash/SHA512/<hash>`, which
+  archive.ubuntu.com serves for the same file. apt then falls back to the
+  plain file name, after a 3-5 s round trip for each index; there were 86 of
+  them in one cold `apt-get update`. This happens with or without a cache.
+  `Acquire::By-Hash "no"` should avoid it but is not set: it has not been
+  timed yet.
+
+Measured from a Docker Desktop container on the Mac, through the cache on the
+PC over the tailnet. clang-23, lld-23, libc++-23-dev and g++-16 (277 MB) took
+19 min 55 s to download uncached (snapshot.ubuntu.com at 231 kB/s), and 9 s
+once cached. With the cache's upstream unreachable, `apt-get update` and the
+cached download still worked; a package not yet cached failed with 502.
+
+The documented sequence end to end (2026-11-17, a fresh ubuntu:26.10
+container in Docker Desktop on the Mac, 2 CPUs, through the PC cache, which
+already held the trial's packages): `mise -E ubuntu,ubuntu-cache bootstrap --yes` took
+9 min 41 s, with clang-23 and g++-16 installed, and a second run changed
+nothing in 2 s. How the 9 min 41 s splits between downloads and the rest of
+the bootstrap was not measured.
+
 ## Usable today (the PC, 2026-11-16)
 
 You can start a C++26 project in this container now. These results came from

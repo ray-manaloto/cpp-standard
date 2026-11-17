@@ -187,7 +187,7 @@ fi
 if want A7; then
   # Two layouts: the image's one-line llvm.list with a keyring file (checked with gpg), or the
   # deb822 file `mise -E ubuntu bootstrap` writes (mise.ubuntu.toml), with the key inline in
-  # Signed-By and no gpg installed. For the inline key the fingerprint is computed here: an
+  # Signed-By and no gpg installed (from either mise.ubuntu.toml or mise.ubuntu-cache.toml). For the inline key the fingerprint is computed here: an
   # OpenPGP v4 fingerprint is SHA-1 over 0x99, the 2-byte length and the public-key packet
   # body (RFC 9580 section 5.5.4.2).
   want_fpr=6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
@@ -201,7 +201,8 @@ if want A7; then
     lay=mise-llvm.sources
     f=/etc/apt/sources.list.d/mise-llvm.sources
     ok_src=no
-    grep -qx 'URIs: https://apt.llvm.org/resolute/' "$f" && grep -qx 'Suites: llvm-toolchain-resolute-23' "$f" &&
+    # mise.ubuntu-cache.toml writes the same source in the proxy's http://HTTPS/// form.
+    grep -qx -E 'URIs: (https://|http://HTTPS///)apt\.llvm\.org/resolute/' "$f" && grep -qx 'Suites: llvm-toolchain-resolute-23' "$f" &&
       grep -qx 'Components: main' "$f" && ok_src=yes
     src="$(grep -E '^(URIs|Suites|Components):' "$f" | tr '\n' ' ')"
     fpr="$(
