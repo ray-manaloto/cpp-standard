@@ -10,3 +10,5 @@ aleady = "aleady"
 ba = "ba"
 # gpg's fingerprint record ("fpr" in --with-colons output), used by the Ubuntu image.
 fpr = "fpr"
+# "UPnP" in a ufw rules comment that mise.pc.toml keeps verbatim from dotfiles.
+Pn = "Pn"
