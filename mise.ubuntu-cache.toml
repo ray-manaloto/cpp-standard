@@ -1,0 +1,54 @@
+# Optional: fetch the Ubuntu module's apt packages through an apt-cacher-ultra (or
+# apt-cacher-ng compatible) caching proxy. Layered on mise.ubuntu.toml with
+# `mise -E ubuntu,ubuntu-cache bootstrap`; without `ubuntu-cache`, nothing here applies, so CI
+# and the cert image never depend on a cache. See ubuntu.md "Using an apt cache".
+#
+# Both upstreams are HTTPS only (snapshot.ubuntu.com and apt.llvm.org answer http with a 301),
+# so a plain HTTP proxy would cache nothing. Each source is rewritten to the
+# `http://HTTPS///<host>/<path>` form: apt sends it to the proxy as plain http, and the proxy
+# fetches the upstream over https. apt still checks every index and package against the
+# signed InRelease, so the cache cannot change what gets installed.
+#
+# The proxy address is not here: it comes from CPP_STANDARD_APT_CACHE, e.g.
+#   CPP_STANDARD_APT_CACHE=http://<cache host>:3142 mise -E ubuntu,ubuntu-cache bootstrap --yes
+# It must be a process environment variable: [env] in mise.local.toml does not reach bootstrap
+# file templates (tested with mise 2026.11.8). Without it the template fails to render, and mise stops before it writes or removes
+# any file, so a rerun that forgets the variable leaves a working setup alone (tested with mise
+# 2026.11.8). The pre-packages hook also stops on an empty value, since the rewritten sources
+# work only through a proxy.
+[bootstrap.files."/etc/apt/apt.conf.d/39-apt-cache-proxy"]
+template = true
+content = """
+Acquire::http::Proxy "{{ env.CPP_STANDARD_APT_CACHE }}";
+"""
+phase = "pre-packages"
+
+# apt 3.3 picks the snapshot URL in two steps: the Host rules for the first fetch, then, once it
+# has read the InRelease's "Origin: Ubuntu", the Origin rule. Its stock Origin rule points at
+# https://snapshot.ubuntu.com directly, which bypasses the proxy and leaves the lists under two
+# URLs (measured 2026-11-16: g++-16 then "not found"). Both are overridden.
+[bootstrap.files."/etc/apt/apt.conf.d/40-apt-cache-routes"]
+content = """
+Acquire::https::Proxy "DIRECT";
+Acquire::Snapshots::URI::Origin::Ubuntu "http://HTTPS///snapshot.ubuntu.com/ubuntu/@SNAPSHOTID@/";
+Acquire::Snapshots::URI::Host::archive.ubuntu.com "http://HTTPS///snapshot.ubuntu.com/@PATH@/@SNAPSHOTID@/";
+Acquire::Snapshots::URI::Host::.archive.ubuntu.com "http://HTTPS///snapshot.ubuntu.com/@PATH@/@SNAPSHOTID@/";
+Acquire::Snapshots::URI::Host::security.ubuntu.com "http://HTTPS///snapshot.ubuntu.com/@PATH@/@SNAPSHOTID@/";
+"""
+phase = "pre-packages"
+
+# A second env file replaces the whole source table, so every field is repeated from
+# mise.ubuntu.toml; only `uris` differs. Probe A7 accepts both forms.
+[bootstrap.apt.sources.llvm]
+uris = "http://HTTPS///apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+
+[bootstrap.hooks.pre-packages]
+run = """
+p="$(apt-config dump Acquire::http::Proxy | sed -n 's/^Acquire::http::Proxy "\\(.*\\)";$/\\1/p')"
+[ -n "$p" ] || { echo "ubuntu-cache: apt has no proxy; set CPP_STANDARD_APT_CACHE=http://<cache host>:3142" >&2; exit 1; }
+echo "ubuntu-cache: apt proxy $p"
+"""
