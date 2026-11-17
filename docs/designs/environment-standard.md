@@ -2,10 +2,10 @@
 
 - **Author:** ray-manaloto
 - **Status:** in the Goldfish review of D99-D135 (Stages 5-9 done,
-  2026-11-13). Two proposals wait for the owner: D106, that M0 (j) closes on
-  the stand-in module, and D107, the reading of the older owner-review rules
-  after D101.
-- **Date:** 2026-11-13
+  2026-11-13). The M0-Linux exit review on 2026-11-17 settled D106 and D107
+  and dropped D108's M2 code-owner review (D149). D136-D149 have had no
+  Goldfish review yet, and the text that depends on D108 still describes it.
+- **Date:** 2026-11-17
 
 --------------------------------------------------------------------------------
 
@@ -264,10 +264,10 @@ and then used, not grown.
   Renovate, and where its credential lives. Not a repository secret, which
   same-repo PR workflows could read; the Mend-hosted Renovate app is the
   leading option. Due before M1b.
-- **Q7. Does M0 (j) close on the stand-in module?** (D106, proposed:
-  yes). The owner decides at the M0 exit review on 2026-11-16.
-- **Q8. How the older owner-review rules read after D101** (D107,
-  proposed). Text that depends on it is marked "proposed".
+- **Q7. Does M0 (j) close on the stand-in module?** Settled: yes (D106,
+  confirmed at the M0-Linux exit review, D149).
+- **Q8. How the older owner-review rules read after D101.** Settled:
+  "reviewed" means merged after the required checks (D107, D149).
 
 Settled questions are at the end of the Technical Plan
 ([Settled questions](#settled-questions)).
@@ -961,6 +961,10 @@ job. A job that runs `toolchain:fetch` or `image:verify` also gets
 
 #### Trust roots (D108, D134)
 
+*D149 drops the code-owner review below: from M2 the trust roots, like every
+other file, merge on the required checks alone. The text in this section and
+the parts that cite D108 are rewritten in the Goldfish review of D136-D149.*
+
 These files are the only ones that need a GitHub review, from M2 entry,
 when self-hosted runners start; before M2 code-owner review is off (D101).
 CODEOWNERS lists exactly these:
@@ -1051,7 +1055,7 @@ fails if the queue stops being required.
     `.mise/mise.lock`, and the `minimum_release_age` cutoff in `mise.toml`
     when a release is newer than the cutoff (D74).
   - Action SHAs live in `.github/**` and are batched weekly. Before M2
-    the batch merges on the checks (D107, proposed); from M2 it touches trust roots and
+    the batch merges on the checks (D107); from M2 it touches trust roots and
     waits for the owner (D118).
 - **Merge rule (D50, D56, D101, D128).** This is the one statement of it;
   other sections point here.
@@ -1075,8 +1079,7 @@ fails if the queue stops being required.
     post-merge macOS build, which the owner fixes or reverts.
 - **Base upgrades (D36, D47).** In Level 1 this is a written process only:
   - build a new Ubuntu or Tart base next to the current one;
-  - the owner merges the switch PR; Renovate does not merge it (D107,
-    proposed);
+  - the owner merges the switch PR; Renovate does not merge it (D107);
   - the old base is kept 30 days.
 
 ### 8. Performance metrics (D35, D46)
@@ -1109,7 +1112,7 @@ This table is the standard. In Level 1 only the first row has a task:
   - merged commits;
   - red runs;
   - Renovate PRs waiting for the owner;
-  - merged PRs that touch owned roots (D107, proposed);
+  - merged PRs that touch owned roots (D107);
   - capability lock changes;
   - the repository settings check;
   - tier-2 reports;
@@ -1191,7 +1194,7 @@ in parallel, does not block M1a, and feeds M3. The evidence for each is in
 - **(a)** *(M0-Mac)* Agents in the Tart VM, with Tart installed and the base
   image pulled by digest. **Result:** pending.
 - **(b)** gcov on GCC named modules. **Result:** passed on the stand-in
-  module (D106, proposed).
+  module (D106).
 - **(c)** clang-p2996 with compiler-rt. **Result:** passed;
   `libclang-rt-23-dev` joins the toolchain inputs (D105).
 - **(d)** *(M0-Mac)* The LLVM release tarball with the VM's SDK.
@@ -1219,7 +1222,7 @@ in parallel, does not block M1a, and feeds M3. The evidence for each is in
   markers, and the uncovered-line fixture fails on each. **Result:** passed
   on the stand-in module (`spikes/m0/bj/`), so the fallback (p2996 coverage
   report-only) is not taken; M1a PR 5 re-proves it on the real modules
-  (D106, proposed).
+  (D106).
 
 #### M2 entry gate
 
@@ -1256,8 +1259,8 @@ the conditions for turning on self-hosted runners:
 
 #### M0-Linux exit review
 
-The M0-Linux exit review on 2026-11-16 applies the agreed cuts and
-confirms D106 (Q7). M0-Mac results go into M3; a failed M0-Mac check triggers its
+The M0-Linux exit review was held on 2026-11-17 (D149): it confirmed D106
+(Q7) and D107 (Q8) and dropped the M2 code-owner review of D108. M0-Mac results go into M3; a failed M0-Mac check triggers its
 cut-order item early.
 
 ### Settled questions
@@ -1271,7 +1274,7 @@ cut-order item early.
 | p2996 | Built by the hash-keyed builder on every platform, with daily checks. | D30, D32, D49 |
 | Renovate | Daily; merges under the §7 merge rule. | D31, D50, D61, D128 |
 | Performance | The metrics table is the standard; only instruction counts are in Level 1. | D35, D46 |
-| Ubuntu upgrades | Side by side, a written process in Level 1. Who merges the switch PR is open (Q8). | D36, D47, D107 (proposed) |
+| Ubuntu upgrades | Side by side, a written process in Level 1. The owner merges the switch PR. | D36, D47, D107, D149 |
 | Probe results | Compared against a committed capability lock. | D42 |
 | Artifact trust | `publish.yml`, which runs no repository code, is the only signer. Attestations for images and, in M1a, toolchain tarballs; packslip for toolchains from M2; `main`-only publishing; one fetch rule (§2 step 5). | D59, D60, D72, D83, D111, D114, D116 |
 | Runner VMs | gha-outrunner, one VM per job, on the PC and the Mac. | D65 |
@@ -1463,7 +1466,7 @@ otherwise. Each names the section it relates to and the deciding decision.
 | Agents can't work inside the Tart VM | unproven | M0 (a) | Agents stay on the host; builds and tests still run in the VM and containers | D17 |
 | Mac GCC depends on Iain Sandoe's Darwin patch, which is not upstream | dependency | a new macOS SDK breaks the patch | Revert the bump; a last-good fallback is open question Q5 (M3); Mac GCC is in the cut order; Mac reflection gating runs on p2996 only | D33, D53 |
 | Mac GCC has no TSan or LSan, and ASan hangs with `detect_leaks=1` | limit | libsanitizer disables them for `aarch64-*-darwin2*` | TSan on the Mac runs only on clang; GCC ASan uses `detect_leaks=0` after M0 (e) | D33 |
-| Coverage of GCC modules and p2996 holds only on the M0 stand-in module | unproven | M1a PR 5 on the real encoder and core modules | If M1a PR 5 fails, GCC's gcov report is the 100% gate for reflection code and p2996 coverage is report-only (D106, proposed) | D53, D88, D106 |
+| Coverage of GCC modules and p2996 holds only on the M0 stand-in module | unproven | M1a PR 5 on the real encoder and core modules | If M1a PR 5 fails, GCC's gcov report is the 100% gate for reflection code and p2996 coverage is report-only (D106) | D53, D88, D106 |
 | The Mac LLVM tarball may not work with the VM's SDK | unproven | M0 (d) | Its libc++ and compiler-rt are checked before M3 | D38 |
 | macOS regressions stay on `main` until fixed or reverted | accepted | post-merge macOS run is red | One shared pins file per toolchain, so a bump that breaks only macOS merges; the owner fixes or reverts it. The failed run is the signal, and the digest lists it once it exists | D46, D50, D62, D85 |
 | A new toolchain hash waits hours for the builder | limit | `artifact-check` pending | The 3-hour timeout names the missing tag and the builder run | D49, D61 |
@@ -1644,8 +1647,8 @@ PR 3 then deletes them (M1a table).
   10 GB spare and finishes inside 6 hours (the job limit); fallbacks:
   build under `/mnt`, only the needed runtimes, or a larger hosted runner
   for arm64 from `main`;
-- (j) passed on a stand-in, without taking its fallback (D106, to be
-  confirmed at the exit review on 2026-11-16);
+- (j) passed on a stand-in, without taking its fallback (D106, confirmed
+  at the exit review, D149);
 - (a), (d), (e) and (i) as listed in §10.
 
 ### M1a: the critical path
