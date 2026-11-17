@@ -1,13 +1,13 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Machine bootstrap moves from dotfiles to cpp-standard (D139, D141)
 
 The owner ruled that cpp-standard sets up the machines themselves, not only its project environments
 (D139). This plan says what moves from dotfiles, what stays, the order, and how each step is checked
-and undone. Nothing moves until the owner approves this plan. Until then dotfiles keeps running what
-it runs today, and the PC keeps the files dotfiles installed.
+and undone. The owner approved it on 2026-11-16 ("Approve; start Phase 1"). Until Phase 3, dotfiles
+keeps running what it runs today, and the PC keeps the files dotfiles installed.
 
 The owner answered four scope questions on 2026-11-16 (D141):
 
