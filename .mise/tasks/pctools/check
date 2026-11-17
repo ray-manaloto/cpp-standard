@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#MISE description="pctools' whole gate: ruff, ruff format, ty, models.py matches its schema, and the 100% tests"
+#MISE dir="{{config_root}}/python/pctools"
+#MISE depends=["pctools:sync"]
+set -euo pipefail
+ruff check .
+ruff format --check .
+ty check
+mise run pctools:codegen --check
+exec mise run pctools:test

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#MISE description="Generate python/pctools/src/pctools/models.py from its JSON Schema ([tool.datamodel-codegen])"
+#MISE dir="{{config_root}}/python/pctools"
+#MISE depends=["pctools:sync"]
+#USAGE flag "--check" help="Only fail when models.py differs from what the schema generates"
+set -euo pipefail
+args=()
+[[ "${usage_check:-false}" == "true" ]] && args+=(--check)
+# The locked datamodel-codegen, and the venv's ruff for its formatter.
+PATH="$PWD/.venv/bin:$PATH" exec .venv/bin/datamodel-codegen ${args[@]+"${args[@]}"}

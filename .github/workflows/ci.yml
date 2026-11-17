@@ -27,6 +27,9 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      # mise.ci.toml: Python and uv on Linux for the pctools steps.
+      MISE_ENV: ci
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

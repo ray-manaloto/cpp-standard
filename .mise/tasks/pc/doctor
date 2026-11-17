@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#MISE description="Check the PC against its pc config environment over ssh, changing nothing"
+#
+# pctools pc-doctor (python/pctools) runs mise bootstrap status and plan and the other pc:doctor checks on the PC over
+# the ssh alias `pc`; it never changes anything. It prints one JSON line per check and exits 0 when every check passes,
+# 1 when any fails and 3 when one is unknown and none failed (python/pctools/src/pctools/pcdoctor.py). Exit 2 is a
+# usage error, a bad PC_DOCTOR_TIMEOUT, or pctools could not start here. It takes no arguments.
+#
+# Read-only: no sync, so the run writes nothing here. The package's own environment, made by `mise run
+# pctools:sync`, runs the doctor directly: -I leaves out the PYTHON* variables, the user site and the current folder,
+# and -B writes no bytecode. Without that environment the task ends with one JSON error saying so.
+set -euo pipefail
+venv="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/python/pctools/.venv"
+fail() {
+  printf '{"error": "pc:doctor: %s"}\n' "$1" >&2
+  exit 2
+}
+[[ $# -eq 0 ]] || fail "takes no arguments"
+[[ -x "$venv/bin/pctools" && -x "$venv/bin/python" ]] || fail "python/pctools/.venv has no pctools; run: mise run pctools:sync"
+exec "$venv/bin/python" -I -B -c "from pctools.cli import main; main()" pc-doctor
