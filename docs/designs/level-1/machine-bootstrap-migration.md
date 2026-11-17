@@ -256,3 +256,40 @@ Each gets its own plan section, with checks and undo, when it starts.
   glaze, cpp-utilities and dotfiles need no workflow change. dotfiles-lead agrees.
 - **The GitHub App key.** *Recommended:* it stays at `/etc/gha-runner/app.pem` on the PC, outside any
   repository, and only the code that reads it moves. dotfiles-lead agrees.
+
+## The whole of dotfiles moves (D150)
+
+On 2026-11-17 the owner widened D139: cpp-standard takes over the whole dotfiles project, not only the
+PC, through a planned migration of the same kind as the PC's Phases 1-3. dotfiles-lead hands over its
+in-flight work through chief-of-staff, marking each item finish-in-dotfiles, move, or drop. From then
+on, new machine-setup changes land in cpp-standard. Until each switch below, dotfiles stays the one
+that applies on the Mac.
+
+### Inventory (dotfiles main `175add64`, 579 tracked files)
+
+| Part | What it is | Goes to | Phase |
+|---|---|---|---|
+| `unix/home/.config/mise/` (88 files) | The Mac's global mise config: `config.toml` with 80 `[dotfiles]` entries, `conf.d/`, tasks, lock | cpp-standard `mise.mac.toml`, the Mac's counterpart of `mise.pc.toml` | M1 |
+| `unix/home/.ssh/config.d/tailnet.conf.tera` | `pc` over the tailnet (the tailnet-only ruling of 2026-11-11), `pc-lan` break-glass, from Doppler `PC_HOST`/`PC_LAN_HOST` | `mise.mac.toml`, unchanged | M1 |
+| `unix/home/.config/agents/` (25), `.agents/skills`, `.claude/`, `.codex/`, `.gemini/`, `.config/opencode/` | The global agent rules (`AGENTS.md`, workflow, skills) and each agent's settings | `mise.mac.toml` and `mise.pc.toml`; the agent rules as one shared source | M1 |
+| `unix/home/.config/{zsh,git,fnox,jouet,herdr-app,dep-maps,starship.toml}`, `.local/bin`, `.local/share` | Shell, git, secrets and tool configs | `mise.mac.toml` (git settings with the owner's word, as before) | M1 |
+| `python/repo` (`repotools`), `python/workflow` (`workflowtools`) | The PR and workflow tools every repository uses | cpp-standard `python/`, installed as uv tools from it | M2 |
+| `python/home` (`hometools`), `python/guards`, `python/depmaps`, `python/cbm`, `python/lsp`, `python/jbctl`, `python/visualplan`, `swift/` (`jbax`) | Machine and agent helpers | Each is kept only if something still calls it: moved to `python/`, else dropped. `hometools`' herdr filter for macos-development-environment is dead (that project was sunset on 2026-11-17) | M2 |
+| `python/toolchains/p2996`, `cmake/toolchains/` | The older p2996 build and toolchain files | Dropped: cpp-standard's toolchain work replaces them (D136) | M2 |
+| `cpp/`, `typescript/`, `python/src`, `python/tests` greet samples | Hello-world samples | Dropped | M2 |
+| `docs/` (86: ADRs, research, designs) | Reasoning behind the tools | Moved next to the code that keeps it, else left in the archive | M2 |
+| Root `AGENTS.md`, `hk.pkl`, `mise.toml`, `*.bak-*`, `task_plan.md`, `progress.md` | Repository rules, checks and old plan files | Rules folded into cpp-standard's; the rest stays in the archive | M3 |
+
+### Order
+
+- **M1, the Mac's config.** Copy the entries unchanged into `mise.mac.toml`, check the plan shows no
+  change, then switch the Mac as the PC was switched (one link, Phase 3 of this plan). The unmanaged
+  LAN-address block for the PC in `~/.ssh/config`, from before the tailnet-only ruling, is removed in this
+  step. Afterwards `mise -E mac bootstrap --from https://github.com/ray-manaloto/cpp-standard.git`
+  sets up a Mac the way `-E pc` sets up the PC (tested on 2026-11-17: exit 0, no system change).
+- **M2, the tools.** Move what is still used, point `mise run //repo:tools-install` and the agent
+  rules at cpp-standard, drop the rest.
+- **M3, the archive.** dotfiles becomes read-only on GitHub with a README pointing at cpp-standard.
+  The owner archives it.
+
+Each step is checked with the plan diff and both doctors, and undone by pointing the link back.
