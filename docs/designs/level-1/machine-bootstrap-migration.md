@@ -203,6 +203,16 @@ How Phase 3 is checked and undone:
   slot. That workflow tests the PC, wherever its file lives.
 - *Undo:* select `pc` again in dotfiles, and revert dotfiles' removal pull request.
 
+**Phase 3, the link switch on the PC, 2026-11-17,** with the owner's go and chief-of-staff's slot. The switch is done; steps 2 and 3 and the `pc-smoke.yml` check are still open:
+
+- *Before:* both SSH paths answered. `mise.pc.toml` matched dotfiles main `42f3d5a` byte for byte after the header, and the parsed entries were equal. The Phase 2 check from the checkout at `9d9b86f` showed no change for the 18 `pc` entries.
+- *The switch is one link.* `$HOME/.config/mise/config.pc.toml` pointed at dotfiles' file. It now points at the checkout's `mise.pc.toml`. The selection, `env = ["pc"]` in `miserc.local.toml`, stays. Both doctors run mise from the home folder with no `-E`, so they read cpp-standard's file with no change to either doctor. Nothing was applied or pruned, no service was restarted, and the PC was not rebooted. This replaces steps 1 and 4 above.
+- *After:* the plan from the home folder shows no change for the 18 `pc` entries, and Tailscale SSH answered at once. Both doctors exit 0. The kernel settings are unchanged. `gha-fence`, `ufw`, the three slots and `acu-trial` are active, and the Mac's fetch through the apt cache on port 3142 returns 200. chief-of-staff checked the PC afterwards.
+- *Undo,* run on the PC:
+  `ln -sfn "<dotfiles checkout>/unix/home/.config/mise/config.pc.toml" "$HOME/.config/mise/config.pc.toml"`
+- *The PC's checkout stays on `main`,* tracking `origin/main`. The link makes the checkout's `mise.pc.toml` the PC's declared config, so a checkout of another branch or commit changes that config without any warning. Test checkouts go in another folder.
+- *Still open:* steps 2 and 3, which are dotfiles-lead's, and a green `pc-smoke.yml` run on the dotfiles slot, the check above. Until dotfiles drops `config.pc.toml`, a `mise dot apply` on the PC may point the link back at dotfiles' file. The two files are identical, so the PC would not change.
+
 **Phase 4: the re-filed tickets.** These go in dependency order:
 
 1. **#637, the Doppler config.** The owner creates it and places its token, the one human step.
