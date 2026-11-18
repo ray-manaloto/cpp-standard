@@ -1,0 +1,9 @@
+#!/bin/sh
+# gh in a project container (D155): GH_TOKEN is read from the mounted token file at each call, so a refreshed
+# token works without restarting anything. A GH_TOKEN already set wins. The real gh is mise's (agents.Dockerfile).
+f=/run/agent-secrets/gh-token
+if [ -z "${GH_TOKEN:-}" ] && [ -s "$f" ]; then
+  GH_TOKEN=$(cat "$f")
+  export GH_TOKEN
+fi
+exec /opt/mise/shims/gh "$@"

@@ -473,3 +473,27 @@ WantedBy=multi-user.target
 state = "running"
 enabled = true
 on_change = "restart"
+
+# Zero-touch logins for project agent containers (D155). agent-secrets runs as the PC user: it reads the agents' keys
+# from Doppler with the read-only token that `mise run agents:pc-doppler` (run once by the owner on the Mac) puts in
+# ~/.config/agent-secrets/doppler-token, and writes each registered container's files into
+# ~/.local/state/agent-secrets/<container>/, which agents:up mounts read-only at /run/agent-secrets. The script is the
+# PC checkout's own file (the source is read from the home folder, so the checkout's relative path does not matter to
+# the link this config is loaded through); its header says what it writes and why. The PC lingers, so the user
+# service runs from boot with no login.
+[bootstrap.files."~/.local/bin/agent-secrets"]
+os = "linux"
+source = "~/dev/github/ray-manaloto/cpp-standard/docs/standard/agent-auth/agent-secrets.bash"
+mode = "0755"
+
+[bootstrap.services.agent-secrets]
+scope = "user"
+command = "~/.local/bin/agent-secrets serve"
+description = "Short-lived GitHub tokens and agent keys for project agent containers (cpp-standard D155)"
+restart = "always"
+requires_tools = true
+environment = { PATH = "/usr/local/bin:/usr/bin:/bin" }
+
+# The doppler CLI agent-secrets reads Doppler with (D155).
+[tools]
+doppler = { version = "3.77.1", minimum_release_age = "0s" }

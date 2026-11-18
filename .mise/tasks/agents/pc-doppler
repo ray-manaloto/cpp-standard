@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+#MISE description="Give the PC read access to the agents' keys: move them to Doppler's root config dev and put a read-only dev token on the PC (D155); the owner runs it once"
+#
+# Run by the owner in their own terminal, after agents:app-create. It needs the owner's Doppler login, because the
+# doppler CLI's usual token is a service token for dev_personal only, which can neither make tokens nor write dev.
+#   1. `doppler login` into a temporary scope (the browser asks to approve); a trap logs out (revoking that login
+#      token) and removes the scope on any exit.
+#   2. Stops unless root config dev holds only the four names below: the PC's token reads all of dev.
+#   3. Moves the four names from dev_personal to dev, values piped and never shown. dev_personal is a branch of dev,
+#      so it inherits them, and one rotation in dev reaches the Mac and the PC (docs.doppler.com/docs/branch-configs).
+#      A name whose two values differ stops the run instead.
+#   4. Creates a read-only service token `pc-agents` on dev and pipes it to the PC's
+#      ~/.config/agent-secrets/doppler-token (0600). Not `doppler configure set token`: that stores the token in the
+#      system keyring (DopplerHQ/cli pkg/configuration/config.go:320-341, plain-text fallback at :422 only when the
+#      keyring call fails), which is locked after a reboot with no login. The PC's agent-secrets service passes the
+#      file as DOPPLER_TOKEN, Doppler's documented "Option 2" (docs.doppler.com/docs/service-tokens).
+#   5. Checks that the PC reads the four names with it (mise runs the doppler CLI there; pinned like mise.pc.toml), then revokes any older `pc-agents` token.
+# Safe to rerun: moved names are skipped, and each run replaces the PC's token.
+set -euo pipefail
+unset DOPPLER_TOKEN # an inherited one would override the temporary login
+names=(AGENTS_APP_PRIVATE_KEY AGENTS_APP_CLIENT_ID CLAUDE_CODE_OAUTH_TOKEN GEMINI_API_KEY)
+project=dotfiles root=dev branch=dev_personal tokname=pc-agents
+dp() { doppler --no-check-version "$@"; }
+
+scope="$(mktemp -d)"
+cleanup() {
+  # --scope always: logout defaults to scope /, where the Mac's own dev_personal token lives.
+  (cd "$scope" && dp logout --scope "$scope" --yes --silent >/dev/null 2>&1) || true
+  dp configure unset token --scope "$scope" --silent >/dev/null 2>&1 || true
+  rm -rf -- "$scope"
+}
+trap cleanup EXIT
+cd "$scope"
+echo "agents:pc-doppler: log in to Doppler in the browser (a temporary login, revoked at the end)"
+dp login --scope "$scope" --yes
+dp configs get "$branch" -p "$project" --json | jq -e --arg r "$root" '.root == false and .environment == $r' >/dev/null ||
+  {
+    echo "agents:pc-doppler: $branch is not a branch of $root; stopping" >&2
+    exit 1
+  }
+
+has() { # <config> <name>: whether the config itself or by inheritance has the name
+  dp secrets --only-names --json -p "$project" -c "$1" | jq -e --arg n "$2" 'has($n)' >/dev/null
+}
+digest() { dp secrets get "$2" -p "$project" -c "$1" --plain | shasum -a 256; }
+
+# 2. The PC's token reads all of dev, so dev may hold nothing else (Doppler adds the three DOPPLER_* names itself).
+extra="$(dp secrets --only-names --json -p "$project" -c "$root" |
+  jq -r --argjson keep "$(printf '%s\n' "${names[@]}" | jq -R . | jq -s .)" \
+    'keys - $keep - ["DOPPLER_PROJECT","DOPPLER_ENVIRONMENT","DOPPLER_CONFIG"] | .[]')"
+if [[ -n "$extra" ]]; then
+  echo "agents:pc-doppler: $root also holds: $(tr '\n' ' ' <<<"$extra"); stopping, no token was made" >&2
+  exit 1
+fi
+
+# 3. Move the names. Each must exist first (agents:app-create stores the App's two).
+for n in "${names[@]}"; do
+  has "$branch" "$n" || has "$root" "$n" || {
+    echo "agents:pc-doppler: Doppler has no $n; run agents:app-create first" >&2
+    exit 1
+  }
+  if ! has "$root" "$n"; then
+    dp secrets get "$n" -p "$project" -c "$branch" --plain |
+      dp secrets set "$n" -p "$project" -c "$root" --no-interactive --silent >/dev/null
+    echo "agents:pc-doppler: copied $n to $root"
+  fi
+  if [[ "$(digest "$root" "$n")" != "$(digest "$branch" "$n")" ]]; then
+    # dev_personal overrides dev with a different value: removing it would change what the Mac reads.
+    echo "agents:pc-doppler: $n differs between $root and $branch; stopping (decide which value is current)" >&2
+    exit 1
+  fi
+  # The same value: drop dev_personal's own copy, if it has one, so it inherits dev's. A name it only inherits
+  # cannot be deleted, so a failure here is checked by the read below, not trusted.
+  dp secrets delete "$n" -p "$project" -c "$branch" --yes --silent >/dev/null 2>&1 || true
+  has "$branch" "$n" || {
+    echo "agents:pc-doppler: $branch lost $n; set it again in $root" >&2
+    exit 1
+  }
+done
+echo "agents:pc-doppler: $branch inherits the four names from $root"
+
+# 4. A new read-only token for the PC, piped straight to its file. The older ones are revoked after the check.
+old="$(dp configs tokens -p "$project" -c "$root" --json | jq -r --arg t "$tokname" '.[] | select(.name == $t) | .slug')"
+dp configs tokens create "$tokname" -p "$project" -c "$root" --access read --plain |
+  ssh -o BatchMode=yes pc 'umask 077 && mkdir -p ~/.config/agent-secrets && d=~/.config/agent-secrets &&
+    cat >"$d/.doppler-token.new" && test -s "$d/.doppler-token.new" && mv -f "$d/.doppler-token.new" "$d/doppler-token"'
+echo "agents:pc-doppler: wrote the PC's ~/.config/agent-secrets/doppler-token (0600)"
+
+# 5. The PC reads the names with it (names only), through mise's doppler (mise.pc.toml [tools]).
+got="$(ssh -o BatchMode=yes pc 'DOPPLER_TOKEN="$(cat ~/.config/agent-secrets/doppler-token)" \
+  mise exec doppler@3.77.1 -- doppler secrets --only-names --json --no-check-version' | jq -r 'keys[]')"
+for n in "${names[@]}"; do
+  grep -qx "$n" <<<"$got" || {
+    echo "agents:pc-doppler: the PC's token does not read $n" >&2
+    exit 1
+  }
+done
+for s in $old; do
+  dp configs tokens revoke "$s" -p "$project" -c "$root" --silent >/dev/null
+  echo "agents:pc-doppler: revoked an older $tokname token"
+done
+echo "agents:pc-doppler: done; the PC reads the four names from $root"
