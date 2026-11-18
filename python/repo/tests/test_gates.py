@@ -13,6 +13,7 @@ from tests import clean_git_env
 REPO = Path(__file__).resolve().parents[3]
 USER = "gatetester"
 HINT = "privacy:scan: replace each host path with ~ or a {{ env.HOME }} template"
+pytestmark = pytest.mark.usefixtures("uv_cache")
 
 
 @pytest.fixture
