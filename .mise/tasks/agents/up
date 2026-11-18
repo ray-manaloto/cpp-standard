@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
-#MISE description="Start (or reuse) a project container with its agents on the PC, GitHub and Claude Code logged in with no typing: repo clone mounted, App token and Claude key mounted read-only (D151, D155)"
-#USAGE arg "<project>" help="Project name; the clone is <repo url> checked out under ~/dev/containers/<project> on the PC"
+#MISE description="Start (or reuse) a project container with its agents on the PC or this Mac, GitHub and Claude Code logged in with no typing: repo clone mounted, App token and Claude key mounted read-only (D151, D155)"
+#USAGE arg "<project>" help="Project name; the clone is <repo url> checked out under ~/dev/containers/<project> on the PC, ~/dev/containers.noindex/<project> on the Mac"
+#USAGE flag "--host <host>" default="pc" help="Where the container runs: the PC (over ssh) or this Mac (its current Docker context)" {
+#USAGE   choices "pc" "mac"
+#USAGE }
 #USAGE flag "--repo <url>" help="GitHub repository URL (default: https://github.com/ray-manaloto/<project>.git)"
 #USAGE flag "--image <ref>" help="Image (default: cpp-standard-agents:dev)"
 #USAGE flag "--fresh" help="Remove the container and its agent volumes first (Codex's login is lost)"
 #
 # The container runs as the non-root user dev, with no --privileged and -e container=docker. The project is a separate
-# clone on the PC, never the PC's own checkout. Logins (D155): the PC's agent-secrets service mints a one-hour GitHub
-# App token for this repository only and keeps it fresh, beside CLAUDE_CODE_OAUTH_TOKEN, in
-# ~/.local/state/agent-secrets/<container>/ on the PC, mounted read-only at /run/agent-secrets. git and gh read the
+# clone on the host, never the host's own checkout. Logins (D155): the host's agent-secrets service mints a one-hour
+# GitHub App token for this repository only and keeps it fresh, beside CLAUDE_CODE_OAUTH_TOKEN, in
+# ~/.local/state/agent-secrets/<container>/ on the host, mounted read-only at /run/agent-secrets. git and gh read the
 # token at each use; shells read Claude Code's key at each start. Commits are the App bot's. The Antigravity CLI and
 # Codex each keep the owner's own login on their volumes, made once per project on this machine by the owner (D151); no agent ever
-# runs agy (AGENTS.md). Enter the container with:
-#   ssh -t pc docker exec -it <project>-agents bash -l
+# runs agy (AGENTS.md).
+# The service: on the PC a user service (mise.pc.toml); on the Mac, which has no bash 4, flock or GNU stat, the same
+# script in a container `agent-secrets` from this image, started here when missing or on an older image. It writes
+# through a bind mount at the same path as on the Mac, so the folder it prints is the Mac's.
+# Enter the container with:
+#   PC:  ssh -t pc docker exec -it <project>-agents bash -l      Mac:  docker exec -it <project>-agents bash -l
 set -euo pipefail
 project="${usage_project:?}"
+host="${usage_host:-pc}"
 name="${project}-agents"
 image="${usage_image:-cpp-standard-agents:dev}"
 repo="${usage_repo:-https://github.com/ray-manaloto/${project}.git}"
@@ -27,17 +35,48 @@ slug="${slug%.git}"
   echo "agents:up: not a GitHub repository URL: $repo" >&2
   exit 2
 }
-export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
-on_pc() { ssh -o BatchMode=yes pc "$@"; }
+if [[ "$host" == mac ]]; then
+  unset DOCKER_HOST
+  on_host() { bash -c "$1"; }
+  clones=dev/containers.noindex # Spotlight indexes nothing under a .noindex folder
+  enter="docker exec -it $name"
+  # AGENT_SECRETS_CMD runs another copy of the service script, for tests before a change reaches the image.
+  register="${AGENT_SECRETS_CMD:-docker exec agent-secrets agent-secrets}"
+  state="$HOME/.local/state/agent-secrets" conf="$HOME/.config/agent-secrets"
+  [[ -s "$conf/doppler-token" ]] || {
+    echo "agents:up: no Doppler token at $conf/doppler-token; the owner runs mise run agents:pc-doppler" >&2
+    exit 2
+  }
+  mkdir -p "$state"
+  chmod 700 "$state"
+  want="$(docker image inspect --format '{{.Id}}' "$image")"
+  have="$(docker container inspect --format '{{.Image}}' agent-secrets 2>/dev/null || true)"
+  if [[ "$have" != "$want" ]]; then
+    docker rm -f agent-secrets >/dev/null 2>&1 || true
+    # PATH without mise's shims, as on the PC: outside a project a shim such as jq fails instead of using the system's.
+    docker run -d --name agent-secrets --hostname agent-secrets -e container=docker --restart unless-stopped \
+      -e PATH=/usr/local/bin:/usr/bin:/bin -e AGENT_SECRETS_STATE="$state" \
+      -e AGENT_SECRETS_CONF=/home/dev/.config/agent-secrets \
+      -v "$state:$state" -v "$conf:/home/dev/.config/agent-secrets:ro" \
+      "$image" agent-secrets serve >/dev/null
+  else
+    docker start agent-secrets >/dev/null
+  fi
+else
+  export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
+  on_host() { ssh -o BatchMode=yes pc "$1"; }
+  clones=dev/containers
+  enter="ssh -t pc docker exec -it $name"
+  register="${AGENT_SECRETS_CMD:-.local/bin/agent-secrets}"
+fi
 volumes=(claude codex gemini opencode-data opencode-config opencode-state)
 if [[ -n "${usage_fresh:-}" ]]; then
   docker rm -f "$name" >/dev/null 2>&1 || true
   for v in "${volumes[@]}"; do docker volume rm "${name}-${v}" >/dev/null 2>&1 || true; done
 fi
-# Register first: it makes the folder as the PC user (so Docker never makes it as root) and writes the token now.
-# AGENT_SECRETS_CMD runs another copy of the service script, for tests before a change reaches the PC.
-keys="$(on_pc "${AGENT_SECRETS_CMD:-.local/bin/agent-secrets} register '$name' '$slug'")"
-home="$(on_pc 'echo ~')"
+# Register first: it makes the folder as the host user (so Docker never makes it as root) and writes the token now.
+keys="$(on_host "$register register '$name' '$slug'")"
+home="$(on_host 'echo ~')"
 # A container made before D155 (or with another key folder) lacks this mount, and a mount can only be added by
 # recreating it. Its named volumes, and the logins on them, are kept; the old gh volume is left, unused.
 if docker container inspect "$name" >/dev/null 2>&1; then
@@ -51,9 +90,9 @@ fi
 if docker container inspect "$name" >/dev/null 2>&1; then
   docker start "$name" >/dev/null
 else
-  dir="dev/containers/${project}"
+  dir="${clones}/${project}"
   # The clone reads the same token file through a one-off credential helper: no token in argv, a URL or git config.
-  on_pc "test -d ~/$dir/.git || git -c credential.helper= \
+  on_host "test -d ~/$dir/.git || git -c credential.helper= \
     -c credential.helper='!f() { test \"\$1\" = get && printf \"username=x-access-token\\npassword=%s\\n\" \"\$(cat $keys/gh-token)\"; }; f' \
     clone -q '$repo' ~/$dir"
   docker run -d --name "$name" --hostname "$name" -e container=docker --restart unless-stopped \
@@ -71,10 +110,10 @@ fi
 {
   read -r bot_name
   read -r bot_email
-} < <(on_pc "cat $keys/git-identity")
+} < <(on_host "cat $keys/git-identity")
 docker exec "$name" git config --global user.name "$bot_name"
 docker exec "$name" git config --global user.email "$bot_email"
 docker ps --filter "name=^${name}$" --format '{{.Names}} {{.Status}} {{.Image}}'
 echo "agents:up: Claude Code, OpenCode, git and gh need no login. Once per project on this machine (the logins stay on its volumes):"
-echo "  codex: ssh -t pc docker exec -it $name bash -lc 'codex login --device-auth'   (the device code is approved in the owner's browser)"
-echo "  owner: mise run agents:agy-login $project   (agy's Google sign-in; agents:up never starts agy)"
+echo "  codex: $enter bash -lc 'codex login --device-auth'   (the device code is approved in the owner's browser)"
+echo "  owner: mise run agents:agy-login $project --host $host   (agy's Google sign-in; agents:up never starts agy)"

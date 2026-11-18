@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #MISE description="Update the agent CLIs and plugins inside a running project container, keeping its logins (D151, D152)"
-#USAGE arg "<project>" help="Project name; the container is <project>-agents on the PC"
+#USAGE arg "<project>" help="Project name; the container is <project>-agents"
+#USAGE flag "--host <host>" default="pc" help="The PC (over ssh) or this Mac (its current Docker context)" {
+#USAGE   choices "pc" "mac"
+#USAGE }
 #
 # A named volume is filled from the image only once, so a new image does not reach the
 # plugins of a container that already exists. This reruns each CLI's native installer and
 # then agent-plugins refresh in the container, and prints the versions it got.
 set -euo pipefail
 name="${usage_project:?}-agents"
-export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
+if [[ "${usage_host:-pc}" == mac ]]; then unset DOCKER_HOST; else export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"; fi
 docker exec "$name" bash -lc '
   set -euo pipefail
   export PATH=$HOME/.local/bin:$HOME/.opencode/bin:/usr/local/bin:/usr/bin:/bin

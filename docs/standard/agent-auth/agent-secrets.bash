@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# agent-secrets (cpp-standard D155): the PC side of zero-touch logins for project agent containers.
+# agent-secrets (cpp-standard D155): the host side of zero-touch logins for project agent containers. The PC runs it
+# as a user service (mise.pc.toml); the Mac runs it in a container `agent-secrets` of the agents image (agents:up
+# --host mac), because macOS has no bash 4, flock or GNU stat.
 #
 #   agent-secrets register <container> <owner/repo>   start serving a container and print its folder (agents:up)
 #   agent-secrets unregister <container>              stop serving it and remove its files
@@ -35,7 +37,8 @@ die() {
 }
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 
-# The secrets JSON of the token's Doppler config. mise puts the pinned doppler CLI on PATH (mise.pc.toml [tools]).
+# The secrets JSON of the token's Doppler config. mise runs the pinned doppler CLI (mise.pc.toml [tools] on the PC,
+# the image's global mise config in the Mac's container).
 secrets_json() {
   [[ -r "$conf/doppler-token" ]] || die "no Doppler token at $conf/doppler-token"
   DOPPLER_TOKEN="$(<"$conf/doppler-token")" mise exec doppler -- doppler secrets download --no-file --format json \
