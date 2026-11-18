@@ -49,13 +49,16 @@ if [[ "$host" == mac ]]; then
   }
   mkdir -p "$state"
   chmod 700 "$state"
-  want="$(docker image inspect --format '{{.Id}}' "$image")"
+  want="$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)" || {
+    echo "agents:up: no $image on this Mac; run mise run agents:image --host mac" >&2
+    exit 2
+  }
   have="$(docker container inspect --format '{{.Image}}' agent-secrets 2>/dev/null || true)"
   if [[ "$have" != "$want" ]]; then
     docker rm -f agent-secrets >/dev/null 2>&1 || true
-    # PATH without mise's shims, as on the PC: outside a project a shim such as jq fails instead of using the system's.
+    # The image has no system jq: the service uses the global jq and doppler (agents.Dockerfile) through mise's shims.
     docker run -d --name agent-secrets --hostname agent-secrets -e container=docker --restart unless-stopped \
-      -e PATH=/usr/local/bin:/usr/bin:/bin -e AGENT_SECRETS_STATE="$state" \
+      -e PATH=/opt/mise/shims:/usr/local/bin:/usr/bin:/bin -e AGENT_SECRETS_STATE="$state" \
       -e AGENT_SECRETS_CONF=/home/dev/.config/agent-secrets \
       -v "$state:$state" -v "$conf:/home/dev/.config/agent-secrets:ro" \
       "$image" agent-secrets serve >/dev/null
