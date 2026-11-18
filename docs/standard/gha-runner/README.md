@@ -9,8 +9,8 @@ per-slot CPU limits.
 
 | Source here | On the PC | What |
 |---|---|---|
-| `gha-slot` | `/usr/local/sbin/gha-slot` | build / smoke / exec / dry-run / once / run |
-| `gha-slot@.service` | `/etc/systemd/system/` | one loop per slot: `systemctl enable --now gha-slot@glaze` |
+| `gha-slot` | `/usr/local/sbin/gha-slot` | slot add / build / smoke / exec / warm / wipe / dry-run / once / run |
+| `gha-slot@.service` | `/etc/systemd/system/` | one loop per slot: `systemctl enable --now gha-slot@glaze.service` |
 | `runner.json` | `/etc/gha-runner/runner.json` (root, 600) | owner, App ids, image, defaults, slots |
 | `Dockerfile` | `/etc/gha-runner/Dockerfile` | `local/gha-runner:latest` = official runner 2.338.2 + mise 2026.11.5 + sccache + uv |
 | (owner) | `/etc/gha-runner/app.pem` (root, 600) | the GitHub App private key; the one secret at rest |
@@ -54,10 +54,73 @@ that job's `mise install` fails until the change reaches the default branch.
   an sccache hit.
 - `gha-slot wipe glaze` removes both volumes and the age stamp; `dry-run` shows repo scope and app `main`.
 
+## Adding a repository
+
+Run these on the PC as root, in order. Slots register **org-scope** runners in the org's Default runner group, which
+runs jobs only for the repositories it allows (owner decision 2026-11-18: the App has no Administration permission,
+so repo-scope registration is not available). Labels are not access control: any repository the group allows can
+send a job to any slot by naming its label, and that job gets the slot's writable sccache. Allow only trusted
+repositories in the group.
+
+1. Allow the repository in the org's Default runner group (GitHub: org settings > Actions > Runner groups > Default).
+2. `gha-slot slot add <repo> [--name <slot>] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]...
+   [--group-verified]` adds the slot to `runner.json` with scope `org` unless `--scope repo` is given. Slot names are
+   lowercase letters, digits, `_` and `-` (no dots, so a name never ends in `.service`). Before writing it refuses an
+   existing slot name, and refuses while a `gha-tools-<slot>` or `gha-sccache-<slot>` volume from an earlier slot of
+   that name still exists. For org scope it asks GitHub, read-only with the App token, whether the Default runner
+   group is set to selected repositories, lists the repo, and allows public repositories if the repo is public; it
+   refuses if not, and it also refuses when it cannot ask (fail closed). After checking all of that by hand in the
+   org's settings, rerun with `--group-verified` to skip the GitHub check. All of these checks run under one lock
+   (a read-only descriptor on `/etc/gha-runner` itself), which it holds while it writes the new file to a temp file,
+   checks that it is non-empty and parses, dry-runs the new slot against it in a fresh process, backs the old file
+   up as `runner.json.bak-<sha256>` (verified), keeps the owner and mode, and replaces the file in one rename. Any
+   failure leaves the file untouched. Never edit `runner.json` with an unchecked pipe: on 2026-11-18 a `jq … | tee`
+   edit without `pipefail` wrote an empty file.
+3. `gha-slot smoke <slot>` checks the job container's limits (no GitHub, no repo code).
+4. **Run the repo's CI test commands in the runner image before any workflow moves.** For a public repo:
+   `gha-slot exec <slot> 'git clone --depth 1 https://github.com/<owner>/<repo> r && cd r && mise trust -q -a &&
+   mise install && <the CI test commands>'`. The image is Ubuntu 24.04 with a usr-merged `PATH`, so tests that pass
+   on macOS can still fail here. One repository's ship-cleanup test did, and fixing it took a second pull request
+   after its CI had already moved. `exec` gets no token, but it mounts the slot's tools volume read-only and its
+   sccache volume **writable**, exactly like a job, so run only code you would let a job run. A private repo cannot
+   be cloned without a token, so gha-slot cannot yet run this step for one.
+5. `gha-slot warm <slot>`: a trusted step that gets an App installation token, clones the repo's **default branch**
+   with it and installs its mise tools into the tools volume.
+6. Switch the repo's workflows to `runs-on: [self-hosted, <pc-label>, container, <slot>]`, then
+   `systemctl enable --now gha-slot@<slot>.service`.
+
+**Retire a slot** (manual, as root; there is no `slot remove`). Replace `<slot>` in each line. The `flock` takes the
+same directory lock as `slot add`; the edit backs up, checks and renames the same way.
+
+```sh
+systemctl disable --now gha-slot@<slot>.service
+systemctl show gha-slot@<slot>.service -p UnitFileState -p ActiveState  # must say disabled and inactive
+flock -n /etc/gha-runner sh -euc '
+  cd /etc/gha-runner
+  sum=$(sha256sum runner.json | cut -d" " -f1)
+  cp -p runner.json "runner.json.bak-$sum"
+  cmp runner.json "runner.json.bak-$sum"
+  umask 077
+  jq --arg n "<slot>" "del(.slots[\$n])" runner.json > runner.json.new
+  test -s runner.json.new
+  jq -e --arg n "<slot>" ".slots | has(\$n) | not" runner.json.new
+  mv -T runner.json.new runner.json'
+docker volume rm gha-tools-<slot> gha-sccache-<slot>
+```
+
+Remove the volumes before that slot name is used again (`slot add` refuses while they exist). Do not start the
+slot while it is being retired.
+
+**Offboard a repository:** retire each of its slots as above, then remove the repository from the org's Default
+runner group (GitHub: org settings > Actions > Runner groups > Default) and check that it is no longer listed there.
+Until then it can still send jobs to the other slots by their labels.
+
 ## Owner decisions 2026-11-10 (to build next)
 
 - GitHub App: repo-level runners, App installed on the 4 repos only (Administration R/W). Keep runner.json
-  flexible for org-level runners and a second App later (per-slot `scope` and `app`).
+  flexible for org-level runners and a second App later (per-slot `scope` and `app`). **Superseded 2026-11-18:**
+  org-scope runners, limited to the selected repositories of the org's Default runner group; the App has no
+  Administration permission.
 - Cache: tools read-only to jobs (a trusted pre-job step installs the repo's mise tools from the default branch),
   **sccache** (not ccache) as the only writable cache, weekly wipe.
 

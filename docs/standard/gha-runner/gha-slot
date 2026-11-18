@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # gha-slot: one-job GitHub Actions runner slots in fresh containers on the PC.
-# Installed at /usr/local/sbin/gha-slot; source of truth windows-desktop/omarchy/runner/gha-slot.
+# Installed at /usr/local/sbin/gha-slot; source of truth cpp-standard docs/standard/gha-runner/gha-slot.
 #
+#   gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]... [--group-verified]
+#                                  add a slot to the config (backup first, atomic replace), then dry-run it;
+#                                  enabling it stays separate: systemctl enable --now gha-slot@<name>.service;
+#                                  removing a slot is a manual step (README: "Retire a slot")
 #   gha-slot build                 build the runner image (Dockerfile next to the config)
 #   gha-slot smoke <slot>          start a job container with the slot's limits and run local checks (no GitHub)
 #   gha-slot exec <slot> <cmd...>  run a command in a fresh job container with the slot's limits (no GitHub)
@@ -30,6 +34,7 @@
 set -euo pipefail
 
 CONF="${GHA_RUNNER_CONFIG:-/etc/gha-runner/runner.json}"
+SELF="$(realpath "$0")" # for the fresh-process dry-run of a candidate config
 DIR="$(dirname "$CONF")"
 STATE=/var/lib/gha-runner
 NET=gha-jobs NET_SUBNET=172.30.0.0/24
@@ -44,6 +49,7 @@ slotval() { jq -r --arg s "$SLOT" --arg k "$1" '(.slots[$s][$k] // .defaults[$k]
 load_slot() {
   SLOT="${1:?slot name}"
   [ -r "$CONF" ] || die "cannot read $CONF"
+  jq -e . "$CONF" >/dev/null 2>&1 || die "$CONF does not parse; fix it or restore a runner.json.bak-* first"
   jq -e --arg s "$SLOT" '.slots[$s]' "$CONF" >/dev/null || die "no slot '$SLOT' in $CONF"
   OWNER=$(cfg .github.owner)
   REPO=$(jq -er --arg s "$SLOT" '.slots[$s].repo' "$CONF")
@@ -249,14 +255,161 @@ test_run() { # $1 = name suffix, rest = bash script; a job-shaped container with
   docker "${args[@]}" --entrypoint bash "$IMAGE" -c "$SEED $*"
 }
 
+dry_run() {
+  load_slot "$1"
+  mapfile -t args < <(job_args "pc-x86-$SLOT-DRYRUN")
+  printf 'ACTIONS_RUNNER_INPUT_JITCONFIG=<single-use config> docker'; printf ' %q' "${args[@]}" -e ACTIONS_RUNNER_INPUT_JITCONFIG --entrypoint bash "$IMAGE" -c "$SEED"' exec ./run.sh'; echo
+  echo "labels: $LABELS   repo: $OWNER/$REPO   scope: $SCOPE   app: $APP   max ${MAXMIN} min"
+}
+
+# Config edits (slot add) follow one rule: take the lock first, run every check under it, then the
+# fresh-process dry-run of the candidate, the backup and the swap, all while the same lock is held. A failure before
+# the final rename leaves runner.json untouched. (2026-11-18: a `jq … | tee` edit without pipefail wrote an empty
+# runner.json.) The lock covers gha-slot's own config edits only.
+lock_conf() {
+  [ -r "$CONF" ] && [ -w "$CONF" ] && [ -w "$DIR" ] || die "need read/write access to $CONF and $DIR (run as root)"
+  # Lock the config directory itself through a read-only descriptor: no lock file to create, follow or truncate.
+  exec 9<"$DIR" || die "cannot open $DIR"
+  flock -n 9 || die "another gha-slot is editing $CONF"
+  jq -e . "$CONF" >/dev/null 2>&1 || die "$CONF does not parse; fix it or restore a runner.json.bak-* first"
+}
+
+# Args: jq filter, jq check on the result, slot to dry-run on the candidate ("" for none), then jq --arg args.
+commit_conf() {
+  local filter="$1" check="$2" slot="$3" tmp btmp bak sum; shift 3
+  # mktemp files are 0600 from the start: the config holds App settings.
+  tmp=$(mktemp "$DIR/.runner.json.XXXXXX") && btmp=$(mktemp "$DIR/.runner.json.bak.XXXXXX") \
+    || die "cannot create temp files in $DIR"
+  # shellcheck disable=SC2064 # expand the names now
+  trap "rm -f '$tmp' '$btmp'" EXIT
+  jq "$@" "$filter" "$CONF" >"$tmp" || die "jq failed; $CONF unchanged"
+  [ -s "$tmp" ] || die "jq wrote an empty file; $CONF unchanged"
+  jq -e "$@" "$check" "$tmp" >/dev/null || die "the new config fails its check; $CONF unchanged"
+  # A fresh process, so `set -e` applies to every config read (it is off inside `( … ) || …` in this one).
+  if [ -n "$slot" ]; then
+    echo "gha-slot: dry-run of the candidate config:"
+    GHA_RUNNER_CONFIG="$tmp" bash "$SELF" dry-run "$slot" || die "the new config fails its dry-run; $CONF unchanged"
+  fi
+  # Backup named by the full sha256 of the original. An existing one is reused only if it is a regular file (not a
+  # symlink) whose content still hashes to its name; otherwise a verified copy replaces it.
+  sum=$(sha256sum "$CONF" | cut -d' ' -f1)
+  bak="$CONF.bak-$sum"
+  if ! { [ -f "$bak" ] && [ ! -L "$bak" ] && [ "$(sha256sum <"$bak" | cut -d' ' -f1)" = "$sum" ]; }; then
+    { cp -p "$CONF" "$btmp" && cmp -s "$CONF" "$btmp" && mv -fT "$btmp" "$bak"; } \
+      || die "cannot write the backup $bak; $CONF unchanged"
+  fi
+  [ -f "$bak" ] && [ ! -L "$bak" ] && [ "$(sha256sum <"$bak" | cut -d' ' -f1)" = "$sum" ] \
+    || die "the backup $bak does not verify; $CONF unchanged"
+  if ! { chown --reference="$CONF" "$tmp" && chmod --reference="$CONF" "$tmp"; }; then
+    die "cannot copy owner/mode; $CONF unchanged"
+  fi
+  mv -fT "$tmp" "$CONF" || die "cannot replace $CONF; it is unchanged"
+  rm -f "$btmp"; trap - EXIT
+  echo "gha-slot: $CONF updated (backup $bak)"
+}
+
+# No dots, so a slot name can never end in ".service" and name a different systemd instance.
+valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] || die "bad slot name '$1' (lowercase letters, digits, _ -)"; }
+
+check_no_volumes() { # a new slot must not inherit an old slot's tools or writable compiler cache by name
+  local vols v
+  vols=$(docker volume ls -q) || die "cannot list docker volumes; refusing to add a slot without checking for old ones"
+  for v in "gha-tools-$1" "gha-sccache-$1"; do
+    ! grep -qxF "$v" <<<"$vols" || die "volume $v from an earlier slot '$1' still exists; remove it (docker volume rm $v) or pick another --name"
+  done
+}
+
+# Org-scope runners register in the org's Default runner group (id 1). Owner decision 2026-11-18: that group allows
+# only selected repositories. Check with the App token, read-only: the group must be set to selected repositories,
+# must list the repo, and must allow public repositories if the repo is public. Fail closed: any token, request or
+# response failure refuses. An operator who has checked all of that by hand reruns with --group-verified.
+check_runner_group() {
+  local repo="$1" manual group vis pub resp page n hit
+  manual="check by hand: GitHub > $OWNER settings > Actions > Runner groups > Default must be set to selected repositories, list $repo, and allow public repositories if $repo is public; then rerun with --group-verified"
+  APP=$(jq -r '.defaults.app // "main"' "$CONF")
+  TOKEN=$(app_token 2>/dev/null) || die "cannot get an App token to check the Default runner group; $manual"
+  group=$(api GET "/orgs/$OWNER/actions/runner-groups/1" 2>/dev/null) \
+    && vis=$(jq -er '.visibility | strings' <<<"$group") \
+    && pub=$(jq -r '.allows_public_repositories | if type == "boolean" then tostring else error("missing") end' <<<"$group" 2>/dev/null) \
+    || { TOKEN=""; die "cannot read the Default runner group; $manual"; }
+  [ "$vis" = selected ] || { TOKEN=""; die "the $OWNER Default runner group allows '$vis' repositories, not selected ones; set it to selected repositories and add $repo, then retry"; }
+  hit=""
+  for page in $(seq 1 50); do
+    resp=$(api GET "/orgs/$OWNER/actions/runner-groups/1/repositories?per_page=100&page=$page" 2>/dev/null) \
+      && jq -e '.repositories | type == "array"' <<<"$resp" >/dev/null 2>&1 \
+      || { TOKEN=""; die "cannot list the Default runner group; $manual"; }
+    hit=$(jq -c --arg r "$repo" 'first(.repositories[] | select(.name == $r)) // empty' <<<"$resp")
+    [ -n "$hit" ] && break
+    n=$(jq '.repositories | length' <<<"$resp")
+    [ "$n" -lt 100 ] && break
+  done
+  TOKEN=""
+  [ -n "$hit" ] || die "$repo is not in the $OWNER Default runner group's selected repositories; add it there first, then retry"
+  case "$(jq -r '.private | if type == "boolean" then tostring else "unknown" end' <<<"$hit")" in
+    true) ;;
+    false) [ "$pub" = true ] || die "$repo is public but the $OWNER Default runner group does not allow public repositories; allow them there first, then retry" ;;
+    *) die "cannot tell whether $repo is public from the runner group listing; $manual" ;;
+  esac
+  echo "gha-slot: $repo is in the Default runner group (selected repositories)"
+}
+
+slot_add() {
+  local repo="${1:-}" name="" cpus="" mem="" scope="" verified="" labels=() l extra
+  [ -n "$repo" ] && [ "${repo#-}" = "$repo" ] || die "usage: gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]... [--group-verified]"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --group-verified) verified=1; shift; continue ;;
+    esac
+    [ $# -ge 2 ] || die "option $1 needs a value"
+    case "$1" in
+      --name) name="$2" ;; --cpus) cpus="$2" ;; --memory) mem="$2" ;; --scope) scope="$2" ;; --label) labels+=("$2") ;;
+      *) die "unknown option $1" ;;
+    esac
+    shift 2
+  done
+  [[ "$repo" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || die "bad repo name '$repo' (a name in the owner org, not owner/repo)"
+  name="${name:-$(tr '[:upper:]' '[:lower:]' <<<"$repo")}"
+  valid_name "$name"
+  [ -z "$cpus" ] || [[ "$cpus" =~ ^[1-9][0-9]*(\.[0-9]+)?$ ]] || die "bad --cpus '$cpus' (a positive number)"
+  [ -z "$mem" ] || [[ "$mem" =~ ^[1-9][0-9]*[bkmg]?$ ]] || die "bad --memory '$mem' (e.g. 14g)"
+  # Org scope unless asked: the App has no Administration permission, so repo-scope registration would fail
+  # (owner decision 2026-11-18). The scope is written into the slot, never left to the defaults.
+  scope="${scope:-org}"
+  case "$scope" in org|repo) ;; *) die "bad --scope '$scope' (org or repo)" ;; esac
+  for l in "${labels[@]}"; do [[ "$l" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "bad --label '$l'"; done
+  lock_conf
+  ! jq -e --arg n "$name" '.slots | has($n)' "$CONF" >/dev/null || die "slot '$name' already exists in $CONF"
+  check_no_volumes "$name"
+  OWNER=$(cfg .github.owner)
+  if [ "$scope" = org ]; then
+    echo "gha-slot: slot $name registers org-scope runners in $OWNER's Default runner group; only repositories that group allows can use it"
+    if [ -n "$verified" ]; then
+      echo "gha-slot: --group-verified: the operator checked the Default runner group by hand; no GitHub check"
+    else
+      check_runner_group "$repo"
+    fi
+  fi
+  check_no_volumes "$name" # again, after the GitHub requests
+  extra=$(printf '%s\n' "$name" "${labels[@]}" | jq -Rnc '[inputs | select(length > 0)] | unique')
+  commit_conf 'if .slots | has($n) then error("slot exists") else .slots[$n] = ({repo: $r, labels_extra: $l, scope: $s}
+      + (if $c == "" then {} else {cpus: ($c | tonumber)} end)
+      + (if $m == "" then {} else {memory: $m} end)) end' \
+    '(.slots | type == "object") and .slots[$n].repo == $r and .slots[$n].scope == $s' "$name" \
+    --arg n "$name" --arg r "$repo" --arg c "$cpus" --arg m "$mem" --arg s "$scope" --argjson l "$extra"
+  echo "gha-slot: next, run the repo's CI test commands in it (gha-slot exec $name '...'), then warm, then systemctl enable --now gha-slot@$name.service"
+}
+
 case "${1:-}" in
+  slot)
+    case "${2:-}" in
+      add) shift 2; slot_add "$@" ;;
+      *) die "usage: gha-slot slot add <repo> [options]  (removing a slot is a manual step: see the README)" ;;
+    esac ;;
   build)
     docker build -t "$(cfg .image)" -f "$DIR/Dockerfile" "$DIR" ;;
   dry-run)
-    load_slot "${2:-}"
-    mapfile -t args < <(job_args "pc-x86-$SLOT-DRYRUN")
-    printf 'ACTIONS_RUNNER_INPUT_JITCONFIG=<single-use config> docker'; printf ' %q' "${args[@]}" -e ACTIONS_RUNNER_INPUT_JITCONFIG --entrypoint bash "$IMAGE" -c "$SEED"' exec ./run.sh'; echo
-    echo "labels: $LABELS   repo: $OWNER/$REPO   scope: $SCOPE   app: $APP   max ${MAXMIN} min" ;;
+    dry_run "${2:-}" ;;
   smoke)
     load_slot "${2:-}"
     test_run smoke '
@@ -279,5 +432,5 @@ case "${1:-}" in
   once) once "${2:-}" ;;
   run)
     while true; do once "${2:-}" || { echo "gha-slot ${2:-}: round failed, retry in 30 s" >&2; sleep 30; }; done ;;
-  *) sed -n '2,29p' "$0"; exit 2 ;;
+  *) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 2 ;;
 esac
