@@ -9,7 +9,7 @@ per-slot CPU limits.
 
 | Source here | On the PC | What |
 |---|---|---|
-| `gha-slot` | `/usr/local/sbin/gha-slot` | build / smoke / exec / dry-run / once / run |
+| `gha-slot` | `/usr/local/sbin/gha-slot` | slot add / slot remove / build / smoke / exec / warm / wipe / dry-run / once / run |
 | `gha-slot@.service` | `/etc/systemd/system/` | one loop per slot: `systemctl enable --now gha-slot@glaze` |
 | `runner.json` | `/etc/gha-runner/runner.json` (root, 600) | owner, App ids, image, defaults, slots |
 | `Dockerfile` | `/etc/gha-runner/Dockerfile` | `local/gha-runner:latest` = official runner 2.338.2 + mise 2026.11.5 + sccache + uv |
@@ -53,6 +53,29 @@ that job's `mise install` fails until the change reaches the default branch.
   installed"), cmake/vcpkg/check-jsonschema work, writing to `/cache/mise` fails, a second identical compile is
   an sccache hit.
 - `gha-slot wipe glaze` removes both volumes and the age stamp; `dry-run` shows repo scope and app `main`.
+
+## Adding a repository
+
+Run these on the PC as root, in order. Nothing reaches GitHub until step 5.
+
+1. Install the GitHub App on the repository if the slot uses repo scope.
+2. `gha-slot slot add <repo> [--name <slot>] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]...`
+   adds the slot to `runner.json`: it backs the file up as `runner.json.bak-<sha>`, writes the new file to a temp file,
+   checks that it is non-empty and parses, keeps the owner and mode, and replaces the file in one rename. It refuses an
+   existing slot name and leaves the file untouched on any failure. It ends with `gha-slot dry-run <slot>`. Never edit
+   `runner.json` by hand: on 2026-11-18 a `jq … | tee` edit without `pipefail` wrote an empty file.
+3. `gha-slot smoke <slot>`, then `gha-slot warm <slot>`, which installs the repo's mise tools from its default branch.
+4. **Run the repo's CI test commands in the runner image before any workflow moves.** For a public repo:
+   `gha-slot exec <slot> 'git clone --depth 1 https://github.com/<owner>/<repo> r && cd r && mise trust -q -a &&
+   mise install && <the CI test commands>'`. The image is Ubuntu 24.04 with a usr-merged `PATH`, so tests that pass
+   on macOS can still fail here. One repository's ship-cleanup test did, and fixing it took a second pull request
+   after its CI had already moved. `exec` has no token and no mounts, so gha-slot cannot yet run this step for a
+   private repo.
+5. Switch the repo's workflows to `runs-on: [self-hosted, <pc-label>, container, <slot>]`, then
+   `systemctl enable --now gha-slot@<slot>`.
+
+To take a repository off: `systemctl disable --now gha-slot@<slot>`, then `gha-slot slot remove <slot>` (same backup
+and checks; it refuses while the unit is enabled or running), then remove the volumes it names.
 
 ## Owner decisions 2026-11-10 (to build next)
 

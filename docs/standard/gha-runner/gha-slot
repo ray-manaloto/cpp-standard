@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # gha-slot: one-job GitHub Actions runner slots in fresh containers on the PC.
-# Installed at /usr/local/sbin/gha-slot; source of truth windows-desktop/omarchy/runner/gha-slot.
+# Installed at /usr/local/sbin/gha-slot; source of truth cpp-standard docs/standard/gha-runner/gha-slot.
 #
+#   gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]...
+#                                  add a slot to the config (backup first, atomic replace), then dry-run it;
+#                                  enabling it stays separate: systemctl enable --now gha-slot@<name>
+#   gha-slot slot remove <name>    remove a stopped, disabled slot from the config (same backup and checks)
 #   gha-slot build                 build the runner image (Dockerfile next to the config)
 #   gha-slot smoke <slot>          start a job container with the slot's limits and run local checks (no GitHub)
 #   gha-slot exec <slot> <cmd...>  run a command in a fresh job container with the slot's limits (no GitHub)
@@ -249,14 +253,97 @@ test_run() { # $1 = name suffix, rest = bash script; a job-shaped container with
   docker "${args[@]}" --entrypoint bash "$IMAGE" -c "$SEED $*"
 }
 
+dry_run() {
+  load_slot "$1"
+  mapfile -t args < <(job_args "pc-x86-$SLOT-DRYRUN")
+  printf 'ACTIONS_RUNNER_INPUT_JITCONFIG=<single-use config> docker'; printf ' %q' "${args[@]}" -e ACTIONS_RUNNER_INPUT_JITCONFIG --entrypoint bash "$IMAGE" -c "$SEED"' exec ./run.sh'; echo
+  echo "labels: $LABELS   repo: $OWNER/$REPO   scope: $SCOPE   app: $APP   max ${MAXMIN} min"
+}
+
+# Rewrite the config with one jq filter, never in place: lock, back up, write a temp file in the same directory,
+# check it is non-empty, parses and passes $check, give it the original's owner and mode, then rename it over the
+# original (atomic). Any failure leaves the config untouched. (2026-11-18: `jq … | tee` without pipefail wrote an
+# empty runner.json.) Args: jq filter, jq check on the result, then jq args (--arg/--argjson) for both.
+edit_conf() {
+  local filter="$1" check="$2" tmp bak; shift 2
+  [ -r "$CONF" ] && [ -w "$CONF" ] && [ -w "$DIR" ] || die "need read/write access to $CONF and $DIR (run as root)"
+  exec 9>"$DIR/.runner.json.lock"
+  flock -n 9 || die "another gha-slot is editing $CONF"
+  jq -e . "$CONF" >/dev/null || die "$CONF does not parse; fix it or restore a runner.json.bak-* first"
+  bak="$CONF.bak-$(sha256sum "$CONF" | cut -c1-7)"
+  [ -e "$bak" ] || cp -p "$CONF" "$bak" || die "cannot write the backup $bak"
+  tmp=$(mktemp "$DIR/.runner.json.XXXXXX") || die "cannot create a temp file in $DIR"
+  # shellcheck disable=SC2064 # expand $tmp now
+  trap "rm -f '$tmp'" EXIT
+  jq "$@" "$filter" "$CONF" >"$tmp" || die "jq failed; $CONF unchanged"
+  [ -s "$tmp" ] || die "jq wrote an empty file; $CONF unchanged"
+  jq -e "$@" "$check" "$tmp" >/dev/null || die "the new config fails its check; $CONF unchanged"
+  if ! { chown --reference="$CONF" "$tmp" && chmod --reference="$CONF" "$tmp"; }; then
+    die "cannot copy owner/mode; $CONF unchanged"
+  fi
+  mv -f "$tmp" "$CONF" || die "cannot replace $CONF; it is unchanged"
+  trap - EXIT
+  echo "gha-slot: $CONF updated (backup $bak)"
+}
+
+valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || die "bad slot name '$1' (lowercase letters, digits, . _ -)"; }
+
+slot_add() {
+  local repo="${1:-}" name="" cpus="" mem="" scope="" labels=()
+  [ -n "$repo" ] && [ "${repo#-}" = "$repo" ] || die "usage: gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]..."
+  shift
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || die "option $1 needs a value"
+    case "$1" in
+      --name) name="$2" ;; --cpus) cpus="$2" ;; --memory) mem="$2" ;; --scope) scope="$2" ;; --label) labels+=("$2") ;;
+      *) die "unknown option $1" ;;
+    esac
+    shift 2
+  done
+  [[ "$repo" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || die "bad repo name '$repo' (a name in the owner org, not owner/repo)"
+  name="${name:-$(tr '[:upper:]' '[:lower:]' <<<"$repo")}"
+  valid_name "$name"
+  [ -z "$cpus" ] || [[ "$cpus" =~ ^[1-9][0-9]*(\.[0-9]+)?$ ]] || die "bad --cpus '$cpus' (a positive number)"
+  [ -z "$mem" ] || [[ "$mem" =~ ^[1-9][0-9]*[bkmg]?$ ]] || die "bad --memory '$mem' (e.g. 14g)"
+  case "$scope" in ""|org|repo) ;; *) die "bad --scope '$scope' (org or repo)" ;; esac
+  local l
+  for l in "${labels[@]}"; do [[ "$l" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "bad --label '$l'"; done
+  ! jq -e --arg n "$name" '.slots | has($n)' "$CONF" >/dev/null || die "slot '$name' already exists in $CONF"
+  local extra
+  extra=$(printf '%s\n' "$name" "${labels[@]}" | jq -Rnc '[inputs | select(length > 0)] | unique')
+  edit_conf '.slots[$n] = ({repo: $r, labels_extra: $l}
+      + (if $c == "" then {} else {cpus: ($c | tonumber)} end)
+      + (if $m == "" then {} else {memory: $m} end)
+      + (if $s == "" then {} else {scope: $s} end))' \
+    '(.slots | type == "object") and .slots[$n].repo == $r' \
+    --arg n "$name" --arg r "$repo" --arg c "$cpus" --arg m "$mem" --arg s "$scope" --argjson l "$extra"
+  dry_run "$name"
+  echo "gha-slot: next, run the repo's CI test commands in it (gha-slot exec $name '...'), then systemctl enable --now gha-slot@$name"
+}
+
+slot_remove() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "usage: gha-slot slot remove <name>"
+  valid_name "$name"
+  jq -e --arg n "$name" '.slots | has($n)' "$CONF" >/dev/null || die "no slot '$name' in $CONF"
+  if systemctl is-enabled --quiet "gha-slot@$name" 2>/dev/null || systemctl is-active --quiet "gha-slot@$name" 2>/dev/null; then
+    die "gha-slot@$name is enabled or running; systemctl disable --now gha-slot@$name first"
+  fi
+  edit_conf 'del(.slots[$n])' '(.slots | type == "object") and (.slots | has($n) | not)' --arg n "$name"
+  echo "gha-slot: slot $name removed; its volumes stay until: docker volume rm gha-tools-$name gha-sccache-$name"
+}
+
 case "${1:-}" in
+  slot)
+    case "${2:-}" in
+      add) shift 2; slot_add "$@" ;;
+      remove) slot_remove "${3:-}" ;;
+      *) die "usage: gha-slot slot add <repo> [options] | gha-slot slot remove <name>" ;;
+    esac ;;
   build)
     docker build -t "$(cfg .image)" -f "$DIR/Dockerfile" "$DIR" ;;
   dry-run)
-    load_slot "${2:-}"
-    mapfile -t args < <(job_args "pc-x86-$SLOT-DRYRUN")
-    printf 'ACTIONS_RUNNER_INPUT_JITCONFIG=<single-use config> docker'; printf ' %q' "${args[@]}" -e ACTIONS_RUNNER_INPUT_JITCONFIG --entrypoint bash "$IMAGE" -c "$SEED"' exec ./run.sh'; echo
-    echo "labels: $LABELS   repo: $OWNER/$REPO   scope: $SCOPE   app: $APP   max ${MAXMIN} min" ;;
+    dry_run "${2:-}" ;;
   smoke)
     load_slot "${2:-}"
     test_run smoke '
@@ -279,5 +366,5 @@ case "${1:-}" in
   once) once "${2:-}" ;;
   run)
     while true; do once "${2:-}" || { echo "gha-slot ${2:-}: round failed, retry in 30 s" >&2; sleep 30; }; done ;;
-  *) sed -n '2,29p' "$0"; exit 2 ;;
+  *) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 2 ;;
 esac
