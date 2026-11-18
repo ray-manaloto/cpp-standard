@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gha-slot: one-job GitHub Actions runner slots in fresh containers on nzxth1desktop.
+# gha-slot: one-job GitHub Actions runner slots in fresh containers on the PC.
 # Installed at /usr/local/sbin/gha-slot; source of truth windows-desktop/omarchy/runner/gha-slot.
 #
 #   gha-slot build                 build the runner image (Dockerfile next to the config)
