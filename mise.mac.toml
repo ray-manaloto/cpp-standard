@@ -12,6 +12,10 @@
 # Added in cpp-standard, each marked: the git_user_* lines in [bootstrap.secrets], the section at the end, its
 # sources (unix/home/.tmux.conf, unix/home/.gnupg/common.conf, unix/home/.gitconfig.identity.tera) and the two
 # GIT_USER_* lines in unix/home/.config/fnox/config.toml.
+#
+# Newer than 094d435b: unix/home/.config/agents/workflow/ and the ticket-retro and session-retro skills are
+# dotfiles' files at ffb02a6e, the frozen source commit of the tools move (D160, #155). This file has no
+# session-retro link yet; the switch adds the home links for the moved files.
 
 # Names that must not be public (machine names, addresses) live in Doppler, never in this repo
 # (docs/research/private-names.md). The global fnox file reads each one with env = "exec", so
