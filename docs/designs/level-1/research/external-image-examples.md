@@ -88,7 +88,7 @@ This is a pattern, not a quote from one file. UNVERIFIED as a copy-paste-ready w
 
 ## 6. Q6: last30days result
 
-Run with the `last30days:last30days` skill on "devcontainer prebuilt image ghcr renovate C++ toolchain". Python 3.13 failed TLS through the fnox proxy (Missing Authority Key Identifier), as predicted in the brief; TLS verification was not disabled. The run completed in degraded mode with GitHub and X only. Reddit returned 403. It produced no repo that beat the ranked list above, and no new C++ example with Renovate plus digest pins. Treat last30days as having contributed little here.
+Run with the `last30days:last30days` skill on "devcontainer prebuilt image ghcr renovate C++ toolchain". Python 3.13 failed TLS through the fnox proxy (Missing Authority Key Identifier; fixed in fnox 1.49.0, jdx/fnox#1162), as predicted in the brief; TLS verification was not disabled. The run completed in degraded mode with GitHub and X only. Reddit returned 403. It produced no repo that beat the ranked list above, and no new C++ example with Renovate plus digest pins. Treat last30days as having contributed little here.
 
 ## 7. Q5: Renovate vs Dependabot coverage
 
