@@ -48,6 +48,7 @@ slotval() { jq -r --arg s "$SLOT" --arg k "$1" '(.slots[$s][$k] // .defaults[$k]
 load_slot() {
   SLOT="${1:?slot name}"
   [ -r "$CONF" ] || die "cannot read $CONF"
+  jq -e . "$CONF" >/dev/null 2>&1 || die "$CONF does not parse; fix it or restore a runner.json.bak-* first"
   jq -e --arg s "$SLOT" '.slots[$s]' "$CONF" >/dev/null || die "no slot '$SLOT' in $CONF"
   OWNER=$(cfg .github.owner)
   REPO=$(jq -er --arg s "$SLOT" '.slots[$s].repo' "$CONF")
@@ -260,36 +261,69 @@ dry_run() {
   echo "labels: $LABELS   repo: $OWNER/$REPO   scope: $SCOPE   app: $APP   max ${MAXMIN} min"
 }
 
-# Rewrite the config with one jq filter, never in place: lock, back up, write a temp file in the same directory,
-# check it is non-empty, parses and passes $check, give it the original's owner and mode, then rename it over the
-# original (atomic). Any failure leaves the config untouched. (2026-11-18: `jq … | tee` without pipefail wrote an
-# empty runner.json.) Args: jq filter, jq check on the result, then jq args (--arg/--argjson) for both.
+# Rewrite the config with one jq filter, never in place (2026-11-18: `jq … | tee` without pipefail wrote an empty
+# runner.json). Under an exclusive lock: check the precondition on the current file, write a verified backup, write
+# the candidate to a temp file in the same directory, check it is non-empty, parses and passes the result check, run
+# the verify function with CONF pointed at the candidate, give it the original's owner and mode, then rename it over
+# the original (atomic). Any failure before the rename leaves the config untouched.
+# Args: precondition (jq), its failure message, filter (jq), result check (jq), verify function, then jq --arg args.
 edit_conf() {
-  local filter="$1" check="$2" tmp bak; shift 2
+  local pre="$1" premsg="$2" filter="$3" check="$4" verify="$5" tmp btmp bak sum; shift 5
   [ -r "$CONF" ] && [ -w "$CONF" ] && [ -w "$DIR" ] || die "need read/write access to $CONF and $DIR (run as root)"
   exec 9>"$DIR/.runner.json.lock"
   flock -n 9 || die "another gha-slot is editing $CONF"
   jq -e . "$CONF" >/dev/null || die "$CONF does not parse; fix it or restore a runner.json.bak-* first"
-  bak="$CONF.bak-$(sha256sum "$CONF" | cut -c1-7)"
-  [ -e "$bak" ] || cp -p "$CONF" "$bak" || die "cannot write the backup $bak"
-  tmp=$(mktemp "$DIR/.runner.json.XXXXXX") || die "cannot create a temp file in $DIR"
-  # shellcheck disable=SC2064 # expand $tmp now
-  trap "rm -f '$tmp'" EXIT
+  jq -e "$@" "$pre" "$CONF" >/dev/null || die "$premsg"
+  # mktemp files are 0600 from the start: the config holds App settings.
+  tmp=$(mktemp "$DIR/.runner.json.XXXXXX") && btmp=$(mktemp "$DIR/.runner.json.bak.XXXXXX") \
+    || die "cannot create temp files in $DIR"
+  # shellcheck disable=SC2064 # expand the names now
+  trap "rm -f '$tmp' '$btmp'" EXIT
+  # Backup: named by the full sha256 of the original, written to a temp file, compared, then renamed. An existing
+  # backup is reused only if its content still hashes to its name, so a torn earlier copy is never trusted.
+  sum=$(sha256sum "$CONF" | cut -d' ' -f1)
+  bak="$CONF.bak-$sum"
+  if ! { [ -f "$bak" ] && [ "$(sha256sum "$bak" | cut -d' ' -f1)" = "$sum" ]; }; then
+    cp -p "$CONF" "$btmp" && cmp -s "$CONF" "$btmp" && mv -f "$btmp" "$bak" || die "cannot write the backup $bak; $CONF unchanged"
+  fi
   jq "$@" "$filter" "$CONF" >"$tmp" || die "jq failed; $CONF unchanged"
   [ -s "$tmp" ] || die "jq wrote an empty file; $CONF unchanged"
   jq -e "$@" "$check" "$tmp" >/dev/null || die "the new config fails its check; $CONF unchanged"
+  ( CONF="$tmp"; "$verify" ) || die "the new config fails verification; $CONF unchanged"
   if ! { chown --reference="$CONF" "$tmp" && chmod --reference="$CONF" "$tmp"; }; then
     die "cannot copy owner/mode; $CONF unchanged"
   fi
   mv -f "$tmp" "$CONF" || die "cannot replace $CONF; it is unchanged"
-  trap - EXIT
+  rm -f "$btmp"; trap - EXIT
   echo "gha-slot: $CONF updated (backup $bak)"
 }
 
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || die "bad slot name '$1' (lowercase letters, digits, . _ -)"; }
 
+# Org-scope runners register in the org's Default runner group (id 1), which runs jobs only for the repositories it
+# allows. Check that with the App token when the App key is readable; refuse a repo the group does not allow. If the
+# check cannot run (no key, or the App lacks the org permission "Self-hosted runners: read"), print the manual step.
+check_runner_group() {
+  local repo="$1" manual vis page names
+  manual="check by hand: GitHub > $OWNER settings > Actions > Runner groups > Default must allow $repo (all repositories, or $repo among the selected ones)"
+  APP=$(jq -r '.defaults.app // "main"' "$CONF")
+  if ! TOKEN=$(app_token 2>/dev/null); then echo "gha-slot: cannot get an App token; $manual"; return 0; fi
+  if ! vis=$(api GET "/orgs/$OWNER/actions/runner-groups/1" 2>/dev/null | jq -er .visibility); then
+    echo "gha-slot: cannot read the Default runner group; $manual"; TOKEN=""; return 0
+  fi
+  if [ "$vis" = all ]; then echo "gha-slot: the Default runner group allows all repositories"; TOKEN=""; return 0; fi
+  for page in $(seq 1 50); do
+    names=$(api GET "/orgs/$OWNER/actions/runner-groups/1/repositories?per_page=100&page=$page" 2>/dev/null \
+      | jq -er '.repositories[].name') || { echo "gha-slot: cannot list the Default runner group; $manual"; TOKEN=""; return 0; }
+    if grep -qxF "$repo" <<<"$names"; then echo "gha-slot: $repo is in the Default runner group"; TOKEN=""; return 0; fi
+    [ "$(grep -c . <<<"$names")" -lt 100 ] && break
+  done
+  TOKEN=""
+  die "$repo is not in the $OWNER Default runner group (visibility $vis); add it there first, then retry"
+}
+
 slot_add() {
-  local repo="${1:-}" name="" cpus="" mem="" scope="" labels=()
+  local repo="${1:-}" name="" cpus="" mem="" scope="" labels=() l extra vols
   [ -n "$repo" ] && [ "${repo#-}" = "$repo" ] || die "usage: gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]..."
   shift
   while [ $# -gt 0 ]; do
@@ -305,31 +339,50 @@ slot_add() {
   valid_name "$name"
   [ -z "$cpus" ] || [[ "$cpus" =~ ^[1-9][0-9]*(\.[0-9]+)?$ ]] || die "bad --cpus '$cpus' (a positive number)"
   [ -z "$mem" ] || [[ "$mem" =~ ^[1-9][0-9]*[bkmg]?$ ]] || die "bad --memory '$mem' (e.g. 14g)"
-  case "$scope" in ""|org|repo) ;; *) die "bad --scope '$scope' (org or repo)" ;; esac
-  local l
+  # Org scope unless asked: the App has no Administration permission, so repo-scope registration would fail
+  # (owner decision 2026-11-18). The scope is written into the slot, never left to the defaults.
+  scope="${scope:-org}"
+  case "$scope" in org|repo) ;; *) die "bad --scope '$scope' (org or repo)" ;; esac
   for l in "${labels[@]}"; do [[ "$l" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "bad --label '$l'"; done
+  [ -r "$CONF" ] || die "cannot read $CONF"
+  jq -e . "$CONF" >/dev/null 2>&1 || die "$CONF does not parse; fix it or restore a runner.json.bak-* first"
   ! jq -e --arg n "$name" '.slots | has($n)' "$CONF" >/dev/null || die "slot '$name' already exists in $CONF"
-  local extra
+  # A new slot must not inherit an old slot's tools or writable compiler cache by name.
+  vols=$(docker volume ls -q) || die "cannot list docker volumes; refusing to add a slot without checking for old ones"
+  for l in "gha-tools-$name" "gha-sccache-$name"; do
+    ! grep -qxF "$l" <<<"$vols" || die "volume $l from an earlier slot '$name' still exists; remove it (docker volume rm $l) or pick another --name"
+  done
+  OWNER=$(cfg .github.owner)
+  if [ "$scope" = org ]; then
+    echo "gha-slot: slot $name registers org-scope runners in $OWNER's Default runner group; only repositories that group allows can use it"
+    check_runner_group "$repo"
+  fi
   extra=$(printf '%s\n' "$name" "${labels[@]}" | jq -Rnc '[inputs | select(length > 0)] | unique')
-  edit_conf '.slots[$n] = ({repo: $r, labels_extra: $l}
+  ADD_NAME="$name"
+  edit_conf '.slots | has($n) | not' "slot '$name' already exists in $CONF (added meanwhile); nothing changed" \
+    '.slots[$n] = ({repo: $r, labels_extra: $l, scope: $s}
       + (if $c == "" then {} else {cpus: ($c | tonumber)} end)
-      + (if $m == "" then {} else {memory: $m} end)
-      + (if $s == "" then {} else {scope: $s} end))' \
-    '(.slots | type == "object") and .slots[$n].repo == $r' \
+      + (if $m == "" then {} else {memory: $m} end))' \
+    '(.slots | type == "object") and .slots[$n].repo == $r and .slots[$n].scope == $s' verify_added \
     --arg n "$name" --arg r "$repo" --arg c "$cpus" --arg m "$mem" --arg s "$scope" --argjson l "$extra"
-  dry_run "$name"
-  echo "gha-slot: next, run the repo's CI test commands in it (gha-slot exec $name '...'), then systemctl enable --now gha-slot@$name"
+  echo "gha-slot: next, run the repo's CI test commands in it (gha-slot exec $name '...'), then warm, then systemctl enable --now gha-slot@$name"
 }
+verify_added() { echo "gha-slot: dry-run of the candidate config:"; dry_run "$ADD_NAME"; }
 
 slot_remove() {
-  local name="${1:-}"
+  local name="${1:-}" state
   [ -n "$name" ] || die "usage: gha-slot slot remove <name>"
   valid_name "$name"
+  [ -r "$CONF" ] || die "cannot read $CONF"
+  jq -e . "$CONF" >/dev/null 2>&1 || die "$CONF does not parse; fix it or restore a runner.json.bak-* first"
   jq -e --arg n "$name" '.slots | has($n)' "$CONF" >/dev/null || die "no slot '$name' in $CONF"
-  if systemctl is-enabled --quiet "gha-slot@$name" 2>/dev/null || systemctl is-active --quiet "gha-slot@$name" 2>/dev/null; then
-    die "gha-slot@$name is enabled or running; systemctl disable --now gha-slot@$name first"
-  fi
-  edit_conf 'del(.slots[$n])' '(.slots | type == "object") and (.slots | has($n) | not)' --arg n "$name"
+  # Remove only on a successful systemd query that says the unit is disabled and not running; any error refuses.
+  state=$(systemctl show "gha-slot@$name" -p UnitFileState -p ActiveState 2>&1) \
+    || die "cannot query systemd for gha-slot@$name ($state); refusing to remove"
+  grep -qxE 'UnitFileState=(disabled)?' <<<"$state" && grep -qxE 'ActiveState=(inactive|failed)' <<<"$state" \
+    || die "gha-slot@$name is not disabled and stopped ($(tr '\n' ' ' <<<"$state")); systemctl disable --now gha-slot@$name first"
+  edit_conf '.slots | has($n)' "no slot '$name' in $CONF (removed meanwhile); nothing changed" \
+    'del(.slots[$n])' '(.slots | type == "object") and (.slots | has($n) | not)' true --arg n "$name"
   echo "gha-slot: slot $name removed; its volumes stay until: docker volume rm gha-tools-$name gha-sccache-$name"
 }
 

@@ -56,31 +56,45 @@ that job's `mise install` fails until the change reaches the default branch.
 
 ## Adding a repository
 
-Run these on the PC as root, in order. Nothing reaches GitHub until step 5.
+Run these on the PC as root, in order. Slots register **org-scope** runners in the org's Default runner group, which
+runs jobs only for the repositories it allows (owner decision 2026-11-18: the App has no Administration permission,
+so repo-scope registration is not available). Labels are not access control: any repository the group allows can
+send a job to any slot by naming its label, and that job gets the slot's writable sccache. Allow only trusted
+repositories in the group.
 
-1. Install the GitHub App on the repository if the slot uses repo scope.
+1. Allow the repository in the org's Default runner group (GitHub: org settings > Actions > Runner groups > Default).
 2. `gha-slot slot add <repo> [--name <slot>] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]...`
-   adds the slot to `runner.json`: it backs the file up as `runner.json.bak-<sha>`, writes the new file to a temp file,
-   checks that it is non-empty and parses, keeps the owner and mode, and replaces the file in one rename. It refuses an
-   existing slot name and leaves the file untouched on any failure. It ends with `gha-slot dry-run <slot>`. Never edit
-   `runner.json` by hand: on 2026-11-18 a `jq … | tee` edit without `pipefail` wrote an empty file.
-3. `gha-slot smoke <slot>`, then `gha-slot warm <slot>`, which installs the repo's mise tools from its default branch.
+   adds the slot to `runner.json` with scope `org` unless `--scope repo` is given. Before writing it refuses an
+   existing slot name, and refuses while a `gha-tools-<slot>` or `gha-sccache-<slot>` volume from an earlier slot of
+   that name still exists. For org scope it asks GitHub, read-only with the App token, whether the Default runner
+   group allows the repo, and refuses if not; when it cannot ask, it prints the step to check by hand. Then, under a
+   lock: it backs the file up as `runner.json.bak-<sha256>` (verified), writes the new file to a temp file, checks
+   that it is non-empty and parses, dry-runs the new slot against it, keeps the owner and mode, and replaces the file
+   in one rename. Any failure leaves the file untouched. Never edit `runner.json` by hand: on 2026-11-18 a
+   `jq … | tee` edit without `pipefail` wrote an empty file.
+3. `gha-slot smoke <slot>` checks the job container's limits (no GitHub, no repo code).
 4. **Run the repo's CI test commands in the runner image before any workflow moves.** For a public repo:
    `gha-slot exec <slot> 'git clone --depth 1 https://github.com/<owner>/<repo> r && cd r && mise trust -q -a &&
    mise install && <the CI test commands>'`. The image is Ubuntu 24.04 with a usr-merged `PATH`, so tests that pass
    on macOS can still fail here. One repository's ship-cleanup test did, and fixing it took a second pull request
-   after its CI had already moved. `exec` has no token and no mounts, so gha-slot cannot yet run this step for a
-   private repo.
-5. Switch the repo's workflows to `runs-on: [self-hosted, <pc-label>, container, <slot>]`, then
+   after its CI had already moved. `exec` gets no token, but it mounts the slot's tools volume read-only and its
+   sccache volume **writable**, exactly like a job, so run only code you would let a job run. A private repo cannot
+   be cloned without a token, so gha-slot cannot yet run this step for one.
+5. `gha-slot warm <slot>`: a trusted step that gets an App installation token, clones the repo's **default branch**
+   with it and installs its mise tools into the tools volume.
+6. Switch the repo's workflows to `runs-on: [self-hosted, <pc-label>, container, <slot>]`, then
    `systemctl enable --now gha-slot@<slot>`.
 
-To take a repository off: `systemctl disable --now gha-slot@<slot>`, then `gha-slot slot remove <slot>` (same backup
-and checks; it refuses while the unit is enabled or running), then remove the volumes it names.
+To take a repository off: `systemctl disable --now gha-slot@<slot>`, then `gha-slot slot remove <slot>` (same lock,
+backup and checks; it refuses unless systemd answers that the unit is disabled and stopped), then remove the volumes
+it names before that slot name is used again.
 
 ## Owner decisions 2026-11-10 (to build next)
 
 - GitHub App: repo-level runners, App installed on the 4 repos only (Administration R/W). Keep runner.json
-  flexible for org-level runners and a second App later (per-slot `scope` and `app`).
+  flexible for org-level runners and a second App later (per-slot `scope` and `app`). **Superseded 2026-11-18:**
+  org-scope runners, limited to the selected repositories of the org's Default runner group; the App has no
+  Administration permission.
 - Cache: tools read-only to jobs (a trusted pre-job step installs the repo's mise tools from the default branch),
   **sccache** (not ccache) as the only writable cache, weekly wipe.
 
