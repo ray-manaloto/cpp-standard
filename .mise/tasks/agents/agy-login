@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="The owner signs the Antigravity CLI in to their Google account in a project container, in their own terminal (D155)"
+#USAGE arg "<project>" help="Project name; the container is <project>-agents on the PC"
+#
+# Owner only. Google allows subscription use from a command the owner starts directly, but not from an agent
+# (AGENTS.md, antigravity.google/terms), so no agent runs this task and agents:up never starts agy: it only names
+# this task. agy's sign-in over SSH prints a link; the owner opens it and signs in. The login stays on the
+# project's gemini volume, once per project per machine.
+set -euo pipefail
+name="${usage_project:?}-agents"
+# An agent's shell has no terminal; the owner's has one.
+[[ -t 0 && -t 1 ]] || {
+  echo "agents:agy-login: the owner runs this in their own terminal; no agent runs agy (AGENTS.md)" >&2
+  exit 2
+}
+exec ssh -t pc docker exec -it "$name" bash -lc agy
