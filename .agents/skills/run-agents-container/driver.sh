@@ -13,7 +13,9 @@
 # all always runs down, also after a failed check, and exits with the check's status.
 # RM_CLONE=1 also removes the PC clone ~/dev/containers/<project> when it has no local changes or commits.
 # RM_IMAGE=1 also removes $TAG.
-# ORPHANS=1 lets down remove the volumes and the registration when the container is already gone.
+# ORPHANS=1 lets down remove the volumes and the registration when the container is already gone. It prints the
+# six volume names whether or not they existed; the "left on the PC" line is the result.
+# RM_CLONE and RM_IMAGE skip a clone or an image that is not there.
 set -euo pipefail
 TAG="${TAG:-cpp-standard-agents:runskill}"
 # shellcheck disable=SC2032,SC2033 # the pc inside the function is the ssh host alias, not this function
@@ -23,7 +25,7 @@ die() {
   exit 1
 }
 name_of() {
-  [[ "${1:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "project name needed"
+  [[ "${1:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "project name needed: lowercase letters, digits, dot, underscore and hyphen, starting with a letter or digit"
   printf '%s-agents' "$1"
 }
 
@@ -130,10 +132,10 @@ down() {
   done
   pc .local/bin/agent-secrets unregister "$name"
   if [[ "${RM_CLONE:-}" == 1 ]]; then
-    pc "cd dev/containers/$1 && test -z \"\$(git status --porcelain)\" && test -z \"\$(git log --branches --not --remotes --oneline)\" && cd .. && rm -rf $1" ||
+    pc "test ! -e dev/containers/$1 || { cd dev/containers/$1 && test -z \"\$(git status --porcelain)\" && test -z \"\$(git log --branches --not --remotes --oneline)\" && cd .. && rm -rf $1; }" ||
       die "the PC clone dev/containers/$1 has local work; left in place"
   fi
-  if [[ "${RM_IMAGE:-}" == 1 ]]; then pc docker rmi "$TAG"; fi
+  if [[ "${RM_IMAGE:-}" == 1 ]]; then pc "docker image inspect $TAG >/dev/null 2>&1 && docker rmi $TAG || true"; fi
   left="$(pc "docker ps -a --format '{{.Names}}' | grep -cx $name; docker volume ls -q | grep -c '^$name-'; ls .local/state/agent-secrets | grep -cx $name" | paste -sd' ' - || true)"
   printf 'driver: left on the PC for %s: %s (container, volumes, registration)\n' "$name" "$left"
   [[ "$left" == '0 0 0' ]] || die "removal is not complete for $name"

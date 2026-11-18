@@ -16,6 +16,8 @@ container runs another tag. Paths are relative to the repository root; run every
 ## Prerequisites
 
 - `ssh -o BatchMode=yes pc true` works.
+- This checkout's HEAD commit is on GitHub (`git branch -r --contains HEAD` prints a branch). The image is built
+  from that commit as GitHub serves it, so `build` stops on an unpushed commit: push the branch first.
 - The PC Docker slot, from chief-of-staff. `build` and `up` stop without it. `check` and `down` do not ask for
   it, so run them only inside your own grant too. Give the slot back as soon as `down` has finished:
 
@@ -27,7 +29,8 @@ container runs another tag. Paths are relative to the repository root; run every
 
 ## Run (agent path)
 
-Four steps, in order. `down` runs even when `check` fails.
+Four steps, in order. `down` runs even when `check` fails. When `build` or `up` fails there is no container:
+run `down` with `ORPHANS=1` added, which removes whatever a failed `up` left and skips what is not there.
 
 ```bash
 .agents/skills/run-agents-container/driver.sh build
@@ -82,6 +85,7 @@ EOF
 
 ## Troubleshooting
 
+- `agents:image: HEAD <commit> is not on GitHub yet; push it first`: the second prerequisite. Nothing was built.
 - `slot: refused: the slot is granted to <tab>, not <you>`: you do not hold the slot. Ask chief-of-staff.
 - `driver: <name> runs cpp-standard-agents:dev, not cpp-standard-agents:runskill: not mine to touch`: the project
   has a live container. Pick a project without one.
