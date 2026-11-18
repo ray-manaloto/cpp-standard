@@ -7,7 +7,7 @@
 #   agent-secrets serve                               the user service: refresh whatever is due, every 15 s
 #
 # Each container gets ~/.local/state/agent-secrets/<container>/ (0700), mounted read-only at /run/agent-secrets:
-#   gh-token              a GitHub App installation token for <owner/repo> only, contents and pull requests
+#   gh-token              a GitHub App installation token for <owner/repo> only, contents, pull requests and workflows
 #                         write; GitHub makes it expire after one hour, and it is replaced after 30 minutes
 #   claude-oauth-token    CLAUDE_CODE_OAUTH_TOKEN (the Antigravity CLI and Codex log in per container instead)
 #   git-identity          the App bot's commit name and noreply email (not secret)
@@ -100,7 +100,7 @@ refresh_dirs() { # <dir>...
       log "$(basename "$d"): the App is not installed on $repo; skipped"
       continue
     fi
-    body=$(jq -nc --arg r "$name" '{repositories: [$r], permissions: {contents: "write", pull_requests: "write"}}')
+    body=$(jq -nc --arg r "$name" '{repositories: [$r], permissions: {contents: "write", pull_requests: "write", workflows: "write"}}')
     if ! tok=$(STDIN_BODY=1 gh_api jwt POST "/app/installations/$inst/access_tokens" <<<"$body" | jq -er .token) ||
       [[ "$tok" != ghs_* ]]; then
       log "$(basename "$d"): minting a token for $repo failed; skipped"

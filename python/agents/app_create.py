@@ -11,7 +11,7 @@
 #      client secret and webhook secret in the answer are dropped;
 #   4. sends the browser to the App's install page, where the owner picks "All repositories" and clicks
 #      Install, then waits for that installation and prints what it covers.
-# Permissions: contents write, pull requests write, metadata read. No workflows, no webhook, private.
+# Permissions: contents, pull requests and workflows write, metadata read (D155: like agents on the Mac). No webhook, private.
 """
 
 import html
@@ -113,6 +113,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "default_permissions": {
                     "contents": "write",
                     "pull_requests": "write",
+                    "workflows": "write",
                     "metadata": "read",
                 },
                 "default_events": [],
