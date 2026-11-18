@@ -89,7 +89,7 @@ jobs:
       - name: Install GCC 16, CMake, Ninja and gcovr
         run: |
           apt-get update -q
-          apt-get install -qy --no-install-recommends ca-certificates git g++-16 cmake ninja-build gcovr
+          apt-get install -qy --no-install-recommends ca-certificates curl git g++-16 cmake ninja-build gcovr
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
