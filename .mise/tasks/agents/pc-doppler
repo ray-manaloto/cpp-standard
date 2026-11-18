@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#MISE description="Give the PC read access to the agents' keys: copy them into Doppler project agent-containers (config prd) and put a read-only token for it on the PC (D155); the owner runs it once"
+#
+# Run by the owner in their own terminal, after agents:app-create. It needs the owner's Doppler login, because the
+# doppler CLI's usual token is a service token for dotfiles/dev_personal only, which can neither make projects nor
+# tokens.
+#   1. `doppler login` into a temporary scope (the browser asks to approve); a trap logs out (revoking that login
+#      token) and removes the scope on any exit.
+#   2. Creates the project agent-containers if it is missing, and stops unless its config prd holds only the four
+#      names below: the PC's token reads all of prd. (dotfiles' root config dev holds many other secrets, so the
+#      PC never gets a token there.)
+#   3. Copies the four names from dotfiles/dev_personal into agent-containers/prd, values piped and never shown, and
+#      stops if a name's two values differ. Then it deletes the App's two names from dev_personal, which only the PC
+#      needs; CLAUDE_CODE_OAUTH_TOKEN and GEMINI_API_KEY stay there for the Mac, so rotating one means setting it in
+#      both configs (printed at the end).
+#   4. Creates a read-only service token `pc-agents` on agent-containers/prd and pipes it to the PC's
+#      ~/.config/agent-secrets/doppler-token (0600). Not `doppler configure set token`: that stores the token in the
+#      system keyring (DopplerHQ/cli pkg/configuration/config.go:320-341, plain-text fallback at :422 only when the
+#      keyring call fails), which is locked after a reboot with no login. The PC's agent-secrets service passes the
+#      file as DOPPLER_TOKEN, Doppler's documented "Option 2" (docs.doppler.com/docs/service-tokens).
+#   5. Checks that the PC reads the four names with it (mise runs the doppler CLI there; pinned like mise.pc.toml),
+#      then revokes any older `pc-agents` token.
+# Safe to rerun: each step checks its result first, and each run replaces the PC's token.
+set -euo pipefail
+unset DOPPLER_TOKEN # an inherited one would override the temporary login
+names=(AGENTS_APP_PRIVATE_KEY AGENTS_APP_CLIENT_ID CLAUDE_CODE_OAUTH_TOKEN GEMINI_API_KEY)
+moved=(AGENTS_APP_PRIVATE_KEY AGENTS_APP_CLIENT_ID)
+src_p=dotfiles src_c=dev_personal dst_p=agent-containers dst_c=prd tokname=pc-agents
+dp() { doppler --no-check-version "$@"; }
+say() { echo "agents:pc-doppler: $*"; }
+stop() {
+  echo "agents:pc-doppler: $*" >&2
+  exit 1
+}
+
+scope="$(mktemp -d)"
+cleanup() {
+  # --scope always: logout defaults to scope /, where the Mac's own dev_personal token lives.
+  (cd "$scope" && dp logout --scope "$scope" --yes --silent >/dev/null 2>&1) || true
+  dp configure unset token --scope "$scope" --silent >/dev/null 2>&1 || true
+  rm -rf -- "$scope"
+}
+trap cleanup EXIT
+cd "$scope"
+say "log in to Doppler in the browser (a temporary login, revoked at the end)"
+dp login --scope "$scope" --yes
+
+names_of() { dp secrets --only-names --json -p "$1" -c "$2" | jq -r '(. // {}) | keys[]'; }
+has() { names_of "$1" "$2" | grep -x "$3" >/dev/null; } # not -q: an early exit fails the pipe
+digest() { dp secrets get "$3" -p "$1" -c "$2" --plain | shasum -a 256; }
+
+# 2. The project, and nothing else in prd (Doppler adds the three DOPPLER_* names itself).
+if ! dp projects get "$dst_p" >/dev/null 2>&1; then
+  dp projects create "$dst_p" --description "Agent container keys for the PC's agent-secrets service (cpp-standard D155)" >/dev/null
+  say "created the Doppler project $dst_p"
+fi
+dp configs get "$dst_c" -p "$dst_p" >/dev/null 2>&1 ||
+  stop "$dst_p has no config $dst_c; add the environment prd in the dashboard and rerun"
+keep=(DOPPLER_PROJECT DOPPLER_ENVIRONMENT DOPPLER_CONFIG "${names[@]}")
+have="$(names_of "$dst_p" "$dst_c")" || stop "cannot list the names in $dst_p/$dst_c"
+extra="$(grep -vxF "${keep[@]/#/-e}" <<<"$have" || true)"
+[[ -z "$extra" ]] || stop "$dst_p/$dst_c also holds: $(tr '\n' ' ' <<<"$extra"); stopping, no token was made"
+
+# 3. Copy, compare, then drop the App's names from dev_personal.
+for n in "${names[@]}"; do
+  if has "$src_p" "$src_c" "$n"; then
+    if ! has "$dst_p" "$dst_c" "$n"; then
+      dp secrets get "$n" -p "$src_p" -c "$src_c" --plain |
+        dp secrets set "$n" -p "$dst_p" -c "$dst_c" --no-interactive --silent >/dev/null
+      say "copied $n to $dst_p/$dst_c"
+    fi
+    # Both reads must succeed: two failed reads hash the same empty input.
+    a="$(digest "$dst_p" "$dst_c" "$n")" || stop "cannot read $n from $dst_p/$dst_c"
+    b="$(digest "$src_p" "$src_c" "$n")" || stop "cannot read $n from $src_p/$src_c"
+    [[ "$a" == "$b" ]] ||
+      stop "$n differs between $dst_p/$dst_c and $src_p/$src_c; stopping (decide which value is current)"
+  else
+    # A rerun after the App's names left dev_personal: prd must have them.
+    has "$dst_p" "$dst_c" "$n" || stop "neither config has $n; run agents:app-create first"
+  fi
+done
+for n in "${moved[@]}"; do
+  if has "$src_p" "$src_c" "$n"; then
+    dp secrets delete "$n" -p "$src_p" -c "$src_c" --yes --silent >/dev/null
+    say "removed $n from $src_p/$src_c (only the PC needs it)"
+  fi
+done
+
+# 4. A new read-only token for the PC, piped straight to its file. The older ones are revoked after the check.
+old="$(dp configs tokens -p "$dst_p" -c "$dst_c" --json | jq -r --arg t "$tokname" '(. // [])[] | select(.name == $t) | .slug')"
+dp configs tokens create "$tokname" -p "$dst_p" -c "$dst_c" --access read --plain |
+  ssh -o BatchMode=yes pc 'umask 077 && mkdir -p ~/.config/agent-secrets && d=~/.config/agent-secrets &&
+    cat >"$d/.doppler-token.new" && test -s "$d/.doppler-token.new" && mv -f "$d/.doppler-token.new" "$d/doppler-token"'
+say "wrote the PC's ~/.config/agent-secrets/doppler-token (0600)"
+
+# 5. The PC reads the names with it (names only).
+got="$(ssh -o BatchMode=yes pc 'DOPPLER_TOKEN="$(cat ~/.config/agent-secrets/doppler-token)" \
+  mise exec doppler@3.77.1 -- doppler secrets --only-names --json --no-check-version' | jq -r '(. // {}) | keys[]')"
+for n in "${names[@]}"; do
+  grep -qx "$n" <<<"$got" || stop "the PC's token does not read $n"
+done
+for s in $old; do
+  dp configs tokens revoke "$s" -p "$dst_p" -c "$dst_c" --silent >/dev/null
+  say "revoked an older $tokname token"
+done
+say "done; the PC reads the four names from $dst_p/$dst_c"
+say "reminder: CLAUDE_CODE_OAUTH_TOKEN and GEMINI_API_KEY live in $src_p/$src_c and $dst_p/$dst_c; a rotation sets both"

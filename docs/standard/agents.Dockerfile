@@ -3,7 +3,9 @@
 #   2. a non-root user, because Claude Code refuses --dangerously-skip-permissions as root;
 #   3. the agent CLIs from their native installers (never mise tools), and their plugins from
 #      each CLI's own commands (D147), at the latest version on every build.
-# No credential is baked in: each agent logs in once per container, onto a named volume (D151).
+# No credential is baked in. The PC's agent-secrets service writes Claude Code's key and a one-hour GitHub App token
+# into a folder that agents:up mounts read-only at /run/agent-secrets (D155); Codex and the Antigravity CLI keep the
+# owner's own login, made once per project on each machine onto a named volume (D151).
 #
 # Build on the PC:  mise run agents:image      Start:  mise run agents:up
 # The volumes are named per container, and Docker fills an empty named volume from the image's
@@ -74,9 +76,19 @@ RUN export PATH=/home/dev/.local/bin:/home/dev/.opencode/bin:/usr/local/bin:/usr
 ENV MISE_ENV=ci
 RUN cd /opt/cpp-standard && mise install
 # gh for pushing and pull requests (D153). Ubuntu 26.10's apt has only gh 2.46, so mise installs
-# the current release for the dev user; the owner logs gh in once per container.
+# the current release for the dev user.
 ARG GH_VER=2.104.0
 RUN mise use -g "gh@${GH_VER}"
+# D155: git and gh read the App token from /run/agent-secrets at each use, so a refreshed token needs no restart;
+# the shells read Claude Code's key from it at each start. ~/.local/bin is first on PATH, so the gh
+# wrapper runs ahead of mise's shim, which it calls.
+COPY --chmod=755 agent-auth/git-credential-agent /usr/local/bin/git-credential-agent
+COPY --chmod=755 agent-auth/gh /home/dev/.local/bin/gh
+COPY --chmod=644 agent-auth/profile.sh /etc/profile.d/agent-secrets.sh
+USER root
+RUN git config --system credential.https://github.com.helper /usr/local/bin/git-credential-agent \
+    && printf '\n. /etc/profile.d/agent-secrets.sh\n' >> /etc/bash.bashrc
+USER dev
 COPY --chmod=755 agent-plugins /usr/local/bin/agent-plugins
 RUN PATH=/home/dev/.local/bin:/home/dev/.opencode/bin:/usr/local/bin:/usr/bin:/bin agent-plugins install
 

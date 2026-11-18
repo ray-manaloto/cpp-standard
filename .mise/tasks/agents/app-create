@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#MISE description="Create the agents GitHub App by GitHub's manifest flow and store its key in Doppler (D155); the owner clicks Create, then Install"
+#USAGE flag "--name <name>" help="App name (default: ray-manaloto-agents)"
+#
+# The flow is python/agents/app_create.py (standard library only). The private key goes from GitHub's
+# answer straight into `mise run secret:set` on stdin; it is never printed or written to a file.
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/app_create.py"
