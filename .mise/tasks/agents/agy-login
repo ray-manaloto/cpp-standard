@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-#MISE description="The owner signs the Antigravity CLI in to their Google account in a project container, in their own terminal (D155)"
+#MISE description="Signs the Antigravity CLI in to the owner's Google account in a project container, from a terminal (D155, D166)"
 #USAGE arg "<project>" help="Project name; the container is <project>-agents"
 #USAGE flag "--host <host>" default="pc" help="The PC (over ssh) or this Mac (its current Docker context)" {
 #USAGE   choices "pc" "mac"
 #USAGE }
 #
-# Owner only. Google allows subscription use from a command the owner starts directly, but not from an agent
-# (AGENTS.md, antigravity.google/terms), so no agent runs this task and agents:up never starts agy: it only names
-# this task. agy's sign-in prints a link; the owner opens it and signs in. The login stays on the
-# project's gemini volume, once per project per machine.
+# agy's sign-in is interactive: it prints a link, which is opened in a browser and signed in with the owner's Google
+# account. agents:up does not start agy; it only names this task. The login stays on the project's gemini volume,
+# once per project per machine.
 set -euo pipefail
 name="${usage_project:?}-agents"
-# An agent's shell has no terminal; the owner's has one.
+# The sign-in needs a terminal.
 [[ -t 0 && -t 1 ]] || {
-  echo "agents:agy-login: the owner runs this in their own terminal; no agent runs agy (AGENTS.md)" >&2
+  echo "agents:agy-login: needs a terminal: agy's Google sign-in is interactive" >&2
   exit 2
 }
 if [[ "${usage_host:-pc}" == mac ]]; then
