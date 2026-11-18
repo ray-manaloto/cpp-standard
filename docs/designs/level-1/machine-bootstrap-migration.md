@@ -297,7 +297,7 @@ Each step is checked with the plan diff and both doctors, and undone by pointing
 ### Which other home files `mise.mac.toml` manages (D150, M1)
 
 The owner listed further home files and folders for mise to manage. Each is decided by what it
-holds, by mise's own rules (mise dotfiles: credential-named files are left out unless encrypted,
+holds, by mise's own rules (mise dotfiles: credential-named files are left out unless an entry encrypts them or selects them by an `include` list,
 history and session state stay out, `track-local` keeps a file's history on one machine) and by
 what risu729/dotfiles does (its `[dotfiles]` table manages `~/.ssh/config` and a public key,
 `~/.config/git/*`, `~/.bashrc` and the zsh config, with `os` and `profile` variants, and leaves
@@ -305,7 +305,7 @@ shell history to atuin). Checked on this Mac on 2026-11-17, by file names only.
 
 | Path | Holds | Decision |
 |---|---|---|
-| `~/.ssh` | `config`, `config.d/`, keys, `known_hosts`, `authorized_keys`, agent socket | Manage `config` and `config.d/` (the tailnet file is already a template from Doppler). Keys never leave the machine; mise's filter already drops `id_*`. `known_hosts` and `authorized_keys` describe the machine: `track-local`. |
+| `~/.ssh` | `config`, `config.d/`, keys, `known_hosts`, `authorized_keys`, agent socket | Manage `config` and `config.d/` (the tailnet file is already a template from Doppler). Keys never leave the machine; mise's filter drops `id_*` from a tracked `~/.ssh` only while no `include` list selects them, so the entry lists `config` and `config.d/**` by name. `known_hosts` and `authorized_keys` describe the machine: `track-local`. |
 | `~/.gitconfig` | Identity, aliases, settings | Managed, moved to `~/.config/git/config` as risu729 does. The email is the GitHub noreply address, rendered from a Doppler value, so no address is written into the repository. Changes to git settings still need the owner's word. |
 | `~/.doppler` | The Doppler CLI's login and fallback files | Never managed: it is a credential store. A machine gets it from `doppler login`. |
 | `~/.continue` | An empty `skills/` folder | Nothing to manage. Continue's skills come from the agent skill sources, not a file here. |

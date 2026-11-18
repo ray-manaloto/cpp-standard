@@ -14,6 +14,6 @@ git -C "$root" branch -r --contains "$ref" | grep -q . || {
   exit 2
 }
 export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
-docker build --progress=plain --build-arg "CPP_STANDARD_REF=$ref" -t "$tag" \
+docker build --progress=plain --build-arg "CPP_STANDARD_REF=$ref" --build-arg "AGENTS_CACHE_BUST=$(date +%s)" -t "$tag" \
   -f "$root/docs/standard/agents.Dockerfile" "$root/docs/standard"
 docker run --rm "$tag" cat /home/dev/.agent-versions

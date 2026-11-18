@@ -15,6 +15,9 @@ project="${usage_project:?}"
 name="${project}-agents"
 image="${usage_image:-cpp-standard-agents:dev}"
 repo="${usage_repo:-https://github.com/ray-manaloto/${project}.git}"
+# The container has no SSH key, only the gh login (D153), so a GitHub SSH URL is cloned over HTTPS.
+repo="${repo/#git@github.com:/https://github.com/}"
+repo="${repo/#ssh:\/\/git@github.com\//https://github.com/}"
 export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
 volumes=(claude codex gemini opencode-data opencode-config opencode-state gh)
 if [[ -n "${usage_fresh:-}" ]]; then
@@ -42,4 +45,6 @@ fi
 # no address is written into the repository or the image.
 docker exec "$name" git config --global user.name "$(git config user.name)"
 docker exec "$name" git config --global user.email "$(git config user.email)"
+# ~/.gitconfig is not on a volume, so a recreated container gets the gh credential helper back.
+docker exec "$name" bash -lc 'gh auth status >/dev/null 2>&1 && gh auth setup-git || true'
 docker ps --filter "name=^${name}$" --format '{{.Names}} {{.Status}} {{.Image}}'

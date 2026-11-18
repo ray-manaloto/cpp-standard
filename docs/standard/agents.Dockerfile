@@ -49,6 +49,12 @@ USER dev
 WORKDIR /home/dev
 ENV PATH=/home/dev/.local/bin:/home/dev/.opencode/bin:$PATH \
     CLAUDE_CONFIG_DIR=/home/dev/.claude
+# Every volume mount point exists, owned by dev: Docker creates a missing one as root.
+RUN mkdir -p .claude .codex .gemini .config/gh .config/opencode .local/share/opencode .local/state/opencode
+
+# Changes on every agents:image run, so the layers below always fetch the latest releases (D152)
+# while the toolchain layers above stay cached.
+ARG AGENTS_CACHE_BUST=0
 
 # Layer 3: the native installers (the same URLs as dotfiles' agents:update), then the plugins.
 # The installers run without the mise shims on PATH: outside a project with a version set, a
