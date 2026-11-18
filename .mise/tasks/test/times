@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Each Python suite's last run: wall time, status, slowest tests and the 5-minute load at start and end (#186)"
+#USAGE flag "--markdown" help="Print the Markdown table CI puts in its job summary instead of JSON lines"
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+mode=report
+[[ "${usage_markdown:-false}" == "true" ]] && mode=summary
+exec python3 -I "$root/python/suites/record.py" "$mode"

@@ -5,4 +5,5 @@
 #USAGE arg "[args]..." help="Arguments for pytest" var=#true
 set -euo pipefail
 # Serial: the suite takes seconds, so no xdist worker pool.
-exec .venv/bin/python -I -m pytest "$@"
+# record.py (#186) passes the output and status through and keeps the wall time, slowest tests and load.
+exec python3 -I ../suites/record.py run pctools -- .venv/bin/python -I -m pytest --durations=25 "$@"

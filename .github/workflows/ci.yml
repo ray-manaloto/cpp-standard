@@ -31,6 +31,8 @@ jobs:
     env:
       # mise.ci.toml: Python and uv on Linux for the pctools steps.
       MISE_ENV: ci
+      # Each Python suite's record (python/suites/record.py, #186): the summary and artifact steps read them here.
+      SUITE_TIMES_DIR: /tmp/suite-times
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -47,6 +49,20 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         # --ci: the ci profile turns off the repotools suite, which is Mac-only for now (D163).
         run: mise run check --online --ci
+      # Neither step can fail the job (#186): the table goes in the job summary and the records in an artifact.
+      - name: Summarize the test suites
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: python3 -I python/suites/record.py summary >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the suite records
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: suite-times
+          path: ${{ env.SUITE_TIMES_DIR }}
+          if-no-files-found: warn
+          retention-days: 30
 
   # M1a PR 1 (#127): the D51 content check of the pins and the golden vectors
   # for pin validation and artifact tags (D90). Standard-library Python on the
