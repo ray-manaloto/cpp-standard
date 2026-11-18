@@ -10,3 +10,7 @@ dist/
 # so Claude Code finds them as slash commands.
 .agents/skills/.mise-skills.json
 .agents/skills/hk-*
+
+# The ticket roadmap that /to-spec and /to-tickets keep in the main checkout. It is rebuilt from GitHub
+# (workflowtools tickets --rebuild), so it is local state, not a source file.
+/task_plan.md
