@@ -16,6 +16,11 @@ min_hk_version = "2.13.0"
 // build id.
 exclude = List("**/*.lock", "**/.mise/locks/**", "**/*.patch", "toolchains/*/macos/*-inputs.json")
 
+// dotfiles' files, copied byte for byte by M1 of docs/designs/level-1/machine-bootstrap-migration.md
+// (D150) so that mise.mac.toml's sources stay dotfiles' own. The style steps below skip them; every
+// secret and hygiene step still runs on them. The excludes come out in M2, when the copy becomes ours to edit.
+local dotfilesCopy = List("unix/home/**", "python/guards/**")
+
 local shellFiles = List(new FileSelector { glob = List("**/*.sh", "**/*.bash", ".mise/tasks/**") })
 // mise.pc.toml: test_pc_fence.py reads its fence rules.
 local pctoolsFiles =
@@ -64,8 +69,9 @@ local gateSteps = new Mapping<String, Step> {
     check = "mise run pctools:sync"
   }
   ["ruff"] = Builtins.ruff
-  ["ruff-format"] = Builtins.ruff_format
+  ["ruff-format"] = (Builtins.ruff_format) { exclude = dotfilesCopy }
   ["ty"] = (Builtins.ty) {
+    exclude = dotfilesCopy
     depends = List("pctools-sync")
     check = "ty check --project python/pctools"
   }
@@ -94,18 +100,25 @@ local gateSteps = new Mapping<String, Step> {
   }
   ["pkl"] = Builtins.pkl
   ["pkl-format"] = Builtins.pkl_format
-  ["tombi"] = (Builtins.tombi) { check = "tombi lint --error-on-warnings {{ files }}" }
+  ["tombi"] = (Builtins.tombi) {
+    exclude = dotfilesCopy
+    check = "tombi lint --error-on-warnings {{ files }}"
+  }
   // mise.pc.toml stays byte for byte the entries of dotfiles' config.pc.toml until Phase 3 of
-  // docs/designs/level-1/machine-bootstrap-migration.md, so it is not reformatted.
-  ["tombi-format"] = (Builtins.tombi_format) { exclude = List("mise.pc.toml") }
-  ["rumdl"] = Builtins.rumdl
-  ["typos"] = Builtins.typos
+  // docs/designs/level-1/machine-bootstrap-migration.md, and mise.mac.toml keeps dotfiles' table as it
+  // is until M2, so neither is reformatted.
+  ["tombi-format"] = (Builtins.tombi_format) {
+    exclude = List("mise.pc.toml", "mise.mac.toml") + dotfilesCopy
+  }
+  ["rumdl"] = (Builtins.rumdl) { exclude = dotfilesCopy }
+  ["typos"] = (Builtins.typos) { exclude = dotfilesCopy }
   ["ryl"] = Builtins.ryl
-  ["ryl-format"] = Builtins.ryl_format
+  ["ryl-format"] = (Builtins.ryl_format) { exclude = dotfilesCopy }
   // jq sorts keys. The pctools schema's property order is the order of pc:doctor's JSON fields,
   // and pc-kernel.json's is the order the doctor passes the keys to sysctl, so both keep theirs.
   ["jq"] = (Builtins.jq) {
-    exclude = List("python/pctools/schema/*.json", "python/pctools/src/pctools/data/*.json")
+    exclude =
+      List("python/pctools/schema/*.json", "python/pctools/src/pctools/data/*.json") + dotfilesCopy
   }
   ["editorconfig-checker"] = Builtins.editorconfig_checker
   ["betterleaks"] = Builtins.betterleaks
@@ -115,10 +128,13 @@ local gateSteps = new Mapping<String, Step> {
   ["trailing-whitespace"] = Builtins.trailing_whitespace
   ["mixed-line-ending"] = Builtins.mixed_line_ending
   ["byte-order-marker"] = Builtins.byte_order_marker
-  ["fix-smart-quotes"] = Builtins.fix_smart_quotes
+  ["fix-smart-quotes"] = (Builtins.fix_smart_quotes) { exclude = dotfilesCopy }
   ["check-merge-conflict"] = Builtins.check_merge_conflict
   ["check-case-conflict"] = Builtins.check_case_conflict
-  ["check-symlinks"] = Builtins.check_symlinks
+  // The copied dsymutil link points at /usr/bin/dsymutil, which exists only on macOS (CI runs on Linux).
+  ["check-symlinks"] = (Builtins.check_symlinks) {
+    exclude = List("unix/home/.config/mise/apple-bin/dsymutil")
+  }
   ["destroyed-symlinks"] = Builtins.destroyed_symlinks
   ["forbid-submodules"] = Builtins.forbid_submodules
   ["check-executables-have-shebangs"] = Builtins.check_executables_have_shebangs

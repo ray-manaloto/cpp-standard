@@ -1,0 +1,973 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+
+# Mac host target: ray-manaloto/dotfiles is the sole source for this user-global
+# mise config through mise-native dotfiles. The takeover is pending as of
+# 2026-10-09; this active file remains standalone. Preserve host changes here
+# and stage the durable source in dotfiles before declaring migration complete.
+# Tracking: https://github.com/ray-manaloto/dotfiles-legacy/issues/220 (global config)
+# Broader takeover: https://github.com/ray-manaloto/dotfiles-legacy/issues/431
+# Ownership decision: https://github.com/ray-manaloto/dotfiles-legacy/issues/448
+# Plan: ray-manaloto/dotfiles/docs/specs/mise-native-dotfiles-plan.md
+# Add the include below by array merge; never replace the actual global config.
+# Built-in {{ mise_config_dir }} (2026.10.19) and system_brew_prefix need 2026.10.19 or newer;
+# task.history needs 2026.11.3; from 2026.11.8 `mise lock <tool>` fails on an unknown tool instead of
+# writing nothing. A hard minimum, not a soft one: an older mise that meets a setting it doesn't know
+# warns and drops this file's whole [settings] table (src/config/settings.rs:1635-1646 at v2026.10.19), paranoid and the disable lists included, where this stops it with an upgrade hint.
+min_version = "2026.11.8"
+
+[settings]
+github.credential_command = "gh auth token"
+experimental = true
+#verbose = true
+activate_aggressive = true
+# Your own repos load by path, and so do Codex task copies (~/.codex/worktrees/<id>/<repo>): Codex
+# makes one only for a task you started on that repo. mise matches these by folder prefix only, so
+# a Codex copy of any repo loads. Any other repo runs no mise config until you approve it. Without
+# paranoid config mode, `mise install`, `mise run` and `mise exec` in a fresh clone trust it on the
+# spot and run its env, hooks and tasks. With it, they exit 1 until `mise trust`, that approval is
+# tied to the file's contents (an edit needs approval again), and worktrees outside the trusted
+# folder do not inherit it. Reading trees (third-party clones, mirrors, retired checkouts) are in
+# miserc.toml's ignored_config_paths, which wins over this list, so their configs never load and
+# shims there keep working. The global git hooks run `mise x hk`, so `git commit` in an unapproved
+# clone with a mise.toml fails until `mise trust` (or `HK=0`). Test harnesses that make configs in temporary folders set
+# MISE_TRUSTED_CONFIG_PATHS for their run. python/tests/test_mise_trust.py checks all of this.
+# Paranoid mode never shares trust between git worktrees (mise docs/paranoid.md), so an owned repo
+# whose worktrees live outside ~/dev/github/ray-manaloto names its checkout and worktree folder here
+# (owner, 2026-11-13): free-models and the ~/dev/tmp/free-models-wt/<branch> worktrees its ship.py makes.
+paranoid = ["config"]
+trusted_config_paths = [
+    "~/.config/mise",
+    "~/dev/github/ray-manaloto",
+    "~/.codex/worktrees",
+    "~/dev/tmp/free-models",
+    "~/dev/tmp/free-models-wt",
+]
+minimum_release_age = "0s"
+lockfile = true
+# DL-768: one global config and one lock for every OS this repo supports.
+lockfile_platforms = ["macos-arm64", "linux-x64", "linux-arm64"]
+
+disable_tools = ["antigravity-cli", "aqua:google-antigravity/antigravity-cli", "npm:@openai/codex", "aqua:openai/codex", "codex", "claude-code", "npm:@anthropic-ai/claude-code", "github:anthropics/claude-code", "opencode", "aqua:anomalyco/opencode", "npm:opencode-ai", "npm:@opencode/cli", "github:anomalyco/opencode", "aqua:sst/opencode", "github:sst/opencode", "mise", "aqua:jdx/mise", "github:jdx/mise"]
+# claude/codex/agy/opencode/mise are native-installer-only (Ray, 2026-10-01; opencode 2026-11-02; mise 2026-11-14). `disable_tools` above is REPLACED by any
+# project's own list, so a stale worktree pinning one of them still auto-installed it (dag-tick launchd job,
+# `mise exec` in a pytest gate). This key is NOT overridden by any tracked project and blocks auto-install on
+# `mise exec`/`mise run`; it does not block an explicit `mise install <tool>`. Match is literal to the config
+# key, so every spelling is listed. Never use MISE_DISABLE_TOOLS for this: it replaces project lists.
+auto_install_disable_tools = ["antigravity-cli", "aqua:google-antigravity/antigravity-cli", "codex", "aqua:openai/codex", "npm:@openai/codex", "claude-code", "github:anthropics/claude-code", "npm:@anthropic-ai/claude-code", "opencode", "aqua:anomalyco/opencode", "npm:opencode-ai", "npm:@opencode/cli", "github:anomalyco/opencode", "aqua:sst/opencode", "github:sst/opencode", "mise", "aqua:jdx/mise", "github:jdx/mise"]
+pin = true
+install_layout = "identity"
+# Keep each task's last 20 runs (time, result, exit code) for `mise tasks history`, under
+# $MISE_STATE_DIR/task-history/. On by default since 2026.11.3; set here so a default change can't
+# turn it off. task.logs (each task's last output) stays off: it can keep unredacted private text.
+task.history = true
+
+[settings.self_update]
+auto = true
+check_duration = "1h"
+
+#minimum_release_age_excludes = ["pipx:langgraph-cli", "pipx:specify-cli", "npm:oh-my-codex", "npm:skills", "npm:renovate", "rumdl", "docker-cli", "gemini", "npm:agent-browser", "npm:portless", "github:DopplerHQ/cli", "github:docker/docker-agent", "bats", "pipx:datamodel-code-generator", "pipx:notebooklm-py"]
+[settings.go]
+set_gobin = false
+
+[settings.npm]
+# The embedded aube: it checks provenance and trust, and a mise.lock holding an aube dependency graph (as
+# openwiki does) installs only under it.
+package_manager = "aube"
+
+[settings.pipx]
+uvx = true
+
+[settings.python]
+compile = false
+#precompiled_arch = "x86_64_v2"
+#precompiled_flavor = "x86_64_v2-*"
+#precompiled_os = "x86_64_v2"
+# Walks up to the nearest uv.lock; if its .venv (or UV_PROJECT_ENVIRONMENT) is missing, creates it
+# with uv, then activates it (mise src/uv.rs). Through a shim, `python3` still runs mise's Python, but
+# a non-interactive caller whose PATH starts with the shims (hooks from a GUI-launched Claude, launchd)
+# creates that .venv as a side effect. An activated zsh puts the install dirs first, so it does not.
+uv_venv_auto = "create|source"
+
+# Agent skills that tools ship (fnox, hk, pitchfork, usage, aube, communique): after every install, `mise use`
+# and upgrade, mise re-links them into ~/.agents/skills and removes the links of skills no longer active
+# (src/packslip.rs:1262-1302 at v2026.11.7). A project only gets its own config's tools (SkillsScope::Project),
+# and with prune an empty project pass removes the links mise made there, so the dotfiles checkout keeps none.
+# ~/.claude/skills is a real folder mise doesn't write to; its entries are relative links into ~/.agents/skills
+# (../../.agents/skills/<name>, the skills CLI's pattern), so they follow. A tool that ships a new skill needs one
+# such link there.
+[settings.skills]
+auto_sync = true
+prune = true
+
+[settings.status]
+show_tools = true
+missing_tools = "always"
+show_env = true
+
+# mise-env-fnox is intentionally disabled. Empirical reproduction on
+# 2026-04-09 showed that enabling it spawns runaway `fnox config-files`
+# subprocesses (10+ concurrent at 100% CPU each, shell hangs during
+# login-shell sourcing).
+# Shells hold no secrets; commands get them through `fnox exec`.
+
+
+[env]
+HK_MISE = "1"
+# Platform hints for tool backends
+#MISE_OS = "macos"
+#MISE_ARCH = "arm"
+CONDA_SUBDIR = "osx-arm64"
+GIT_TERMINAL_PROMPT = "0"
+# vcpkg's root is the mise vcpkg-tool install (see [tools]); no telemetry.
+VCPKG_ROOT = { value = "{{ tools['github:microsoft/vcpkg-tool'].path }}", tools = true }
+VCPKG_DISABLE_METRICS = "1"
+# TypeScript 7's own language server (`tsc --lsp --stdio`), started by the dotfiles typescript-native-lsp plugin.
+# Claude Code expands no environment variables in an LSP command, so the plugin's sh reads this one, and an npm
+# tool that bundles an older tsc can't shadow it on PATH.
+TS_LSP_TSC = { value = "{{ tools['npm:typescript'].path }}/node_modules/.bin/tsc", tools = true }
+# NotebookLM auth: standardize paths so agents find credentials consistently
+NOTEBOOKLM_HOME = "~/.notebooklm"
+# Mossop pattern: name the brew prefix once; PATH entries below expand it (env_shell_expand).
+HOMEBREW_PREFIX = "{{ system_brew_prefix }}"
+# DL-766: ordinary LLVM clang owns CC/CXX; paths come from mise templates, never literals (DL-764).
+CC = "{% if os() == 'macos' %}{{ system_brew_prefix }}/opt/llvm/bin/clang{% else %}clang{% endif %}"
+CXX = "{% if os() == 'macos' %}{{ system_brew_prefix }}/opt/llvm/bin/clang++{% else %}clang++{% endif %}"
+# bun's node-gyp helper runs `bun x node-gyp` when npm_config_node_gyp is unset; a stale mise
+# node-gyp shim then falls back to that helper and it calls itself forever. Name the real node-gyp
+# (node's bundled npm, version read from mise.lock) for every npm tool mise installs and every
+# bun or npm run in a shell, so no shim is ever looked up. A home with no mise.lock next to this file
+# (a scratch or test home) gets an empty value: read_toml of a missing file fails every mise command.
+npm_config_node_gyp = "{% set lock = xdg_config_home ~ '/mise/mise.lock' %}{% if lock is file %}{{ xdg_data_home }}/mise/installs/node/{{ read_toml(path=lock)['tools']['node'][0]['version'] }}/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js{% endif %}"
+
+[env._]
+#_.fnox-env = { tools = true }
+# LLVM/Clang: Homebrew's latest LLVM (clang-format, clang-tidy, lldb, lld included)
+# Brew formula: https://formulae.brew.sh/formula/llvm (keg-only, needs explicit paths)
+# Prefix is arch-aware: arm64=/opt/homebrew, amd64=/usr/local
+# DL-591: keg-only llvm and lldb need their opt bins; make gnubin gives an unprefixed GNU make;
+# DL-755: ~/.local/share/p2996/bin holds <name>-p2996 links into the prefix ~/.local/share/p2996/<id>.
+# apple-bin holds only a dsymutil link to /usr/bin/dsymutil, ahead of Homebrew LLVM: GCC's -g link runs
+# dsymutil from PATH, and Homebrew LLVM's was reported to fail with SIGILL there. clang, clang-format and lldb stay Homebrew's.
+path = [
+  "~/.config/mise/apple-bin",
+  "$HOMEBREW_PREFIX/opt/llvm/bin",
+  "$HOMEBREW_PREFIX/opt/lldb/bin",
+  "$HOMEBREW_PREFIX/opt/make/libexec/gnubin",
+  "~/.local/share/p2996/bin",
+  # DL-757: opam switch "llvm" (OCaml, ocamlfind, ctypes) for LLVM's OCaml bindings.
+  "~/.opam/llvm/bin",
+  # DL-687: Orca CLI (orca) ships inside the app bundle.
+  "/Applications/Orca.app/Contents/Resources/bin",
+]
+
+[tools]
+#"github:docker/buildx" = { version = "0.38.1", asset_pattern = "buildx-v0.38.0.darwin-arm64", bin = "docker-buildx" }
+# Docker Desktop links its own buildx into ~/.docker/cli-plugins and re-links it on each update. Docker
+# searches config.json's cliPluginsExtraDirs first (docker/cli v29 cli-plugins/manager/manager.go:42-51),
+# so after every `mise install` (mise v2026.11.7 src/backend/mod.rs:5800, when = "always") this links the
+# pinned buildx into its own folder and puts that folder first; other keys in config.json stay as they are.
+"aqua:docker/buildx" = { version = "0.39.0", bin = "docker-buildx", minimum_release_age = "0s", postinstall = { when = "always", run = "d=\"$HOME/.local/share/docker/cli-plugins\" f=\"$HOME/.docker/config.json\"; mkdir -p \"$d\" \"$HOME/.docker\"; ln -sfn \"$MISE_TOOL_INSTALL_PATH/docker-cli-plugin-docker-buildx\" \"$d/docker-buildx\"; [ -s \"$f\" ] || echo '{}' > \"$f\"; jq -e --arg d \"$d\" '.cliPluginsExtraDirs[0] == $d' \"$f\" >/dev/null || { jq --arg d \"$d\" '.cliPluginsExtraDirs = [$d] + ((.cliPluginsExtraDirs // []) - [$d])' \"$f\" > \"$f.new\" && mv \"$f.new\" \"$f\"; }" } }
+# Python 3.15 is the default; retain 3.14.8 for incompatible CLI environments.
+# Affected tools select their interpreter with native per-tool options.
+# Runtime selectors are native mise options; see docs/python-upgrade-policy.md.
+# update:mise keeps these minor/patch selections and retains recovery installs.
+python = [{ version = "3.15", minimum_release_age = "0s" }, { version = "3.14.8", minimum_release_age = "0s" }]
+#python = { version = "3.15.2", minimum_release_age = "0s" }
+pipx = { version = "1.18.16", minimum_release_age = "0s" }
+npm = { version = "12.2.2", minimum_release_age = "0s" }
+bun = { version = "1.4.4", minimum_release_age = "0s" }
+node = { version = "26.13.1", minimum_release_age = "0s" }
+go = { version = "1.27.4", minimum_release_age = "0s" }
+rust = { version = "1.100.0", minimum_release_age = "0s" }
+pixi = { version = "0.84.2", minimum_release_age = "0s" }
+uv = { version = "0.13.8", minimum_release_age = "0s" }
+chezmoi = { version = "2.74.1", minimum_release_age = "0s" }
+pkl = { version = "0.33.0", minimum_release_age = "0s" }
+hk = { version = "2.13.0", workflow = "release.yml", minimum_release_age = "0s" }  # registry name (backend packslip:github.com/jdx/hk first) so `mise x hk` in the global git hooks resolves this pin; was "packslip:github.com/jdx/hk", changed 2026-10-14
+#fnox = { version = "1.40.0", asset_pattern = "*aarch64-apple-darwin.tar.gz", minimum_release_age = "0s" }
+# 1.48.0 streams proxy responses and survives a client disconnect (fnox #1113, #1112). Its macOS below 26
+# crash (fnox #1156) does not matter: those versions are not supported here (owner ruling 2026-11-11).
+fnox = { version = "1.48.0", workflow = "release.yml", minimum_release_age = "0s" }
+pitchfork = { version = "2.35.0", workflow = "release.yml@refs/heads/main", minimum_release_age = "0s" }
+usage = { version = "7.4.0", workflow = "publish-cli.yml", minimum_release_age = "0s" }
+#communique = { version = "1.6.0", workflow = "release.yml@refs/heads/main", asset_pattern = "*aarch64-apple-darwin.tar.gz", minimum_release_age = "0s" }
+communique = { version = "1.8.0", workflow = "release.yml@refs/heads/main", minimum_release_age = "0s" }
+starship = { version = "1.27.0", minimum_release_age = "0s" }
+ripgrep = { version = "15.2.0", minimum_release_age = "0s" }
+fd = { version = "10.5.2", minimum_release_age = "0s" }
+zoxide = { version = "0.10.0", minimum_release_age = "0s" }
+bat = { version = "0.26.1", minimum_release_age = "0s" }
+# Disk usage tree (owner, 2026-11-12): Rust, aqua:bootandy/dust in the mise registry.
+dust = { version = "1.2.7", minimum_release_age = "0s" }
+"vfox:jdx/vfox-eza" = { version = "0.23.5", minimum_release_age = "0s" }
+fzf = { version = "0.75.0", minimum_release_age = "0s" }
+delta = { version = "0.20.1", minimum_release_age = "0s" }
+hyperfine = { version = "2.0.0", minimum_release_age = "0s" }
+glow = { version = "3.0.0", minimum_release_age = "0s" }
+atuin = { version = "18.24.6", minimum_release_age = "0s" }
+"github:ast-grep/ast-grep" = { version = "0.51.2", minimum_release_age = "0s" }
+"aqua:FiloSottile/age" = { version = "1.3.2", minimum_release_age = "0s" }
+sops = { version = "3.13.3", minimum_release_age = "0s" }
+#github:DopplerHQ/cli" = { version = "3.77.0", exe = "doppler", asset_pattern = "*macOS_arm64.tar.gz", minimum_release_age = "0s" }
+doppler = { version = "3.77.1", minimum_release_age = "0s" }
+jq = { version = "1.8.2", minimum_release_age = "0s" }
+yq = { version = "4.54.3", minimum_release_age = "0s" }
+shellcheck = { version = "0.11.0", minimum_release_age = "0s" }
+hadolint = { version = "2.15.1", minimum_release_age = "0s" }
+pre-commit = { version = "4.7.0", minimum_release_age = "0s" }
+#"pipx:mgrep" = { version = "0.1.6", minimum_release_age = "0s" }
+typos = { version = "1.52.2", minimum_release_age = "0s" }
+# Lint tools hk builtins run in C++ projects: shellharden, editorconfig_checker, lychee and lychee_extended,
+# which runs `flint checker lychee` (grafana/flint, signed with packslip, the backend hk names for it).
+shellharden = { version = "4.3.2", minimum_release_age = "0s" }
+editorconfig-checker = { version = "4.0.2", minimum_release_age = "0s" }
+lychee = { version = "0.24.2", minimum_release_age = "0s" }
+"packslip:grafana/flint" = { version = "0.22.15", minimum_release_age = "0s" }
+#"pypi:yamllint" = { version = "1.38.0", python = "3.14.8", install_env = { UV_NO_BUILD = "1" }, minimum_release_age = "0s" }
+aws-cli = { version = "2.40.2", symlink_bins = "true", minimum_release_age = "0s" }
+#azure-cli = { version = "2.91.0", dependency_prereleases = "allow", with = [], python = "3.14.8", install_env = { UV_NO_BUILD = "1" }, minimum_release_age = "0s", expose = [] }
+"aqua:aws/session-manager-plugin" = { version = "1.2.896.0", minimum_release_age = "0s" }
+github-cli = { version = "2.104.0", minimum_release_age = "0s" }
+cloudflared = { version = "2026.11.0", minimum_release_age = "0s" }
+pandoc = { version = "3.14", minimum_release_age = "0s" }
+tmux = { version = "3.8", minimum_release_age = "0s" }
+lefthook = { version = "2.2.2", minimum_release_age = "0s" }
+devcontainer-cli = { version = "0.90.0", minimum_release_age = "0s" }
+docker-cli = { version = "29.9.3", minimum_release_age = "0s" }
+docker-compose = { version = "5.7.1", minimum_release_age = "0s" }
+# Tart, the macOS VM host. The registry maps tart to aqua:openai/tart: the release tart.tar.gz,
+# sha256-checked. A project that pins its own tart should pin this same version. macOS only.
+tart = { version = "2.41.1", os = ["macos"] }
+# Docker Sandboxes (sbx), from its release app bundle. Not a bootstrap brew-cask: entry: its cask lives in
+# docker/tap and uses uninstall_preflight_steps, which mise 2026.11.8 cannot evaluate. bin_path keeps the
+# Sbx.app bundle whole (setting it turns off mise's automatic strip), so sbx finds its Helpers. The bundle ships
+# zsh, bash and fish completions; postinstall links them where each shell looks (zsh: the fpath folder in 10-zsh.zsh),
+# on every install, as buildx's does above, so an upgrade repoints them at the new install.
+"github:docker/sbx-releases" = { version = "0.50.1", asset_pattern = "DockerSandboxes-darwin.tar.gz", bin_path = "Sbx.app/Contents/MacOS", filter_bins = "sbx", os = ["macos"], minimum_release_age = "0s", postinstall = { when = "always", run = "c=\"$MISE_TOOL_INSTALL_PATH/Sbx.app/Contents/Resources/completions\" z=\"${XDG_CACHE_HOME:-$HOME/.cache}/zsh/completions\" b=\"${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions\" f=\"${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions\"; mkdir -p \"$z\" \"$b\" \"$f\"; ln -sfn \"$c/zsh/_sbx\" \"$z/_sbx\"; ln -sfn \"$c/bash/sbx\" \"$b/sbx\"; ln -sfn \"$c/fish/sbx.fish\" \"$f/sbx.fish\"" } }
+#"github:docker/docker-agent" = { version = "1.152.0", asset_pattern = "*-arm64", minimum_release_age = "0s" }
+"github:docker/docker-agent" = { version = "1.159.0", minimum_release_age = "0s" }
+xcodegen = { version = "2.46.0", minimum_release_age = "0s" }
+bats = { version = "1.14.0", minimum_release_age = "0s" }
+"github:charmbracelet/gum" = { version = "2.0.2", minimum_release_age = "0s" }
+gemini = { version = "0.68.0", allow_builds = ["@github/keytar", "node-pty"], minimum_release_age = "0s" }
+# trust_policy_excludes: a dependency release with less publisher evidence than an earlier one, reviewed and
+# exempted by exact version (owner, 2026-11-15); a newer release is checked again.
+"npm:@modelcontextprotocol/inspector" = { version = "2.15.0", minimum_release_age = "0s", trust_policy_excludes = ["pino@9.14.0"] }
+# allow_builds: puppeteer's install script downloads the headless Chrome that mermaid-cli renders with.
+"npm:@mermaid-js/mermaid-cli" = { version = "12.2.0", minimum_release_age = "0s", trust_policy_excludes = ["chromium-bidi@157.0.8090-0"], allow_builds = ["puppeteer"] }
+"npm:jscpd" = { version = "5.4.3", minimum_release_age = "0s" }
+"npm:@fission-ai/openspec" = { version = "1.17.0", minimum_release_age = "0s" }
+biome = { version = "2.6.7", minimum_release_age = "0s" }
+yt-dlp = { version = "2026.10.26", rename_exe = "yt-dlp", minimum_release_age = "0s" }
+rtk = { version = "1.2.0", minimum_release_age = "0s" }
+"pipx:notebooklm-py" = { version = "0.8.6", extras = ["all"], python = "3.14.8", minimum_release_age = "0s", install_env = { UV_NO_BUILD = "1" } }
+#"pipx:mcp2cli" = { version = "3.8.0", python = "3.14.8", install_env = { UV_NO_BUILD = "1" }, minimum_release_age = "0s" }
+"npm:ctx7" = { version = "0.11.1", minimum_release_age = "0s" }
+"npm:@tauri-apps/cli" = { version = "2.12.4", minimum_release_age = "0s" }
+"npm:@playwright/cli" = { version = "0.1.24", minimum_release_age = "0s" }
+"npm:yaml-cli" = { version = "1.1.8", minimum_release_age = "0s" }
+"npm:skills" = { version = "1.8.1", minimum_release_age = "0s" }
+"npm:agent-browser" = { version = "0.43.0", minimum_release_age = "0s" }
+"npm:dev3000" = { version = "0.0.192", minimum_release_age = "0s", trust_policy_excludes = ["@vercel/detect-agent@1.2.5", "@vercel/oidc@4.0.0", "@vercel/cli-config@0.3.1", "@vercel/cli-exec@1.0.1"] }
+"npm:portless" = { version = "0.17.0", minimum_release_age = "0s" }
+"npm:@teng-lin/agent-fetch" = { version = "0.1.6", minimum_release_age = "0s" }
+#"pypi:skypilot" = { version = "0.14.1", python = "3.14.8", extras = "aws", minimum_release_age = "0s", uvx = "false" }
+#"pipx:skillport" = { version = "1.1.2", python = "3.14.8", install_env = { UV_NO_BUILD = "1" }, minimum_release_age = "0s" }
+#"pipx:specify-cli" = { version = "1.2.3", python = "3.14.8", minimum_release_age = "0s", install_env = { UV_NO_BUILD = "1" } }
+"npm:pyright" = { version = "1.1.414", minimum_release_age = "0s" }
+"npm:typescript" = { version = "7.0.2", minimum_release_age = "0s" }
+kubectl = { version = "1.37.2", minimum_release_age = "0s" }
+"pipx:graphifyy" = { version = "0.9.108", extras = ["all"], minimum_release_age = "0s", uvx = "false", python = "3.14.8", install_env = { PIP_CONSTRAINT = "{{ env.HOME }}/.config/mise/python-overrides/graphify/constraints.txt" } }
+#"pipx:cli-anything-hub" = { version = "0.4.1", extras = ["all"], minimum_release_age = "0s" }
+"npm:ajv-cli" = { version = "5.0.0", minimum_release_age = "0s" }
+#"pipx:check-jsonschema" = { version = "0.38.2", minimum_release_age = "0s" }
+"gitlab:graphviz/graphviz" = { version = "16.1.1", minimum_release_age = "0s" }
+"aqua:betterleaks/betterleaks" = { version = "1.10.0", minimum_release_age = "0s" }
+"npm:@ralph-orchestrator/ralph-cli" = { version = "2.10.1", minimum_release_age = "0s" }
+aube = { version = "2.10.1", workflow = ["release-plz.yml@refs/heads/main", "release.yml@refs/heads/main"], minimum_release_age = "0s" }
+shfmt = { version = "3.14.1", minimum_release_age = "0s" }
+sqlite = { version = "3.54.1", minimum_release_age = "0s" }
+micromamba = { version = "2.10.0-0", minimum_release_age = "0s" }
+"pipx:datamodel-code-generator" = { version = "0.89.0", python = "3.14.8", minimum_release_age = "0s", install_env = { UV_NO_BUILD = "1" } }
+"npm:defuddle" = { version = "0.19.6", minimum_release_age = "0s" }
+rumdl = { version = "0.3.3", minimum_release_age = "0s" }
+"github:asciimoo/hister" = { version = "0.21.0", minimum_release_age = "0s" }
+llmfit = { version = "1.1.20", minimum_release_age = "0s" }
+# Research pilot (owner, 2026-11-11). hyperresearch needs Python <3.15 (pyproject requires-python) and pulls
+# Crawl4AI; run `crawl4ai-setup` once for its browsers. Its keys are not wired yet (a later change).
+"pipx:hyperresearch" = { version = "0.13.2", extras = ["exa"], python = "3.14.8", minimum_release_age = "0s", install_env = { UV_NO_BUILD = "1" } }
+wait-for-gh-rate-limit = { version = "1.1.2", minimum_release_age = "0s" }
+"github:kenn-io/agentsview" = { version = "0.47.0", minimum_release_age = "0s" }
+"npm:firecrawl-cli" = { version = "1.29.0", minimum_release_age = "0s" }
+#"aqua:dalance/procs" = { version = "0.14.12", minimum_release_age = "0s" }
+#"cargo:procs" = { version = "0.14.12", minimum_release_age = "0s" }
+topgrade = { version = "17.16.0", minimum_release_age = "0s" }
+
+# allow_builds: better-sqlite3 builds or downloads the native SQLite module openwiki opens its index with.
+"npm:openwiki" = { version = "0.9.0", minimum_release_age = "0s", allow_builds = ["better-sqlite3"] }
+
+# Deliberate upgrades only: update_mise.py excludes it from `upgrade --bump`. Close sessions and
+# stop the old daemon with the old binary before changing this pin (one build per account).
+"github:DeusData/codebase-memory-mcp" = { version = "0.12.1", minimum_release_age = "0s" }
+
+# Build prerequisites for the webclaw browser build below. aws-lc-sys (pulled in
+# by rustls) needs cmake; ninja and sccache are optional build speedups.
+cmake = { version = "4.5.0", minimum_release_age = "0s" }
+ninja = { version = "1.13.2", minimum_release_age = "0s" }
+sccache = { version = "0.19.0", minimum_release_age = "0s" }
+# vcpkg in manifest mode, no microsoft/vcpkg clone: the release binary with the standalone bundle laid
+# over it (scripts/, triplets/), as ray-manaloto/cpp-utilities mise.toml pins it. VCPKG_ROOT
+# in [env] names this install, so CMake presets use $env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake.
+"github:microsoft/vcpkg-tool" = { version = "2026-10-29", minimum_release_age = "0s", additional_asset_patterns = ["vcpkg-standalone-bundle.tar.gz"], rename_exe = "vcpkg", platforms = { macos-arm64 = { asset_pattern = "vcpkg-macos" }, linux-x64 = { asset_pattern = "vcpkg-glibc" }, linux-arm64 = { asset_pattern = "vcpkg-glibc-arm64" } } }
+
+# P2996 build extras (DL-756, DL-757): tools live here, never in a project; mise registry first, then
+# conda (swig, doxygen and ocaml are not in the mise registry), then brew. SWIG generates lldb's Python
+# and Lua bindings; Lua is the latest mise release (lldb's build.rst names 5.3 and 5.4 only); doxygen
+# replaces a version-less shim that broke CMake's doxygen check; opam provides ocamlfind and ctypes for
+# LLVM's OCaml bindings (switch "llvm", on PATH above). The Python modules LLVM uses (opt-viewer, MLIR
+# bindings) are locked in the p2996 uv project (DL-758). ruff and ty lint that project through hk.
+"conda:swig" = { version = "4.5.1", minimum_release_age = "0s" }
+lua = { version = "5.5.1", minimum_release_age = "0s" }
+"conda:doxygen" = { version = "1.18.0", minimum_release_age = "0s" }
+"conda:zstd-static" = { version = "1.5.7", minimum_release_age = "0s" }
+"github:ocaml/opam" = { version = "2.6.1", minimum_release_age = "0s" }
+ruff = { version = "0.17.5", minimum_release_age = "0s" }
+ty = { version = "0.0.102", minimum_release_age = "0s" }
+# swift/ (jbax): hk's swiftlint builtin; macOS only, like jbax. Formatting is the toolchain's own `swift format`.
+swiftlint = { version = "0.65.1", minimum_release_age = "0s", os = ["macos"] }
+
+# --- webclaw: local browser-enabled build -------------------------------------
+# Added 2026-10-20. The prebuilt release (github:0xMassi/webclaw) is compiled
+# WITHOUT the Cargo `browser` feature: `--render always` fails immediately with
+# "this webclaw build has no browser support; build it with `--features browser`"
+# and `--render auto` is compiled out. v0.7.0 publishes only the six platform
+# tarballs (all built with a plain `cargo build --release`), and the crate is not
+# on crates.io, so mise's `cargo:` backend is the only way to get browser support.
+#
+# What mise runs:
+#   cargo install --git=https://github.com/0xMassi/webclaw.git --tag=v0.7.0 \
+#                 --locked --features=browser webclaw-cli --root <install dir>
+# Verify: `webclaw --version` must print "webclaw 0.7.0 +browser".
+#
+# Options, and why:
+#   crate    = "webclaw-cli"  virtual workspace (members = ["crates/*"]);
+#                             without it `cargo install --git` errors.
+#   features = ["browser"]    the only non-default feature in the CLI graph;
+#                             adds chromey (CDP client) and drives the local
+#                             Chrome. Do NOT add default-features = false:
+#                             quickjs is default-on in webclaw-core.
+#   locked   = true           `cargo install` ignores Cargo.lock without it, and
+#                             wreq is pinned to an rc with no semver stability.
+#
+# Upgrading (manual by design): for a cargo git source mise only lists HEAD as
+# a remote version, so `mise upgrade` / `mise outdated` will NOT see new tags,
+# and `mise upgrade --bump` would install the default branch (staging), not a
+# release. Bump the tag explicitly:
+#   git ls-remote --tags --refs https://github.com/0xMassi/webclaw.git \
+#     | awk -F/ '{print $3}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+# then edit tag:vX.Y.Z and run `mise install`. Renovate can automate this.
+# minimum_release_age is ignored for tag: refs.
+#
+# Python (deferred 2026-10-20; webclaw-cli was not on PyPI yet): the repo's
+# python/ package is a maturin bin wheel and already sets
+#   [tool.maturin] features = ["browser"]
+# so a published wheel will be browser-enabled too. Once it is on PyPI:
+#   uv pip install webclaw-cli==0.7.0
+# Until then build it from the same tag:
+#   cd offline/webclaw/github/0xMassi/webclaw/python && uv build --wheel
+#   uv pip install dist/webclaw_cli-0.7.0-*.whl
+# The wheel bundles its own +browser binary; there is no env var to make it use
+# the mise-installed one. PyPI `webclaw` is a DIFFERENT package: the hosted-API
+# SDK (wc_ key, api.webclaw.io).
+#
+# Known traps:
+#   - An existing shell keeps the old github install dir on PATH until
+#     `mise activate` runs again (the shim comes later on PATH). Check with
+#     `command -v webclaw`; `mise x -- webclaw --version` uses the active toolset.
+#   - `--render auto` still skips webclaw.io /data/startups/company/* pages:
+#     their text sits in a hidden Next.js wrapper (#S:0) that
+#     visible_word_count counts, so the JS heuristic says "no render needed".
+#     Retries of those URLs need `--render always`.
+#
+#"github:0xMassi/webclaw" = { version = "0.7.0", minimum_release_age = "0s" }
+"cargo:0xMassi/webclaw" = { version = "tag:v0.7.0", crate = "webclaw-cli", features = ["browser"], locked = true, minimum_release_age = "0s" }
+
+"pypi:pyrefly" = { version = "1.4.0", minimum_release_age = "0s" }
+# gcovr: C++ coverage reports. Was a bare `uv tool install`, whose venv broke when mise pruned the Python it was
+# built on; as a mise tool it is pinned, locked with its dependency graph, and reinstalled on a Python bump.
+"pypi:gcovr" = { version = "8.8", python = "3.14.8", minimum_release_age = "0s" }
+# gersemi: the maintained CMake formatter. cmake-format (cmakelang 0.6.13, last released 2020) fails on Python 3.15.
+# gersemi ships compiled wheels up to cp314 only, so it runs on 3.14 like gcovr.
+"pypi:gersemi" = { version = "0.29.2", python = "3.14.8", minimum_release_age = "0s" }
+# agent-desktop drives macOS apps through the Accessibility tree (vercel-labs/agent-desktop, Apache-2.0). On trial:
+# can an agent work with an IDE that is not the frontmost app? It needs Accessibility, which macOS charges to the
+# process that launched it (herdr-core under herdr), not to this binary. The lock records its GitHub attestation.
+"github:vercel-labs/agent-desktop" = { version = "1.3.1", minimum_release_age = "0s" }
+"npm:@ai-sdk/openai-compatible" = { version = "3.0.92", minimum_release_age = "0s" }
+"npm:apify-cli" = { version = "1.12.0", minimum_release_age = "0s" }
+jouet = { version = "0.0.5", workflow = "release.yml@refs/heads/main", minimum_release_age = "0s" }
+# Agent-config linters (owner, 2026-11-13, docs/research/agent-config-linters.md). agnix gates the agent files from
+# hk; its release assets carry sha256 files and a build-provenance attestation (release.yml:167). cclint covers
+# Claude files only and reports without failing; it ships no release binaries, so mise builds it with the Go above.
+"github:agent-sh/agnix" = { version = "0.61.0", minimum_release_age = "0s" }
+"go:github.com/dotcommander/cclint" = { version = "0.63.0", minimum_release_age = "0s" }
+# GitHub Actions linters (owner rule, 2026-11-13): jactionlint, jdx's maintained actionlint fork, never actionlint;
+# zizmor beside it as the security checker. hk runs both as builtins on .github/workflows (hk.pkl). From aqua, which
+# verifies their release attestations.
+"aqua:jdx/jactionlint" = { version = "2.6.0", minimum_release_age = "0s" }
+"aqua:zizmorcore/zizmor" = { version = "1.32.0", minimum_release_age = "0s" }
+
+#[tool_alias]
+#devcontainer = "npm:@devcontainers/cli"
+# [hooks] postinstall = "mise lock"  -- REMOVED 2026-07-30.
+# A bare `mise lock` re-locks the WHOLE lockfile and drops platform/conda
+# entries for tools it cannot resolve on this host (dotfiles #370: 548
+# linux-x64 entries lost). Wiring it to postinstall fired that on EVERY
+# `mise install`. Only a scoped re-lock is safe:
+#     mise lock "<backend>:<name>"      (dotfiles: mise run lock -- "<tool>")
+
+# The live agent configs, beside the repo's hk steps: cclint reports on the Claude files and never fails the task;
+# agnix decides the exit code. Third-party skills and plugin files under ~/.claude are linted too.
+[tasks."lint:agents"]
+description = "Lint the live agent configs: cclint reports on Claude files, then agnix (exits 1 on an error)"
+dir = "~/"
+run = [
+  "cclint --root ~/.claude lint ~/.claude/agents ~/.claude/skills ~/.claude/CLAUDE.md || true",
+  "agnix ~/.claude/CLAUDE.md ~/.claude/settings.json ~/.claude/agents ~/.claude/skills ~/.codex/config.toml ~/.codex/hooks.json ~/.config/opencode/AGENTS.md ~/.config/opencode/opencode.json",
+]
+
+# --- update tasks ------------------------------------------------------------
+# Run `update-all` (the guarded alias in [shell_alias]) on its own: it already runs brew
+# update/upgrade, mise self-update and mise upgrade, so running those first repeats the work.
+# DAG: mise tasks deps --compact; plan: mise run -n update:all
+# An unfinished tool install that holds mise's tool-version lock wedges every later `mise run`;
+# scripts/mise_update_guard.py detects it (see [shell_alias]).
+# update:brew and update:check are file tasks in tasks/update/: hometools update-brew and update-check
+# do their work (#392).
+
+[tasks."update:mise"]
+description = "update mise tools"
+# Always from $HOME: run from a stale worktree, `mise install -y` would install its pins (incl. agy/codex).
+dir = "~/"
+# wait_for, not depends: brew goes first only when both are scheduled (update:all), because
+# mise's Python installs link Homebrew gettext (libintl) and a brew upgrade mid-run breaks
+# them with a dyld error; `mise run update:mise` alone never runs brew.
+wait_for = ["update:brew"]
+# update_mise.py runs its phases one after another, because each needs the previous one (the
+# first, self-update, replaces mise's own binary); `-j 8` on its upgrade phase parallelises the
+# tool downloads inside that one upgrade.
+#
+# ⚠️ `mise upgrade --bump -y`, NOT `mise upgrade --bump -- --system -y`.
+# `--system` is NOT an upgrade flag (measured: `error: unexpected argument
+# '--system' found`); it exists only on `mise install`. Whoever hit that error
+# followed mise's own tip — "to pass '--system' as a value, use `-- --system`" —
+# which turned both tokens into positional TOOL NAMES, and `mise upgrade`
+# discards unknown tool names silently (a bogus name returns "All tools are up
+# to date", rc=0). So `--system` AND `-y` were both being thrown away, and the
+# `-y` is the one that matters: without it this prompts.
+#
+# Python alone uses `mise lock --global --bump python`, then `mise install
+# python`, to preserve its configured range without reinstalling historical
+# pipx environments. Other tools use native upgrade/install lock updates.
+# Keep the global lock format current: the outer guard treats mise warnings
+# as incomplete even when every child command exits 0. See docs/python-upgrade-policy.md.
+# AgentsView may perform a one-time archive resync before opening its listener.
+# The owner returns STARTUP_PENDING (75) until it is ready; wait for the verified
+# service rather than treating that state as a failed update.
+# The Python runner preserves these exact sequential commands, records each
+# phase/return code, and passes one existing GitHub credential only to this
+# task's mise children (including vfox plugins that read GITHUB_TOKEN).
+run = "{{ mise_config_dir }}/scripts/update_mise.py"
+
+[tasks."update:claude"]
+# A leaf (no depends, no wait_for) that never calls mise, so it overlaps brew and mise.
+description = "update claude, marketplace and plugins"
+# Behaviour (every (id, scope) pair with no `.enabled` filter, marketplaces refreshed first,
+# -y off a TTY, a thread pool because mise has no per-item worker pool): see the
+# update_claude.py docstring.
+# The script also emits a JSON summary (`$CLAUDE_UPDATE_JSON`, default
+# `~/.config/mise/.update-claude.json`) and exits non-zero if `claude update`,
+# any marketplace refresh, or any plugin update failed (since 2026-09-29),
+# so a later step can consume the result instead of parsing this task's text.
+# Concurrency: `CLAUDE_UPDATE_JOBS` (default 8).
+# `{{config_root}}` for the GLOBAL config is `~`, not `~/.config/mise` — measured:
+# `{{config_root}}/scripts/…` resolved to `~/scripts/…` and mise warned the file
+# was missing. `run` with the built-in `mise_config_dir` keeps the username out of this file;
+# a templated `file` runs too, but `mise tasks validate` checks it unrendered (DL-706).
+run = "{{ mise_config_dir }}/scripts/update_claude.py"
+
+[tasks."update:codex"]
+description = "update the NATIVE codex install (never a mise pin)"
+# claude, codex and agy are native-installer-only on this Mac (Ray, 2026-10-01):
+# every mise name for them is in `disable_tools` above. Absolute path on purpose —
+# a stale mise shim can sit ahead of ~/.local/bin on PATH. The PATH leaves out mise's wrappers too, as the
+# codex-update alias does: the installer greps a found codex for "#!/usr/bin/env node", which the mise wrapper
+# binary contains, calls it a second npm install and appends a PATH block to ~/.zprofile (which zsh no longer reads:
+# ZDOTDIR is ~/.config/zsh)
+# (openai/codex scripts/install/install.sh:600-631,972-1000 at rust-v0.167.2).
+run = "PATH=\"$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin\" $HOME/.local/bin/codex update && $HOME/.local/bin/codex --version"
+
+[tasks."update:agy"]
+description = "update the NATIVE agy (Antigravity) install (never a mise pin)"
+run = "$HOME/.local/bin/agy update && $HOME/.local/bin/agy --version"
+
+[tasks."update:all"]
+description = "update all tools (brew, mise, native claude/codex/agy) — the one command to run"
+# depends entries start in parallel; update:mise waits for update:brew (see update:mise).
+# Keep update:brew in depends: wait_for in update:mise only orders brew, it never schedules it.
+depends = ["update:brew", "update:mise", "update:claude", "update:codex", "update:agy"]
+run = ["mise doctor", "mise run toolchain:verify"]
+
+[shell_alias]
+# ⚠️ THESE CALL THE GUARD DIRECTLY, NOT `mise run`, AND THAT IS THE WHOLE POINT.
+# `scripts/mise_update_guard.py` checks whether a tool-version install lock is
+# held before starting: a LIVE holder is refused by name (pid + what it is
+# installing, exit 2, never waits); a STALE one from a dead process is reported,
+# cleared, and the run proceeds. Every run appends one line to
+# ~/.config/mise/update-runs.log — timestamp | task | tools | duration | rc.
+# The guard also holds a non-blocking update lock and checkpoints a private
+# structured receipt under ~/.config/mise/update-evidence/<run-id>/run.json;
+# update-evidence/latest.json points at the active or last run, and
+# last-failure.json preserves the last unsuccessful attempt. A RUNNING receipt
+# with an old updated_at and child_pid helps diagnose an interrupted wrapper.
+# Task output is echoed live and retained in private stdout/stderr logs next
+# to run.json. Mise already collects normal task output by line; the wrapper
+# tees mise's streams without selecting `mise run --raw`. A child rc=0 with
+# any mise warning, GitHub rate-limit error, or failed version query is
+# INCOMPLETE (guard rc=2), while run.json retains the child's actual return
+# code. The final summary includes the reason, counts, and triggering log lines.
+#
+# It must NOT be wired as a mise task (`file = ...`). A mise task runs INSIDE
+# `mise run`, which resolves tools first — so the guard would block on the very
+# lock it exists to detect, and report nothing. Running it outside mise is what
+# lets it observe the lock rather than join the queue, where an unfinished tool install wedges it.
+#
+# Bypass deliberately with `mise run update:all` if you ever need the unguarded
+# path; the guard is a seatbelt, not a cage.
+update-claude = "$HOME/.config/mise/scripts/mise_update_guard.py update:claude"
+update-all = "$HOME/.config/mise/scripts/mise_update_guard.py update:all"
+update-check = "$HOME/.config/mise/scripts/mise_update_guard.py update:check"
+claude_dangerous = "claude --dangerously-skip-permissions --brief"
+codex_yolo = "codex --yolo"
+gemini_yolo = "gemini --yolo"
+# The opencode wrapper adds --standalone, which `opencode upgrade` rejects (v2.2.7 commands.ts:14-28): update the
+# real binary directly.
+opencode-update = "$HOME/.opencode/bin/opencode upgrade"
+# Codex's installer appends a PATH block to ~/.zprofile (unread since ZDOTDIR is ~/.config/zsh) whenever it finds a
+# second codex on PATH, and the mise wrapper is one (openai/codex scripts/install/install.sh:600-631 at
+# rust-v0.165.0). Update with a PATH that leaves out mise's wrappers, so it sees one codex and leaves the profile
+# alone.
+codex-update = "PATH=\"$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin\" $HOME/.local/bin/codex update"
+
+# Codex and OpenCode start under `fnox proxy run` with the keys and proxy rules of the one fnox file
+# (~/.config/fnox/config.toml): the harness gets placeholders and the proxy adds the real key for each rule's host
+# (context7 and exa; OpenCode's model providers too). mise puts the command-wrappers dir first on PATH (v2026.11.6
+# src/toolset/toolset_paths.rs:183-195) and, while a wrapper runs, sends its command and everything it starts to the
+# real tool (src/cli/shim.rs:241-249), so fnox finds the real codex. Claude needs no wrapper: its apify key comes
+# from a headersHelper. A Doppler error starts the harness with placeholders that the proxy refuses until Doppler is
+# back. Shells only: herdr argv launches skip [wrappers] (codex-hc covers Codex).
+# OpenCode runs --standalone: its background service (`opencode serve --service`) makes the MCP calls otherwise,
+# outside the proxy (owner ruling 2026-11-11; packages/cli/src/services/server-connection.ts at v2.2.7).
+# Bypass, no keys: run the real binary by path (`~/.local/bin/codex`, `~/.opencode/bin/opencode`);
+# `mise exec -- codex` still goes through the wrapper. Run `mise reshim` after changing this table.
+# fnox writes a `proxied request` audit line per request to the stderr it shares with the harness, at INFO
+# (src/proxy/server.rs:450 at 1.48.0), and those lines draw over a TUI's prompt box. fnox logs only to stderr, and
+# RUST_LOG is its only filter (src/main.rs:193-200), so the wrapper sets RUST_LOG for fnox alone: its own INFO
+# lines stay, the proxy's audit lines drop to WARN, and the one-time "not sandboxing" WARN still shows. fnox passes
+# its environment to the harness (src/commands/proxy.rs:513-548), and Codex reads RUST_LOG for its own log filter
+# (tui/src/startup_orchestration.rs:923 at rust-v0.167.2), so `env -u RUST_LOG` starts the harness without it.
+# To see the audit lines while checking a client, run fnox by hand without RUST_LOG.
+[wrappers.codex]
+command = "fnox"
+args = ["--non-interactive", "proxy", "run", "--", "env", "-u", "RUST_LOG", "codex"]
+env = { RUST_LOG = "info,fnox::proxy=warn" }
+
+[wrappers.opencode]
+command = "fnox"
+args = ["--non-interactive", "proxy", "run", "--", "env", "-u", "RUST_LOG", "opencode", "--standalone"]
+env = { RUST_LOG = "info,fnox::proxy=warn" }
+
+[vars]
+# DL-764, DL-770: the one home for compiler and brew versions; conf.d/toolchain.toml renders
+# [bootstrap.packages] from them and toolchain:verify checks the installs match.
+# To bump gcc or llvm: install the new version first (unpin it, brew upgrade it, pin it again), then edit
+# these and run `mise run bootstrap:toolchain`. A commit that changes [vars] runs //home:integration
+# (hk's toolchain-gate step), which fails until the installs match: a typo or an uninstalled version stops it.
+gcc = "16.2.0"
+gcc_major = "16"
+llvm = "23.1.5"
+llvm_major = "23"
+iwyu = "0.27"
+gdb = "18.1"
+make = "4.4.1"
+pkgconf = "3.0.10"
+
+[task_config]
+includes = ["{{ mise_config_dir }}/agentsview-native/tasks.toml", "{{ mise_config_dir }}/tasks"]
+
+# D268: adopt existing Docker Desktop; updater lifecycle stays docker desktop CLI.
+# DL-714: Ruby before the package plan, which evaluates the Orca cask.
+# One line (zero-bash rule). Off macOS it renders empty and mise runs `sh -c ""`, exit 0, as the
+# blank lines the multi-line form rendered did.
+[bootstrap.hooks.pre-packages]
+run = '{% if os() == "macos" %}mise bootstrap packages apply brew:ruby --yes{% endif %}'
+
+# hc's skill is a mise-run install, so it waits for the tools phase. It goes to Claude (~/.claude/skills)
+# and to ~/.agents/skills, which Codex and OpenCode read and Antigravity CLI reads through the
+# ~/.gemini/config/skills link in the repo's mise.toml; herdr:doctor checks each (V10). The tag
+# comes from the installed hc: `hc --version` prints `hc 0.1.19` and starts no core, and the line installs
+# herdr-core#v0.1.19, so a Herdr self-update needs no pin bump to keep V10 green. With no hc on PATH (a
+# new Mac before Herdr's first run installs it), the line says to open Herdr once and rerun bootstrap,
+# and exits 0 so bootstrap goes on and V10 shows the gap. When hc prints no `hc X.Y.Z`, the line fails
+# with a message and installs nothing. Like agent-desktop's line, it
+# is not skipped when installed: a re-run puts the tag's files back, so a stale copy is replaced and a new
+# hc's tag reaches every folder.
+# Only claude-code and codex are named: before the repo's `mise dot apply` makes that link, antigravity-cli
+# would make ~/.gemini/config/skills a real folder (skills 1.8.1 remove.mjs:1416-1421), which the apply
+# then refuses to replace.
+# The removal comes first: `skills add herdrdev/herdr` installed the Herdr TUI's skill, which tells
+# agents to drive a TUI that no longer runs, and four skills for working on Herdr's own repo. The
+# name matches the folder, and the source matches every lock entry from that repo (skills 1.7.5
+# resolveSkillsToRemove); with nothing to remove it exits 0.
+# agent-desktop's core, macOS, FFI and jev skills come from the tag of the pinned binary, which compiles
+# the same files in (v1.2.0 crates/core/src/commands/skills.rs:4-16,44-54), so they match
+# `agent-desktop skills get`. Windows and Linux are left out. jev needs an agent-desktop clone. The tag
+# is `v` and the pin above, read with `mise current`, so a bump moves both. It is not skipped when
+# installed: a re-run puts the tag's files back, so a bumped tag replaces the old ones.
+# jouet (owner, 2026-11-13) hooks every Claude session. `jouet setup claude --global` merges 6 hook groups
+# into ~/.claude/settings.json and keeps every other key (0.0.4 src/setup.rs:128-141). A re-run finds its own
+# entries by command and prints `unchanged` (src/setup.rs:365); with stdin from /dev/null it asks nothing.
+# 0.0.5 (owner, 2026-11-17): --no-context-budget skips hiding unused skills and setting a compaction window
+# (docs/setup.md "Context budget"); the Artifact tools stay because mise.toml's ~/.claude/settings.json/allow
+# names them; jouet-init is no longer installed (it needs --init-skill, jouet #581) and setup removes the old copy.
+# OpenCode is not a `jouet setup` target: it reads ~/.config/opencode/AGENTS.md as global instructions
+# (OpenCode v2.2.7 packages/core/src/config/plugin/instruction.ts: `join(global.config, "AGENTS.md")`,
+# where `global.config` is `roots("opencode").config`, XDG_CONFIG_HOME or ~/.config joined with
+# "opencode", packages/util/src/global-roots.ts:6,15-16), so agents:opencode-jouet (python/home,
+# hometools opencode-jouet) keeps jouet's own guidance current there between its `<!-- jouet:start/end -->`
+# markers, alongside codebase-memory-mcp's block and a hand-written herdr section in the same file.
+[bootstrap.hooks.post-tools]
+run = [
+  "mise exec -- skills remove herdr herdrdev/herdr -g -y </dev/null",
+  "command -v hc >/dev/null || { echo 'post-tools: herdr-core is not installed yet; open Herdr once, then rerun mise bootstrap' >&2; exit 0; }; v=$(hc --version </dev/null | sed -n 's/^hc \\([0-9][0-9]*\\.[0-9][0-9]*\\.[0-9][0-9]*\\)$/\\1/p') && [ -n \"$v\" ] || { echo 'post-tools: hc --version printed no hc X.Y.Z, so the herdr-core skill is not installed' >&2; exit 1; }; mise exec -- skills add \"herdrdev/herdr-core#v$v\" -g -a claude-code codex -s herdr-core -y </dev/null",
+  "v=$(mise current github:vercel-labs/agent-desktop </dev/null) && [ -n \"$v\" ] || { echo 'post-tools: mise current printed no agent-desktop pin, so its skills are not installed' >&2; exit 1; }; mise exec -- skills add \"vercel-labs/agent-desktop#v$v\" -g -a claude-code codex -s agent-desktop agent-desktop-macos agent-desktop-ffi jev-desktop -y </dev/null",
+  "mise exec -- jouet setup claude --global --no-context-budget </dev/null",
+  "mise run agents:opencode-jouet",
+]
+
+# Disk-watch (owner, 2026-11-12): monit, not our own code (docs/research/disk-watch/monit.md). brew's monit 6.0.0
+# ([bootstrap.packages]) checks the data volume and the system every minute. Each rule that fires runs the global
+# task monit:alert (hometools monit-alert, owner 2026-11-13), and again every 240 cycles (4 hours) while it holds:
+# a macOS notification, and the alert written to ~/.local/state/dotfiles/monit/alert.json for agents to read. It
+# sends nothing to any agent's terminal. monit splits an exec string on spaces and hands the alert over in
+# MONIT_SERVICE, MONIT_EVENT and MONIT_DESCRIPTION, so the text is read from those inside the task, never put on
+# the command line. Rules: under 150 GiB free (the early warning) and under 100 GiB free; 5-minute load per core
+# over 1.5, CPU over 95% or memory over 90% for some minutes; swap over 10% (this Mac has no swap, 0 MB total, so
+# that rule is valid but can't fire until swap exists).
+# Under 100 GiB it also runs the global task disk:snapshot (hometools disk-snapshot), which records the biggest
+# folders, ps and open files in ~/.local/state/dotfiles/disk-alerts/<time>/, again every 30 cycles while low
+# (owner, 2026-11-13: the volume fell to 42 GiB free and was back within minutes, so a 15-minute check missed it
+# and nothing recorded the writer). monit runs an exec without waiting for it; the task holds a lock, so two never overlap.
+# /System/Volumes/Data, not /: on macOS / is the sealed system volume. monit counts space free as space available
+# to a normal user (f_bavail, src/device/sysdep_DARWIN.c:84), and its GB is 1024^3 (src/monit.h:356).
+# monit refuses a control file that is a symlink, owned by another user or wider than 0700 (src/p.y:3615), so
+# monitrc is a managed file with mode 0600, not a linked dotfile.
+# Check: monit -c ~/.config/monit/monitrc status (over the 0600 unix socket; no password, `allow localhost`;
+# the socket path must stay under 104 bytes). chief-of-staff reads that and runs `lsof +L1` itself.
+# Spotlight skips every file under a folder named *.noindex, with no sudo (probed on macOS 27.2.1, 2026-11-16), so
+# bulky scratch goes here. ~/dev/github and ~/dev/tmp go in Search Privacy by hand once (Full Disk Access guards it):
+# mise run spotlight:check checks them (python/home/src/hometools/spotlight.py).
+[bootstrap.directories."~/dev/tmp.noindex"]
+os = "macos"
+
+[bootstrap.directories."~/.config/monit"]
+os = "macos"
+mode = "0700"
+
+[bootstrap.directories."~/.local/state/monit"]
+os = "macos"
+mode = "0700"
+
+[bootstrap.files."~/.config/monit/monitrc"]
+os = "macos"
+mode = "0600"
+template = true
+content = """
+# Generated by mise bootstrap from ~/.config/mise/config.toml; do not edit.
+set daemon 60
+set log {{ env.HOME }}/.local/state/monit/monit.log
+set idfile {{ env.HOME }}/.local/state/monit/id
+set statefile {{ env.HOME }}/.local/state/monit/state
+set pidfile {{ env.HOME }}/.local/state/monit/pid
+set httpd unixsocket {{ env.HOME }}/.local/state/monit/monit.sock permission 0600
+    allow localhost
+
+check filesystem data with path /System/Volumes/Data
+    if space free < 150 GB then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+    if space free < 100 GB then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+    if space free < 100 GB then exec "{{ env.HOME }}/.local/bin/mise run disk:snapshot"
+        repeat every 30 cycles
+
+# One line a minute of free space and the processes that wrote most (hometools.disk, disk-log), and a disk-snapshot
+# on a drop of 20 GiB since the previous line: a write-then-delete that is back within minutes still gets named.
+check program disk-log with path "{{ env.HOME }}/.local/bin/mise run disk:log"
+    if status != 0 then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+
+# nightly:check touches this file each time it passes; a run that skips (busy or asleep) or fails leaves it alone,
+# so three days without a pass raise the alert instead of passing silently.
+check file nightly-passed with path {{ env.HOME }}/.local/state/dotfiles/nightly/passed
+    if does not exist then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+    if mtime is older than 3 days then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+
+# Spotlight spikes (owner, 2026-11-17): spotlight:probe exits 1 while mds_stores logs over 4,000 query steps in 65 s
+# or a ps sample shows it over 100% CPU (its docstring says why), and spotlight:capture then records the
+# Starting-query clients, the indexers' line counts, top CPU and load in ~/.local/state/dotfiles/spotlight/spikes/;
+# once per 5 cycles while it lasts. Not `check process ... if cpu`: monit divides that by the thread count and
+# averages it over the cycle, so a 20-30 s burst never shows. mise run spotlight:spikes lists the captures and
+# mise run spotlight:doctor checks monit runs this check.
+check program spotlight-spike with path "{{ env.HOME }}/.local/bin/mise run spotlight:probe"
+    if status != 0 then exec "{{ env.HOME }}/.local/bin/mise run spotlight:capture"
+        repeat every 5 cycles
+
+check system $HOST
+    if loadavg (5min) per core > 1.5 for 5 cycles then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+    if cpu usage > 95% for 5 cycles then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+    if memory usage > 90% for 3 cycles then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+    if swap usage > 10% for 3 cycles then exec "{{ env.HOME }}/.local/bin/mise run monit:alert"
+        repeat every 240 cycles
+"""
+
+# Runs monit in the foreground (-I), as brew's own service does (Formula/m/monit.rb: monit -I -c etc/monitrc).
+# Apply: mise bootstrap macos launchd-agents apply. A monitrc change needs a restart:
+# launchctl kickstart -k gui/$(id -u)/dev.mise.monit
+[bootstrap.macos.launchd.agents.monit]
+program = "/opt/homebrew/bin/monit"
+args = ["-I", "-c", "{{ env.HOME }}/.config/monit/monitrc"]
+run_at_load = true
+keep_alive = true
+process_type = "Background"
+working_directory = "~/.local/state/monit"
+
+# The nightly full run (owner, 2026-11-13): commits run only the linters and pushes only the suites their files reach
+# (hk.pkl), so a change can break another package's tests unseen, as #674 did; this runs them all once a day.
+# launchd, not monit: a monit check program on a cron schedule reads its exit status only at the next match, a day
+# later. Background yields CPU and disk I/O to the owner's work; a Mac asleep at 03:00 runs it on waking. launchd
+# appends each run's output to the log. Apply: mise bootstrap macos launchd-agents apply.
+[bootstrap.directories."~/.local/state/dotfiles/nightly"]
+os = "macos"
+mode = "0700"
+
+[bootstrap.macos.launchd.agents.nightly-check]
+program = "~/.local/bin/mise"
+args = ["run", "nightly:check"]
+start_calendar_interval = { hour = 3, minute = 0 }
+process_type = "Background"
+nice = 10
+# launchd starts agents with PATH /usr/bin:/bin:/usr/sbin:/sbin, where the task's own `mise` calls (hk's steps,
+# `mise run test`, monit:alert) fail with "mise: command not found" (exit 127). mise writes this
+# table to the plist's EnvironmentVariables (crates/mise-system/src/launchd.rs:410-416) after rendering every string
+# in the entry, nested tables included (crates/mise-system/src/templating.rs:94-115; mise 2026.11.9).
+environment = { PATH = "{{ env.HOME }}/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" }
+stdout_path = "~/.local/state/dotfiles/nightly/check.log"
+stderr_path = "~/.local/state/dotfiles/nightly/check.log"
+
+# DL-770: mise uses package specs exactly as written (docs/bootstrap.md:392), so [bootstrap.files]
+# renders them from [vars] before the packages step. mise reads its config before this file is written:
+# after a [vars] change run `mise run bootstrap:toolchain` (two bootstrap runs, then toolchain:verify).
+# DL-591: native mise brew packages (mise bootstrap packages apply; not mise install).
+# DL-595: exact versions hold these against `mise bootstrap packages upgrade` (which ignores brew pins);
+# `brew pin` holds them against brew. A fresh machine skips exact entries with a warning: apply with
+# "latest" once, then restore the exact values. Majors move together: unpin, upgrade, toolchain:verify, re-pin.
+# Mac sshd takes keys only (owner, 2026-11-11; Mac-wide settings go through chief-of-staff): the PC runs public CI
+# and reaches this Mac on port 22. sshd keeps the first value it reads, so 050 sorts before macOS's own
+# 100-macos.conf. No restart needed: launchd starts a fresh sshd per connection (ssh.plist inetdCompatibility,
+# Wait false), and each reads this file. Check: ssh -o BatchMode=yes -o PreferredAuthentications=none
+# -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null localhost true prints Permission denied (publickey)
+# (the two host-key options only stop an unknown localhost key failing first). Undo: state = "absent".
+[bootstrap.files."/etc/ssh/sshd_config.d/050-no-password.conf"]
+os = "macos"
+owner = "root"
+group = "wheel"
+mode = "0644"
+content = """
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+"""
+
+[bootstrap.directories."~/.config/mise/conf.d"]
+phase = "pre-packages"
+
+[bootstrap.files."~/.config/mise/conf.d/toolchain.toml"]
+phase = "pre-packages"
+template = true
+content = '''
+# Generated by mise bootstrap from [vars] in ~/.config/mise/config.toml (DL-770); do not edit.
+[bootstrap.packages]
+"brew:gcc" = { version = "{{ vars.gcc }}", os = "macos" }
+"brew:llvm" = { version = "{{ vars.llvm }}", os = "macos" }
+"brew:lld" = { version = "{{ vars.llvm }}", os = "macos" }
+"brew:lldb" = { version = "{{ vars.llvm }}", os = "macos" }
+"brew:include-what-you-use" = { version = "{{ vars.iwyu }}", os = "macos" }
+"brew:gdb" = { version = "{{ vars.gdb }}", os = "macos" }
+"brew:make" = { version = "{{ vars.make }}", os = "macos" }
+"brew:pkgconf" = { version = "{{ vars.pkgconf }}", os = "macos" }  # DL-603: vcpkg triplets use /opt/homebrew/opt/pkgconf
+'''
+
+# DL-770: the versioned brew packages render from [vars] into conf.d/toolchain.toml
+# ([bootstrap.files] above); only unversioned entries stay here.
+[bootstrap.packages]
+"macos-app:docker-desktop" = { version = "4.97.0", url = "https://desktop.docker.com/mac/main/arm64/244584/Docker.dmg", sha256 = "94e4ccec4a035b7dcdf67cfff0520d4b46ee873ae04b155abc0d22b333cc90ad", artifact = "Docker.app", adopt = true, os = "macos/arm64" }
+# DL-714: Orca self-updates, so the cask adopts the app in place instead of pinning a zip.
+# mise evaluates a third-party-tap cask with Ruby 3+ on PATH; macOS ships 2.6 ([bootstrap.hooks.pre-packages]).
+"brew:ruby" = { os = "macos" }
+"brew-cask:stablyai/orca/orca" = { os = "macos", adopt = true }
+# Herdr self-updates, so the cask adopts the app. No package ships herdr-core: the app's first-run
+# setup runs Herdr's installer, which also adds hc.
+"brew-cask:herdr-app" = { os = "macos", adopt = true, appdir = "~/Applications" }
+# A current git instead of the one bundled with the Xcode Command Line Tools.
+"brew:git" = { os = "macos" }
+# Disk-watch (see [bootstrap.macos.launchd.agents.monit]); monit is not in the mise registry.
+"brew:monit" = { os = "macos" }
+# Remote access to the x86 desktop. Tailscale is a pkg cask: installing it needs the owner's sudo.
+# Moonlight was installed by a bare brew install before this entry: mise sees Homebrew owns the cask
+# and leaves it unchanged. adopt keeps an existing app in place on a fresh mise install.
+"brew-cask:tailscale-app" = { os = "macos", adopt = true }
+"brew-cask:moonlight" = { os = "macos", adopt = true }
+# Every other formula and cask this Mac had from a bare brew install, so mise declares them all (owner,
+# 2026-11-15). mise installs brew: and brew-cask: entries itself, without the brew program. All are
+# unversioned: update:brew runs `brew upgrade` on anything not in its PINNED list, so a version here
+# would also need a PINNED entry in python/home/src/hometools/update.py. All casks were installed
+# before these entries, so adopt keeps each app in place.
+"brew:boost" = { os = "macos" }
+"brew:chafa" = { os = "macos" }
+"brew:dockerfilegraph" = { os = "macos" }
+"brew:gmic" = { os = "macos" }
+"brew:gnupg" = { os = "macos" }
+"brew:icu4c@77" = { os = "macos" }
+"brew:imagemagick" = { os = "macos" }
+"brew:mas" = { os = "macos" }
+"brew:openssl@3" = { os = "macos" }
+"brew:tree" = { os = "macos" }
+"brew:viu" = { os = "macos" }
+"brew-cask:ghostty" = { os = "macos", adopt = true }
+"brew-cask:gimp" = { os = "macos", adopt = true }
+# GCM is no longer git's global helper (the keychain prompts); after an apply, check that
+# `git config --global --get-all credential.helper` names no GCM path: its pkg may run `configure`.
+"brew-cask:git-credential-manager" = { os = "macos", adopt = true }
+"brew-cask:iterm2" = { os = "macos", adopt = true }
+"brew-cask:jordanbaird-ice" = { os = "macos", adopt = true }
+"brew-cask:krita" = { os = "macos", adopt = true }
+"brew-cask:mactex" = { os = "macos", adopt = true }
+"brew-cask:ollama-app" = { os = "macos", adopt = true }
+"brew-cask:orbstack" = { os = "macos", adopt = true }
+"brew-cask:sublime-text" = { os = "macos", adopt = true }
+"brew-cask:swiftbar" = { os = "macos", adopt = true }
+# The Omarchy (Arch) x86 desktop: Tailscale, and the Sunshine game-stream host from Omarchy's own
+# pacman repository. mise runs `pacman -S --needed` with sudo; a machine without pacman skips
+# these. Keep updates with the distribution's own full upgrade: `mise bootstrap packages upgrade`
+# is an Arch partial upgrade.
+"pacman:tailscale" = { os = "linux" }
+"pacman:sunshine" = { os = "linux" }
+# A one-job KVM virtual machine per CI job on the Omarchy desktop, for repositories a container can't serve
+# (Docker, huge pages, perf). Command-line tools only: no virt-manager window. libvirt starts dnsmasq for
+# the VM network, swtpm gives the VM a TPM and edk2-ovmf its UEFI firmware.
+"pacman:libvirt" = { os = "linux" }
+"pacman:qemu-base" = { os = "linux" }
+"pacman:edk2-ovmf" = { os = "linux" }
+"pacman:dnsmasq" = { os = "linux" }
+"pacman:swtpm" = { os = "linux" }
+"pacman:virt-install" = { os = "linux" }
+
+# DL-591: gcc/g++ wrappers retired; use the Homebrew gcc-16 and g++-16 names.
+
+# gh auth, for every project on this Mac: `mise doctor project`.
+[doctor.checks.gh-env-token]
+description = "No stale GH_TOKEN or GITHUB_TOKEN overrides the gh login"
+run = '[ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] || gh api user --silent'
+hint = "A bad env token beats the keyring with no fallback. Unset it or restart this process; pass tokens only through fnox exec."
+timeout = "15s"
+
+[doctor.checks.gh-keyring]
+description = "The stored gh login works without env tokens"
+run = "env -u GH_TOKEN -u GITHUB_TOKEN gh api user --silent"
+hint = "Run `gh auth login`. Sandboxed agents without keychain access use dev/github-env.sh."
+timeout = "15s"
+
+[doctor.checks.gh-scopes]
+description = "The stored gh login has repo, workflow and read:org"
+# One line, so `mise doctor project` in the global pre-push hook never needs this checkout's Python.
+# With --json, gh auth status always exits 0, so the jq prints ok or missing and the test compares it.
+# Scopes are matched whole: a substring test would take public_repo for repo.
+run = '''[ "$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --no-refresh --hostname github.com --json hosts --jq '.hosts["github.com"][]? | select(.active) | if .state == "success" and (["repo","workflow","read:org"] - (.scopes | split(", ")) | length) == 0 then "ok" else "missing" end')" = ok ]'''
+hint = "Run `gh auth refresh -s repo,workflow,read:org`."
+timeout = "15s"
+depends = "gh-keyring"
+
+[doctor.checks.gh-hosts-file]
+description = "gh keeps its token in the keyring, not in hosts.yml"
+run = "! grep -q oauth_token ~/.config/gh/hosts.yml"
+hint = "Run `gh auth logout`, then `gh auth login` so the token moves to the keyring."
+
+[doctor.checks.gh-ssh]
+description = "SSH to GitHub authenticates"
+run = "ssh -T -o BatchMode=yes -o ConnectTimeout=8 git@github.com 2>&1 | grep -q 'successfully authenticated'"
+hint = "Check your SSH key in the agent and on GitHub."
+timeout = "15s"
+
+# No [doctor.checks] for the language servers: the global pre-push hook runs `mise doctor project` in every repo, a
+# failed check has no warn-only level (mise 2026.11.8 doctor checks: run, description, hint, timeout, dir, shell),
+# and a broken LSP plugin must not stop a push. `mise run lsp doctor` checks them on demand.
+# Doppler writes go straight to the doppler CLI (fnox's Doppler provider is read-only), under the read/write service
+# token the CLI keeps in its keyring slot (`pbpaste | doppler configure set token --scope /`, once). These are
+# aliases, not wrappers. --silent: set and delete print the remaining secrets with values otherwise (doppler 3.77.1
+# pkg/cmd/secrets.go); the agent guard blocks the doppler commands that print values. Names reach the shell only as
+# mise's usage_* variables, never as template text, and must be UPPER_SNAKE (no leading, trailing or double _).
+# secret:doctor finds the checkout through the global config's link into it.
+[tasks."secret:set"]
+description = "Add a Doppler secret to dotfiles/dev_personal from stdin; --replace changes an existing one"
+usage = '''
+arg "<name>" help="UPPER_SNAKE secret name"
+flag "--replace" help="change a secret Doppler already has"
+'''
+run = "printf %s \"$usage_name\" | grep -qxE '[A-Z][A-Z0-9]*(_[A-Z0-9]+)*' || { echo 'secret:set: the name is not UPPER_SNAKE' >&2; exit 1; }; test -n \"$usage_replace\" || { names=$(doppler secrets --only-names --json -p dotfiles -c dev_personal --no-check-version) || { echo 'secret:set: cannot list the Doppler names' >&2; exit 1; }; ! printf %s \"$names\" | jq -e --arg n \"$usage_name\" 'has($n)' > /dev/null || { echo \"secret:set: $usage_name exists; pass --replace to change it\" >&2; exit 1; }; }; doppler secrets set \"$usage_name\" -p dotfiles -c dev_personal --no-check-version --no-interactive --silent > /dev/null && echo \"secret:set: stored $usage_name\""
+
+[tasks."secret:delete"]
+description = "Delete Doppler secrets from dotfiles/dev_personal (the owner's yes on the exact names first)"
+usage = 'arg "<names>" var=#true help="secret names"'
+run = "printf '%s\\n' $usage_names | grep -qvxE '[A-Z][A-Z0-9]*(_[A-Z0-9]+)*' && { echo 'secret:delete: every name must be UPPER_SNAKE' >&2; exit 1; }; doppler secrets delete $usage_names -p dotfiles -c dev_personal --no-check-version --yes --silent > /dev/null && echo \"secret:delete: deleted $usage_names\""
+
+[tasks."secret:list"]
+description = "List the secret names in dotfiles/dev_personal, never values"
+run = "doppler secrets --only-names -p dotfiles -c dev_personal --no-check-version"
+
+[tasks."secret:doctor"]
+description = "Run the dotfiles fnox and Doppler checks (dotfiles doctor/mise.toml)"
+run = "mise -C \"$(git -C \"$(dirname \"$(realpath ~/.config/mise/config.toml)\")\" rev-parse --show-toplevel)/doctor\" doctor project"
+
+# mise records every config it loads in $MISE_STATE_DIR/tracked-configs, a worktree's copy of this file too when a
+# command points MISE_GLOBAL_CONFIG_FILE at it (lsptools, a pin bump). mise reshim and mise install then reload each
+# record as a project config and warn that its global-only settings are ignored, about five lines per copy
+# (src/config/mod.rs:4330 and src/config/tracking.rs at v2026.11.8). Tests record theirs too: //home:integration
+# loads a scratch ~/.config/mise under pytest's temporary folder. This drops the records of worktree copies and of
+# anything under a pytest temporary folder, never the files; hk's post-merge step runs it on each merge into main.
+[tasks."mise:untrack-worktrees"]
+description = "Drop mise's tracked-config records of dotfiles worktree copies of the global config and of pytest scratch configs"
+run = 'n=0; for l in "${MISE_STATE_DIR:-$HOME/.local/state/mise}"/tracked-configs/*; do t=$(readlink "$l") || continue; case "$t" in */dotfiles.worktrees/*/unix/home/.config/mise/config.toml | */pytest-of-*/*) rm "$l" && n=$((n + 1));; esac; done; echo "mise:untrack-worktrees: dropped $n records"'
+
+# Every hk check and every root's tests in the checkout this config links into (the launchd agent nightly-check
+# runs it at 03:00). hk runs 2 steps at a time (hk.pkl jobs) and --jobs 2 caps the test tasks, each pytest at 4
+# workers (the checkout's PYTEST_XDIST_AUTO_NUM_WORKERS). A pass touches nightly/passed, which monit watches (3 days
+# without one alert); a failure raises monit:alert and exits 1. This Mac sleeps
+# when nothing holds it awake, and launchd then starts a missed 03:00 run on waking, when the owner sits down: a
+# run that starts after 05:59, or with the 5-minute load average above the core count, says so and skips.
+[tasks."nightly:check"]
+description = "Run hk check --all and mise run test in the dotfiles checkout; a failure raises a monit alert"
+run = 'date && h=$(date +%H) && l=$(sysctl -n vm.loadavg | cut -d" " -f3 | cut -d. -f1) && { [ "$h" -lt 6 ] && [ "$l" -lt "$(sysctl -n hw.ncpu)" ] || { echo "nightly:check skipped: hour $h, 5-minute load $l"; exit 0; }; } && cd "$(git -C "$(dirname "$(realpath ~/.config/mise/config.toml)")" rev-parse --show-toplevel)" && git log -1 --oneline && { hk check --all && mise run --jobs 2 test && touch ~/.local/state/dotfiles/nightly/passed && echo nightly:check passed; } || { MONIT_SERVICE=nightly-check MONIT_EVENT="Check failed" MONIT_DESCRIPTION="hk check --all or mise run test failed; see ~/.local/state/dotfiles/nightly/check.log" mise run monit:alert; exit 1; }'
