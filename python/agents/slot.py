@@ -9,7 +9,8 @@ Standard library only.
   python -I slot.py check [--host mac|pc]                  exit 0 when this caller may start container work there now
   python -I slot.py hook                                   Claude Code PreToolUse hook: a Bash payload on stdin
 
---host defaults to mac. check without --host takes pc when DOCKER_HOST or DOCKER_CONTEXT aims at the PC, and
+--host defaults to mac. check without --host takes pc when DOCKER_HOST, DOCKER_CONTEXT or the Docker CLI's current
+context aims at the PC, and
 check --host mac refuses there: the tasks call check with no flag, so it follows where their Docker really goes.
 
 Each host has its own grant, so a job on the PC does not wait behind a job on the Mac. The records are in
@@ -20,8 +21,8 @@ per host at a time. grant.json was the only record before #194, so a grant held 
 The caller is SLOT_HOLDER, else HC_TERMINAL_ID (every herdr tab has one); with neither set, check refuses. check
 passes when the host's record names the caller, has not expired, and the 5-minute load is below the start line
 (SLOT_LOAD_LINE, default 9). Heavy work starts only under 9; 11 is the pause line for work already running.
-Container work aimed at the PC runner host (the ssh alias `pc`, by its resolved host name), through DOCKER_HOST,
-DOCKER_CONTEXT, `--context`, `-H` or `ssh <pc> docker ...`, needs the pc grant, and the load it checks is the PC's:
+Container work aimed at the PC runner host (the ssh alias `pc`, by its resolved host name), through `--context`,
+`-H`, DOCKER_HOST, DOCKER_CONTEXT, the current context or `ssh <pc> docker ...`, needs the pc grant, and the load it checks is the PC's:
 the 5-minute value of its /proc/loadavg and its `nproc`, over one `ssh -o BatchMode=yes pc` call. It starts only
 under 0.75 x cores, 0.9 x cores is the pause line, and an ssh call that fails refuses (owner, 2026-11-18: MVP, the
 PC treated like the Mac; its isolation is parked in #187). All other container work needs the mac grant.
@@ -58,7 +59,7 @@ PRIVILEGED = re.compile(
     r"--privileged(?:=(?:true|1))?(?![=\w-])|--cap-add[=\s]+ALL\b", re.IGNORECASE
 )
 DOCKER = re.compile(r"\bdocker(?:-compose)?\b")
-SEGMENTS = re.compile(r"&&|\|\||[;|&\n]")
+HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)([^\s'\";|&<>()]+)\2")
 # On the PC the lines scale with its cores: start under 0.75 x cores, pause at 0.9 x cores.
 PC_START = 0.75
 PC_PAUSE = 0.9
@@ -109,6 +110,9 @@ def read(path: Path) -> dict | None:
         raise RefusedError(msg) from error
     if not isinstance(record, dict):
         msg = f"the grant record {path} is not an object"
+        raise RefusedError(msg)
+    if not record.get("holder"):
+        msg = f"the grant record {path} has no holder"
         raise RefusedError(msg)
     return record
 
@@ -182,17 +186,22 @@ def release(holder: str, host: str = "mac") -> str:
     return f"released {record.get('holder')}'s {host} grant"
 
 
-def clear_expired() -> str:
-    """Clear every host's expired grant."""
-    cleared = []
+def clear_expired() -> tuple[str, list[str]]:
+    """Clear every host's expired grant. Returns what it cleared and each record it could not read, so one bad
+    record does not keep the other host's expired grant in place."""
+    cleared, unreadable = [], []
     for host in HOSTS:
         with locked(host) as path:
-            record = read(path)
+            try:
+                record = read(path)
+            except RefusedError as error:
+                unreadable.append(str(error))
+                continue
             if record is None or not expired(record):
                 continue
             path.unlink()
         cleared.append(f"cleared {record.get('holder')}'s expired {host} grant")
-    return "; ".join(cleared) or "nothing expired"
+    return "; ".join(cleared) or "nothing expired", unreadable
 
 
 def load() -> float:
@@ -301,60 +310,224 @@ def is_pc(host: str | None) -> bool:
     return bool(host) and resolved_host(host) == resolved_host(PC_ALIAS)
 
 
-def option(words: list[str], *names: str) -> str | None:
-    for i, word in enumerate(words):
-        for name in names:
-            if word == name and i + 1 < len(words):
-                return words[i + 1]
-            if word.startswith(name + "="):
-                return word.split("=", 1)[1]
-    return None
-
-
-def ssh_target(words: list[str]) -> str | None:
-    """The destination of an `ssh ... docker ...` word list, or None when ssh is not running docker."""
-    if "ssh" not in words:
-        return None
-    rest = words[words.index("ssh") + 1 :]
+def ssh_call(words: list[str], body: str = "") -> tuple[str | None, str]:
+    """The destination and the remote command text of an `ssh ...` word list whose remote command names docker
+    (body is a here-document sent to it); (None, "") when ssh is not running docker."""
+    rest = words[1:]
     with_value = set("BbcDEeFIiJLlmOoPpQRSWw")
     i = 0
     while i < len(rest) and rest[i].startswith("-"):
         flag = rest[i]
         i += 2 if len(flag) == 2 and flag[1] in with_value else 1
-    if i >= len(rest) or not DOCKER.search(" ".join(rest[i + 1 :])):
-        return None
-    return rest[i].rsplit("@", 1)[-1]
+    remote = " ".join(rest[i + 1 :]) + "\n" + body
+    if i >= len(rest) or not DOCKER.search(remote):
+        return None, ""
+    return rest[i].rsplit("@", 1)[-1], remote
 
 
-def pc_reason(segment: str, env: dict[str, str]) -> str | None:
-    """Why this command segment aims docker at the PC, or None."""
+def segments(command: str) -> list[tuple[str, str]]:
+    """The command's simple commands in order, each with the here-document text sent to it. Separators (&& || ;
+    | & newlines, parentheses and backquotes) split only outside quotes, so a quoted remote command stays one
+    word of its ssh call. Raises ValueError for a quote that never closes."""
+    out: list[tuple[list[str], list[str]]] = [([], [])]
+    waiting: list[
+        tuple[str, bool, list[str]]
+    ] = []  # delimiter, whether <<-, the owning command's body
+    quote = ""
+    i, size = 0, len(command)
+    while i < size:
+        char = command[i]
+        text = out[-1][0]
+        step = 1
+        if quote:
+            if char == "\\" and quote == '"' and i + 1 < size:
+                text.append(command[i : i + 2])
+                step = 2
+            else:
+                quote = "" if char == quote else quote
+                text.append(char)
+        elif char == "\\" and i + 1 < size:
+            # A backslash-newline joins two lines; any other escaped character stays in its word.
+            if command[i + 1] != "\n":
+                text.append(command[i : i + 2])
+            step = 2
+        elif char in "'\"":
+            quote = char
+            text.append(char)
+        elif char == "#" and (not text or text[-1].isspace()):
+            step = (command.find("\n", i) if "\n" in command[i:] else size) - i
+        elif command.startswith("<<<", i):
+            text.append("<<<")
+            step = 3
+        elif found := HEREDOC.match(command, i):
+            waiting.append((found.group(3), bool(found.group(1)), out[-1][1]))
+            step = found.end() - i
+        elif char == "\n" and waiting:
+            lines = command[i + 1 :].split("\n")
+            used = 0
+            for word, tabs, body in waiting:
+                while used < len(lines):
+                    line = lines[used]
+                    used += 1
+                    if (line.lstrip("\t") if tabs else line) == word:
+                        break
+                    body.append(line)
+            waiting.clear()
+            out.append(([], []))
+            step = 1 + sum(len(line) + 1 for line in lines[:used])
+        elif command.startswith(("&&", "||"), i):
+            out.append(([], []))
+            step = 2
+        elif char in ";|&\n()`":
+            out.append(([], []))
+        else:
+            text.append(char)
+        i += step
+    if quote:
+        msg = f"a {quote} quote never closes"
+        raise ValueError(msg)
+    return [
+        ("".join(text), "\n".join(body)) for text, body in out if "".join(text).strip()
+    ]
+
+
+WRAPPERS = frozenset(
+    {"env", "sudo", "nohup", "time", "exec", "command", "caffeinate", "nice"}
+)
+ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
+# Docker's and compose's own options that take a value, so the word after one is not read as the subcommand.
+WITH_VALUE = frozenset(
+    {
+        "--config",
+        "-l",
+        "--log-level",
+        "--tlscacert",
+        "--tlscert",
+        "--tlskey",
+        "-f",
+        "--file",
+        "-p",
+        "--project-name",
+        "--profile",
+        "--env-file",
+        "--project-directory",
+        "--ansi",
+        "--parallel",
+        "--progress",
+    }
+)
+# The context `docker context use` set earlier in the same command; not a name a shell variable can have.
+CURRENT = "docker context use"
+
+
+def command_words(text: str) -> tuple[dict[str, str], list[str]]:
+    """A simple command's leading assignments and its words from the command word on, wrappers such as env and
+    timeout dropped and the command word without its folder, so /usr/bin/ssh reads as ssh."""
+    words = shlex.split(text)
+    assigned: dict[str, str] = {}
+    while words:
+        found = ASSIGNMENT.fullmatch(words[0])
+        name = os.path.basename(words[0])
+        if found:
+            assigned[found.group(1)] = found.group(2)
+            words = words[1:]
+        elif name in WRAPPERS:
+            words = words[1:]
+        elif name == "timeout":
+            words = words[2:]
+        else:
+            words[0] = name
+            break
+    return assigned, words
+
+
+def docker_target(words: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Docker's --context and --host as given before the subcommand (compose takes them after its own name too),
+    and the words from the subcommand on. Words after the subcommand belong to the container, not to docker."""
+    given: dict[str, str] = {}
+    in_compose = False
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word == "compose" and not in_compose:
+            in_compose = True
+            i += 1
+            continue
+        if not word.startswith("-") or word == "-":
+            break
+        name, joined, value = word.partition("=")
+        if name in {"--context", "--host", "-c", "-H"}:
+            key = "context" if name in {"--context", "-c"} else "host"
+            if joined:
+                given[key] = value
+            elif i + 1 < len(words):
+                given[key] = words[i + 1]
+                i += 1
+        elif re.match(r"-[cH].", word):
+            given["context" if word[1] == "c" else "host"] = word[2:].removeprefix("=")
+        elif word in WITH_VALUE:
+            i += 1
+        i += 1
+    return given, words[i:]
+
+
+def current_context(env: dict[str, str]) -> str | None:
+    """The context `docker context use` last stored in the Docker CLI's config file."""
+    folder = env.get("DOCKER_CONFIG") or str(Path.home() / ".docker")
     try:
-        words = shlex.split(segment)
-    except ValueError:
-        words = segment.split()
-    inline = dict(
-        w.split("=", 1) for w in words if re.fullmatch(r"DOCKER_(HOST|CONTEXT)=\S*", w)
-    )
-    target = ssh_target(words)
-    if target and is_pc(target):
-        return f"docker over ssh to {target}"
-    if not DOCKER.search(segment):
+        config = json.loads((Path(folder) / "config.json").read_text(encoding="utf-8"))
+        return config.get("currentContext") or None
+    except (OSError, ValueError, AttributeError):
         return None
-    endpoint = (
-        option(words, "-H", "--host")
-        or inline.get("DOCKER_HOST")
-        or env.get("DOCKER_HOST")
-    )
-    if endpoint and is_pc(host_of(endpoint)):
-        return f"DOCKER_HOST {endpoint}"
-    context = (
-        option(words, "--context", "-c")
-        or inline.get("DOCKER_CONTEXT")
-        or env.get("DOCKER_CONTEXT")
-    )
+
+
+def pc_reason(given: dict[str, str], env: dict[str, str]) -> str | None:
+    """Why docker with these options in this environment is aimed at the PC, or None. The order is the Docker
+    CLI's own (resolveContextName in its cli/command/cli.go): --context, then --host, then DOCKER_HOST, then
+    DOCKER_CONTEXT, then the current context; an empty variable counts as unset."""
+    context = given.get("context")
+    endpoint = None if context else given.get("host") or env.get("DOCKER_HOST")
+    if not context and not endpoint:
+        context = env.get("DOCKER_CONTEXT") or env.get(CURRENT) or current_context(env)
+    if context == "default":
+        # The default context is DOCKER_HOST when set, else the local socket.
+        context, endpoint = None, env.get("DOCKER_HOST")
+    if endpoint:
+        return f"DOCKER_HOST {endpoint}" if is_pc(host_of(endpoint)) else None
     if context and is_pc(context_host(context)):
         return f"docker context {context}"
     return None
+
+
+def started(command: str, env: dict[str, str]) -> list[tuple[str, str | None]]:
+    """Each heavy container start in the command, in order: its text, and why it is aimed at the PC (None when
+    it runs here). A target an earlier command sets (export, a bare assignment, unset, docker context use) holds
+    for the ones after it. docker or ssh must be the command word, so `grep "docker run" notes.md` starts
+    nothing. Raises ValueError when the quoting cannot be read."""
+    shell = dict(env)
+    out: list[tuple[str, str | None]] = []
+    for text, body in segments(command):
+        assigned, words = command_words(text)
+        if not words:
+            shell.update(assigned)
+        elif words[0] == "export":
+            shell.update(w.split("=", 1) for w in words[1:] if "=" in w)
+        elif words[0] == "unset":
+            for word in words[1:]:
+                shell.pop(word, None)
+        elif words[0] == "ssh":
+            # The remote command is opaque to the word rules here; any heavy docker in it counts.
+            target, remote = ssh_call(words, body)
+            if target and HEAVY.search(remote):
+                aimed = f"docker over ssh to {target}" if is_pc(target) else None
+                out.append((remote, aimed))
+        elif DOCKER.fullmatch(words[0]):
+            given, rest = docker_target(words[1:])
+            if rest[:2] == ["context", "use"] and len(rest) > 2:
+                shell[CURRENT] = rest[2]
+            elif HEAVY.search(shlex.join(words)):
+                out.append((text, pc_reason(given, shell | assigned)))
+    return out
 
 
 def guard_command(command: str, env: dict[str, str]) -> None:
@@ -362,51 +535,24 @@ def guard_command(command: str, env: dict[str, str]) -> None:
     under too high a load there: the pc grant and the PC's load for work aimed at the PC, else the Mac's."""
     if not DOCKER.search(command):
         return
-    started = [segment for segment in SEGMENTS.split(command) if heavy(segment)]
-    if not started:
-        return
-    aimed = [segment for segment in started if pc_reason(segment, env)]
+    try:
+        work = started(command, env)
+    except ValueError as error:
+        # Guessing here is how PC work was once read as Mac work; a command that names docker and cannot be
+        # read does not run.
+        msg = f"cannot read this command's quoting ({error}), so cannot tell where its docker runs"
+        raise RefusedError(msg) from error
+    aimed = [text for text, reason in work if reason]
     # No --privileged container on the PC, grant or not: one that runs apt can apply its image's kernel settings
     # to the PC itself (the agent rules' "No --privileged containers on the PC").
-    if any(PRIVILEGED.search(segment) for segment in aimed):
+    if any(PRIVILEGED.search(text) for text in aimed):
         msg = "a --privileged container on the PC is never allowed: pass the one --device or --cap-add it needs"
         raise RefusedError(msg)
     # A command may start work in both places; each needs its own host's grant and is checked against its load.
     if aimed:
         check("pc")
-    if len(aimed) < len(started):
+    if len(aimed) < len(work):
         check("mac")
-
-
-WRAPPERS = frozenset(
-    {"env", "sudo", "nohup", "time", "exec", "command", "caffeinate", "nice"}
-)
-
-
-def heavy(segment: str) -> bool:
-    """Whether a command segment runs heavy container work: docker (or ssh running docker) as the command word,
-    so `grep "docker run" notes.md` is not container work."""
-    try:
-        words = shlex.split(segment)
-    except ValueError:
-        words = segment.split()
-    while words and (
-        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", words[0]) or words[0] in WRAPPERS
-    ):
-        words = words[1:]
-    if words[:1] == ["timeout"]:
-        words = words[2:]
-    if words[:1] == ["ssh"]:
-        # The remote command is opaque to the word rules here; any heavy docker in it counts.
-        return (
-            ssh_target(words) is not None
-            and HEAVY.search(" ".join(words[1:])) is not None
-        )
-    return (
-        bool(words)
-        and DOCKER.fullmatch(words[0]) is not None
-        and HEAVY.search(shlex.join(words)) is not None
-    )
 
 
 def hook() -> None:
@@ -450,10 +596,14 @@ def main() -> None:
         elif args.action == "release":
             out = release(args.holder or caller(), args.host)
         elif args.action == "clear-expired":
-            out = clear_expired()
+            out, unreadable = clear_expired()
+            if unreadable:
+                sys.stdout.write(out + "\n")
+                raise RefusedError("; ".join(unreadable))
         else:
-            # Without --host, a caller that exported DOCKER_HOST or DOCKER_CONTEXT at the PC is doing PC work.
-            aimed = pc_reason("docker", dict(os.environ))
+            # Without --host, a caller whose Docker goes to the PC (DOCKER_HOST, DOCKER_CONTEXT or the current
+            # context) is doing PC work.
+            aimed = pc_reason({}, dict(os.environ))
             if aimed and args.host == "mac":
                 # The mac grant must never cover Docker that this environment sends to the PC.
                 msg = f"--host mac, but Docker here is aimed at the PC ({aimed}): check --host pc"

@@ -25,7 +25,7 @@ host="${usage_host:-pc}"
 # #179, #194: container work an agent starts needs the coordinator's slot grant for the host DOCKER_HOST aims at.
 [[ -z "${CLAUDECODE:-}${CODEX_THREAD_ID:-}" ]] || {
   # The same target the docker calls below get, so the check reads that host's grant.
-  if [[ "$host" == mac ]]; then unset DOCKER_HOST; else export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"; fi
+  if [[ "$host" == mac ]]; then unset DOCKER_HOST; else export DOCKER_HOST=ssh://pc; fi
   mise run -q slot:check
 }
 name="${project}-agents"
@@ -71,7 +71,7 @@ if [[ "$host" == mac ]]; then
     docker start agent-secrets >/dev/null
   fi
 else
-  export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
+  export DOCKER_HOST=ssh://pc
   on_host() { ssh -o BatchMode=yes pc "$1"; }
   clones=dev/containers
   enter="ssh -t pc docker exec -it $name"

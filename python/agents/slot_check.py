@@ -172,6 +172,71 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         code, err = hook(mac_busy | (extra or {}), command)
         return (code, words in err) == (2, True) if words else code == 0
 
+    def aim(command: str, extra: dict[str, str] | None = None) -> list[int]:
+        """The hook's exit code for one command with no grant, only the mac grant, only the pc grant, and both."""
+        codes = []
+        for hosts in ((), ("mac",), ("pc",), ("mac", "pc")):
+            clear()
+            for host in hosts:
+                also(host)
+            codes.append(hook(me | (extra or {}), command)[0])
+        return codes
+
+    def aims(
+        want: list[int], *commands: str, extra: dict[str, str] | None = None
+    ) -> bool:
+        return all(aim(command, extra) == want for command in commands)
+
+    def current_context(name: str) -> None:
+        config = Path(env["DOCKER_CONFIG"])
+        config.mkdir(parents=True, exist_ok=True)
+        (config / "config.json").write_text(json.dumps({"currentContext": name}))
+
+    def with_context(name: str, check: Callable[[], bool]) -> bool:
+        current_context(name)
+        try:
+            return check()
+        finally:
+            (Path(env["DOCKER_CONFIG"]) / "config.json").unlink()
+
+    def keeps_live() -> bool:
+        """clear-expired and another holder's release both leave a live grant; an expired one is nobody's."""
+        granted(host="pc")
+        cleared = slot(env, "clear-expired").stdout
+        taken = slot(other, "release", "--host", "pc")
+        live = pc_record.exists()
+        granted("0", host="pc")
+        return (
+            "nothing expired" in cleared
+            and taken.returncode == 1
+            and "t1's, not t2's" in taken.stderr
+            and live
+            and "holds only" not in slot(me, "check").stderr
+        )
+
+    def clears_past_bad() -> bool:
+        """An unreadable mac record does not keep clear-expired from the PC's expired grant."""
+        granted("0", host="pc")
+        mac_record.write_text("{not json")
+        done = slot(env, "clear-expired")
+        cleared = not pc_record.exists()
+        mac_record.unlink()
+        return (
+            done.returncode == 1 and cleared and "t1's expired pc grant" in done.stdout
+        )
+
+    def no_holder() -> bool:
+        """A record without a holder is unreadable, not a grant to None."""
+        clear()
+        records.mkdir(parents=True, exist_ok=True)
+        pc_record.write_text("{}")
+        done = slot(me, "check", "--host", "pc")
+        pc_record.unlink()
+        return done.returncode == 1 and "has no holder" in done.stderr
+
+    here, there, both = [2, 0, 2, 0], [2, 2, 0, 0], [2, 2, 2, 0]
+    at_pc = {"DOCKER_HOST": "ssh://pc"}
+
     return [
         ("grant, second grant fails, release clears", grant_cycle),
         (
@@ -381,6 +446,141 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             lambda: hook(nobody, "ls -la && make build")[0] == 0,
         ),
         (
+            "hook: a quoted remote command with more than one command is PC work",
+            lambda: aims(
+                there,
+                "ssh pc 'cd /x && docker run y'",
+                "ssh pc 'cd /x; docker build .'",
+                "ssh pc 'docker pull x | cat; docker run y'",
+                'ssh pc "docker pull x && docker run y"',
+                "ssh pc '\ndocker run x\n'",
+                "ssh pc 'bash -lc \"docker compose up -d\"'",
+            ),
+        ),
+        (
+            "hook: a here-document sent to ssh is PC work",
+            lambda: aims(there, "ssh pc bash -s <<'EOF'\ndocker run x\nEOF"),
+        ),
+        (
+            "hook: a here-document belongs to the command that opened it",
+            lambda: aims(
+                there, "ssh pc bash -s <<EOF && echo sent\ndocker run x\nEOF\nls"
+            ),
+        ),
+        (
+            "hook: docker run in a subshell or a command substitution is seen",
+            lambda: aims(here, "(docker run x)", "echo $(docker run x)"),
+        ),
+        (
+            "hook: a here-string is not a here-document",
+            lambda: aims(here, "cat <<< 'x'\ndocker run x"),
+        ),
+        (
+            "hook: ssh by its path is PC work",
+            lambda: aims(there, "/usr/bin/ssh pc docker run x"),
+        ),
+        (
+            "hook: a target set by an earlier command is seen",
+            lambda: aims(
+                there,
+                "export DOCKER_HOST=ssh://pc && docker run x",
+                "export DOCKER_HOST=ssh://pc; docker run x",
+                "export DOCKER_HOST=ssh://pc\ndocker run x",
+                "DOCKER_HOST=ssh://pc; docker run x",
+                "export DOCKER_CONTEXT=pcctx && docker build .",
+                "docker context use pcctx && docker run x",
+            ),
+        ),
+        (
+            "hook: attached short options are read",
+            lambda: aims(
+                there,
+                "docker -Hssh://pc run x",
+                "docker -H=ssh://pc run x",
+                "docker -cpcctx run x",
+                "docker compose --context pcctx up",
+            ),
+        ),
+        (
+            "hook: the current docker context at the PC is PC work",
+            lambda: with_context("pcctx", lambda: aims(there, "docker run x")),
+        ),
+        (
+            "check with the current docker context at the PC: the pc grant",
+            lambda: with_context(
+                "pcctx",
+                lambda: (
+                    granted(host="pc"),
+                    "may start on pc" in slot(mac_busy, "check").stdout,
+                )[1],
+            ),
+        ),
+        (
+            "hook: words after the docker subcommand do not aim it",
+            lambda: aims(
+                here,
+                "docker run -e DOCKER_HOST=ssh://pc img",
+                "docker build --build-arg DOCKER_CONTEXT=pcctx .",
+                "docker run img ssh pc docker ps",
+                "docker run -c 512 img",
+                "docker run -h pc img",
+            ),
+        ),
+        (
+            "hook: a target cleared or overridden in the command is Mac work",
+            lambda: aims(
+                here,
+                "DOCKER_HOST= docker run x",
+                "unset DOCKER_HOST; docker run x",
+                "docker --context localctx run x",
+                "docker -H unix:///var/run/docker.sock run x",
+                extra=at_pc,
+            ),
+        ),
+        (
+            "hook: --context and DOCKER_CONTEXT in the command beat an inherited DOCKER_CONTEXT",
+            lambda: aims(
+                here,
+                "docker --context localctx run x",
+                "DOCKER_CONTEXT=localctx docker run x",
+                extra={"DOCKER_CONTEXT": "pcctx"},
+            ),
+        ),
+        (
+            "hook: DOCKER_HOST beats DOCKER_CONTEXT, as in the docker CLI",
+            lambda: aims(
+                here,
+                "DOCKER_HOST=unix:///var/run/docker.sock docker run x",
+                extra={"DOCKER_CONTEXT": "pcctx"},
+            ),
+        ),
+        (
+            "hook: work in both places needs both grants",
+            lambda: aims(
+                both,
+                "docker run a && ssh pc docker run b",
+                "docker run a; DOCKER_HOST=ssh://pc docker run b",
+            ),
+        ),
+        (
+            "hook: quoting that cannot be read around docker: blocked",
+            lambda: (
+                also("mac"),
+                also("pc"),
+                blocked(me, "ssh pc 'docker run x", "cannot read"),
+            )[2],
+        ),
+        (
+            "hook: a comment with an apostrophe before docker run is read",
+            lambda: aims(here, "# don't skip this\ndocker run x"),
+        ),
+        (
+            "a live grant survives clear-expired and another holder's release",
+            keeps_live,
+        ),
+        ("clear-expired goes past an unreadable record", clears_past_bad),
+        ("a record with no holder: refused as unreadable", no_holder),
+        (
             "hook: docker named in a search: untouched",
             lambda: hook(nobody, 'grep -rn "docker run" docs')[0] == 0,
         ),
@@ -410,6 +610,8 @@ def main() -> None:
         env |= {
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "XDG_STATE_HOME": str(root / "state"),
+            # A scratch Docker config: the guard reads its current context, never this machine's.
+            "DOCKER_CONFIG": str(root / "docker"),
         }
         env.pop("HC_TERMINAL_ID", None)
         for name, case in cases(env):
