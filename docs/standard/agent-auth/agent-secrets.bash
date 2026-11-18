@@ -4,6 +4,8 @@
 #   agent-secrets register <container> <owner/repo>   start serving a container and print its folder (agents:up)
 #   agent-secrets unregister <container>              stop serving it and remove its files
 #   agent-secrets refresh [<container>]               write the files now (all containers, or one)
+#   agent-secrets guard <container>                   exit 0 if its repository's default branch blocks direct pushes,
+#                                                     3 if not (agents:up refuses then); uses the container's token
 #   agent-secrets serve                               the user service: refresh whatever is due, every 15 s
 #
 # Each container gets ~/.local/state/agent-secrets/<container>/ (0700), mounted read-only at /run/agent-secrets:
@@ -146,6 +148,28 @@ case "${1:-}" in
     valid_name "$2"
     lock
     rm -rf -- "${state:?}/$2"
+    ;;
+  guard)
+    # The App may write contents on every repository, so a container is only safe where the default branch
+    # itself refuses direct pushes: a ruleset with a pull_request, merge_queue or update rule, or classic
+    # protection. Both reads need only the App's metadata read permission.
+    [[ $# -eq 2 ]] || die "usage: agent-secrets guard <container>"
+    valid_name "$2"
+    repo=$(<"$state/$2/repo")
+    # shellcheck disable=SC2034 # gh_api reads it by name
+    tok=$(<"$state/$2/gh-token")
+    branch=$(gh_api tok GET "/repos/$repo" | jq -er .default_branch) || die "cannot read $repo"
+    # GitHub refuses this read (403, "Upgrade to GitHub Pro") on a private repository of a free plan, which can
+    # have no rulesets; any failed read counts as no rules, so the guard fails closed.
+    types=$(gh_api tok GET "/repos/$repo/rules/branches/$branch" 2>/dev/null | jq -r '.[].type' 2>/dev/null) || types=""
+    classic=$(gh_api tok GET "/repos/$repo/branches/$branch" | jq -r .protected) ||
+      die "cannot read $repo $branch"
+    if grep -qxE 'pull_request|merge_queue|update' <<<"$types" || [[ "$classic" == true ]]; then
+      echo "agent-secrets: $repo $branch blocks direct pushes (rules: $(tr '\n' ' ' <<<"$types")classic protection: $classic)"
+    else
+      log "$repo $branch does not block direct pushes (no pull_request, merge_queue or update rule and no classic protection, or a private repository on a free plan, which can have neither)"
+      exit 3
+    fi
     ;;
   refresh)
     lock

@@ -3,6 +3,7 @@
 #USAGE arg "<project>" help="Project name; the clone is <repo url> checked out under ~/dev/containers/<project> on the PC"
 #USAGE flag "--repo <url>" help="GitHub repository URL (default: https://github.com/ray-manaloto/<project>.git)"
 #USAGE flag "--image <ref>" help="Image (default: cpp-standard-agents:dev)"
+#USAGE flag "--allow-unprotected" help="Start even when the repository's default branch does not block direct pushes (scratch repositories only)"
 #USAGE flag "--fresh" help="Remove the container and its agent volumes first (Codex's login is lost)"
 #
 # The container runs as the non-root user dev, with no --privileged and -e container=docker. The project is a separate
@@ -36,7 +37,19 @@ if [[ -n "${usage_fresh:-}" ]]; then
 fi
 # Register first: it makes the folder as the PC user (so Docker never makes it as root) and writes the token now.
 # AGENT_SECRETS_CMD runs another copy of the service script, for tests before a change reaches the PC.
-keys="$(on_pc "${AGENT_SECRETS_CMD:-.local/bin/agent-secrets} register '$name' '$slug'")"
+secrets="${AGENT_SECRETS_CMD:-.local/bin/agent-secrets}"
+keys="$(on_pc "$secrets register '$name' '$slug'")"
+# The App may write contents on every repository, so its token goes only where the default branch refuses direct
+# pushes (a ruleset or classic protection), unless --allow-unprotected says this is a scratch repository.
+if ! on_pc "$secrets guard '$name'"; then
+  if [[ -z "${usage_allow_unprotected:-}" ]]; then
+    # A new registration goes; a running container's stays, so it is not cut off mid-task.
+    docker container inspect "$name" >/dev/null 2>&1 || on_pc "$secrets unregister '$name'" || true
+    echo "agents:up: $slug's default branch does not block direct pushes; add a ruleset, or pass --allow-unprotected" >&2
+    exit 3
+  fi
+  echo "agents:up: --allow-unprotected: the bot can push straight to $slug's default branch" >&2
+fi
 home="$(on_pc 'echo ~')"
 # A container made before D155 (or with another key folder) lacks this mount, and a mount can only be added by
 # recreating it. Its named volumes, and the logins on them, are kept; the old gh volume is left, unused.
