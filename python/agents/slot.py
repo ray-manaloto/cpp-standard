@@ -10,8 +10,8 @@ The grant record is $XDG_STATE_HOME/slots/grant.json (else ~/.local/state/slots/
 under a lock: lane, holder, granted_at and expires_at (UTC, ISO 8601). One grant at a time.
 
 The caller is SLOT_HOLDER, else HC_TERMINAL_ID (every herdr tab has one); with neither set, check refuses. check
-passes when the record names the caller, has not expired, and the 5-minute load is below the pause line
-(SLOT_LOAD_LINE, default 11). Docker aimed at the PC runner host (the ssh alias `pc`, by its resolved host name),
+passes when the record names the caller, has not expired, and the 5-minute load is below the start line
+(SLOT_LOAD_LINE, default 9). Heavy work starts only under 9; 11 is the pause line for work already running. Docker aimed at the PC runner host (the ssh alias `pc`, by its resolved host name),
 through DOCKER_HOST, DOCKER_CONTEXT, `--context`, `-H` or `ssh <pc> docker ...`, is refused with "owner required"
 whatever the grant, until the PC's credential isolation is verified.
 
@@ -34,7 +34,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 PC_ALIAS = "pc"
-LOAD_LINE = 11.0
+LOAD_LINE = 9.0  # the start line; work already running pauses at 11 (PAUSE_LINE)
+PAUSE_LINE = 11.0
 # Container work that starts something heavy: run, create, build (also buildx, image build), compose up.
 HEAVY = re.compile(
     r"\bdocker(?:\s+\S+)*?\s+(?:run|create|build|buildx\s+build|image\s+build)\b"
@@ -165,7 +166,10 @@ def check() -> str:
     line = float(os.environ.get("SLOT_LOAD_LINE") or LOAD_LINE)
     measured = load()
     if measured >= line:
-        msg = f"the 5-minute load is {measured:.1f}, at or over the line {line:g}: wait for it to drop"
+        msg = (
+            f"the 5-minute load is {measured:.1f}, at or over the start line {line:g}: wait for it to drop"
+            f" (work already running pauses at {PAUSE_LINE:g})"
+        )
         raise RefusedError(msg)
     return f"{holder} may start (load {measured:.1f} < {line:g})"
 
