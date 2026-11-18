@@ -55,7 +55,7 @@ ENV PATH=/home/dev/.local/bin:/home/dev/.opencode/bin:$PATH \
 # Every volume mount point exists, owned by dev: Docker creates a missing one as root.
 RUN mkdir -p .claude .codex .gemini .config/gh .config/opencode .local/share/opencode .local/state/opencode \
     && printf '%s\n' '{' '  "$schema": "https://opencode.ai/config.json",' \
-         '  "model": "opencode/glm-5.3-flash-free",' \
+         '  "model": "opencode/deepseek-v4.1-flash-free",' \
          '  "compaction": { "background": false }' '}' > .config/opencode/opencode.json
 
 # Changes on every agents:image run, so the layers below always fetch the latest releases (D152)
