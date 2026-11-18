@@ -5,7 +5,7 @@ import standin;
 
 int main() {
   int failures = 0;
-  failures += standin::checksum("A") != 65;
+  failures += standin::checksum("A") != 66;
   failures += standin::tag_name(8) != "BeginString";
   failures += standin::tag_name(35) != "MsgType";
   failures += standin::tag_name(1) != "Unknown";
