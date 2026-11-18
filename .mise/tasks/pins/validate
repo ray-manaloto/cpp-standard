@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#MISE description="Check the pins (D51, D72) and run the pin and artifact-tag golden vectors (D90)"
+# The required `pins-validate` check (environment-standard.md section 3). It runs three parts
+# and fails if any fails: the content check of this tree's pins, the pin-validation vectors in
+# tests/pins_validate/ and the artifact-tag vectors in tests/artifact_tag/. Standard-library
+# Python 3.11 or later only (python/pins/pins.py).
+set -euo pipefail
+
+# tomllib needs Python 3.11 or later.
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || {
+  echo "FAIL: python3 is $(python3 --version 2>&1); 3.11 or later is needed" >&2
+  exit 1
+}
+
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+pins=(python3 -I "$root/python/pins/pins.py")
+
+status=0
+"${pins[@]}" validate --root "$root" || status=1
+"${pins[@]}" vectors pins "$root/tests/pins_validate/vectors.toml" || status=1
+"${pins[@]}" vectors tags "$root/tests/artifact_tag/vectors.toml" || status=1
+exit "$status"

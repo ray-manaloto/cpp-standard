@@ -1,0 +1,1074 @@
+# Golden vectors for `mise run artifact:tag` (D90, environment-standard.md section 2).
+# [tree] is committed to a fresh git repository, and `artifact` (with `arch`, default arm64) is
+# tagged at that commit. A vector with `change` or `remove` changes exactly one input of the
+# hash-input table; its tag must differ from the baseline vector of the same artifact and arch
+# (or, with `same = true`, equal it). `against` names another vector to compare with instead.
+# The expected tags were computed outside pins.py with git hash-object, jq and shasum
+# (tests/artifact_tag/expected.sh).
+
+[tree]
+"image/base.Dockerfile" = '''
+ARG UBUNTU
+FROM ubuntu@${UBUNTU}
+'''
+"image/base.inputs.toml" = '''
+image = "ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7"
+mise = "2026.11.9"
+mise_signer = "ps1_0123abcd"
+packslip_image = "ghcr.io/jdx/packslip@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+'''
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6-1", os = ["linux"] }
+'''
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = { version = "16.2.0-3ubuntu1", os = ["linux"] }
+'''
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+'''
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build
+'''
+"image/tools.Dockerfile" = '''
+ARG BASE
+FROM base@${BASE}
+'''
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+"pypi:gcovr" = "8.8"
+'''
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+".mise/locks/pypi-gcovr/8.8~abc/uv.lock" = '''
+version = 1
+'''
+".mise/locks/pypi-gcovr/8.8~abc/pyproject.toml" = '''
+[project]
+name = "gcovr-sidecar"
+'''
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = false
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+"toolchains/p2996/build.sh" = '''
+#!/usr/bin/env bash
+cmake -G Ninja ../llvm
+'''
+"toolchains/p2996/macos/darwin.patch" = '''
+--- a/m
++++ b/m
+'''
+"runner/pc/cloud-init.yaml" = '''
+#cloud-config
+runcmd: []
+'''
+"runner/pc/image.pkr.hcl" = '''
+source "qemu" "runner" {}
+'''
+"runner/hook/job-started.sh" = '''
+#!/usr/bin/env bash
+exit 0
+'''
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+".mise/tasks/vm/golden" = '''
+#!/usr/bin/env bash
+echo golden
+'''
+"vm/inputs.toml" = '''
+image = "ghcr.io/cirruslabs/macos-golden-gate-xcode:27.2"
+digest = "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+cpu = 6
+memory = 16
+disk = 120
+'''
+"toolchains/p2996/linux/scc.patch" = '''
+--- a/x
++++ b/x
+'''
+
+# --- base image: Dockerfile, base inputs, the three apt fragments, artifact/build ---
+
+[[vector]]
+name = "base arm64"
+artifact = "base"
+tag = "base-arm64-909497c37754de11"
+
+[[vector]]
+name = "base: Dockerfile"
+artifact = "base"
+tag = "base-arm64-5fd8096cf6863139"
+
+[vector.change]
+"image/base.Dockerfile" = '''
+ARG UBUNTU
+FROM ubuntu@${UBUNTU}
+RUN true
+'''
+
+[[vector]]
+name = "base: base inputs"
+artifact = "base"
+tag = "base-arm64-0d2cd6e7d9bcef5a"
+
+[vector.change]
+"image/base.inputs.toml" = '''
+image = "ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7"
+mise = "2026.11.10"
+mise_signer = "ps1_0123abcd"
+packslip_image = "ghcr.io/jdx/packslip@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+'''
+
+[[vector]]
+name = "base: apt.toml"
+artifact = "base"
+tag = "base-arm64-e2d064a5ec1c8ae2"
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.7-1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "base: apt-toolchain-host.toml"
+artifact = "base"
+tag = "base-arm64-598187ffe2b9709d"
+
+[vector.change]
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = { version = "16.2.0-4ubuntu1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "base: apt-sources.toml"
+artifact = "base"
+tag = "base-arm64-078e9a431ed32791"
+
+[vector.change]
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-24"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+'''
+
+[[vector]]
+name = "base: artifact/build"
+artifact = "base"
+tag = "base-arm64-d24e543ca036e4fa"
+
+[vector.change]
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build v2
+'''
+
+[[vector]]
+name = "base: a tools input is not a base input"
+artifact = "base"
+same = true
+tag = "base-arm64-909497c37754de11"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+"pypi:gcovr" = "8.9"
+'''
+
+# --- tools image: the base tag, Dockerfile, tools.toml, the linux lock slice and its
+# sidecars, artifact/build ---
+
+[[vector]]
+name = "tools arm64"
+artifact = "tools"
+tag = "tools-arm64-ed28e447e439914d"
+
+[[vector]]
+name = "tools amd64"
+artifact = "tools"
+arch = "amd64"
+tag = "tools-amd64-0db74e6a16c9f8b3"
+
+[[vector]]
+name = "tools: the base tag"
+artifact = "tools"
+tag = "tools-arm64-fcaa26c65cec88e2"
+
+[vector.change]
+"image/base.Dockerfile" = '''
+ARG UBUNTU
+FROM ubuntu@${UBUNTU}
+RUN true
+'''
+
+[[vector]]
+name = "tools: Dockerfile"
+artifact = "tools"
+tag = "tools-arm64-9ec94faaf9f9edb6"
+
+[vector.change]
+"image/tools.Dockerfile" = '''
+ARG BASE
+FROM base@${BASE}
+RUN true
+'''
+
+[[vector]]
+name = "tools: tools.toml"
+artifact = "tools"
+tag = "tools-arm64-3ad37fd3a3689ed2"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+"pypi:gcovr" = "8.8"  # gcovr
+'''
+
+[[vector]]
+name = "tools: the linux-arm64 lock slice"
+artifact = "tools"
+tag = "tools-arm64-da95478916e03de8"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+
+[[vector]]
+name = "tools: another platform's lock entry is not an input"
+artifact = "tools"
+same = true
+tag = "tools-arm64-ed28e447e439914d"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+
+[[vector]]
+name = "tools: a lock sidecar"
+artifact = "tools"
+tag = "tools-arm64-d0cf9da4a1d9e7cc"
+
+[vector.change]
+".mise/locks/pypi-gcovr/8.8~abc/pyproject.toml" = '''
+[project]
+name = "gcovr-sidecar"
+version = "2"
+'''
+
+[[vector]]
+name = "tools: artifact/build"
+artifact = "tools"
+tag = "tools-arm64-17474ae0b006773c"
+
+[vector.change]
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build v2
+'''
+
+# --- toolchain, Linux: pins.toml, build.sh, linux/ patches, apt-toolchain-host.toml,
+# apt-sources.toml, the host-tools lock slice, artifact/build, and apt.toml when pins.toml
+# sets apt_compiler = true (D162) ---
+
+[[vector]]
+name = "p2996 linux arm64"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-b2f8eae5aa0987ee"
+
+[[vector]]
+name = "p2996: pins.toml"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-2da28400c7dae467"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 1
+host_tools = ["cmake"]
+apt_compiler = false
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "p2996: build.sh"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-54b1e4a177fab1d7"
+
+[vector.change]
+"toolchains/p2996/build.sh" = '''
+#!/usr/bin/env bash
+cmake -G Ninja -DLLVM_ENABLE_ASSERTIONS=ON ../llvm
+'''
+
+[[vector]]
+name = "p2996: a Linux patch"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-a9ef529b45280033"
+
+[vector.change]
+"toolchains/p2996/linux/scc.patch" = '''
+--- a/y
++++ b/y
+'''
+
+[[vector]]
+name = "p2996: apt-toolchain-host.toml"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-d3a9cd2661fca459"
+
+[vector.change]
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = { version = "16.2.0-4ubuntu1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "p2996: apt-sources.toml"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-7da5defd68a6ab38"
+
+[vector.change]
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-24"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+'''
+
+[[vector]]
+name = "p2996: the host-tools lock slice"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-3a1d86bc802fd765"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+
+[[vector]]
+name = "p2996: artifact/build"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-5c99954e44639e11"
+
+[vector.change]
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build v2
+'''
+
+[[vector]]
+name = "p2996: apt.toml is not an input when apt_compiler is false"
+artifact = "p2996-linux-arm64"
+same = true
+tag = "p2996-linux-arm64-b2f8eae5aa0987ee"
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.7-1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "p2996: apt_compiler = true"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-9f2469c58840ca51"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "p2996: apt.toml when apt_compiler is true"
+artifact = "p2996-linux-arm64"
+against = "p2996: apt_compiler = true"
+tag = "p2996-linux-arm64-f7501560a19bc135"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.7-1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "p2996: a pins.toml without apt_compiler"
+artifact = "p2996-linux-arm64"
+tag = "error: toolchains/p2996/pins.toml: apt_compiler is not true or false"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "p2996: an apt_compiler that is not a boolean"
+artifact = "p2996-linux-arm64"
+tag = "error: toolchains/p2996/pins.toml: apt_compiler is not true or false"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = "yes"
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+# --- toolchain, macOS: pins.toml, build.sh, macos/ recipe files, vm/inputs.toml, the
+# macos-arm64 host-tools lock slice, artifact/build, and apt.toml when apt_compiler = true ---
+
+[[vector]]
+name = "p2996 macos arm64"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-b23f8803620f6e20"
+
+[[vector]]
+name = "p2996 macos: pins.toml"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-37add359fd960374"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 1
+host_tools = ["cmake"]
+apt_compiler = false
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "p2996 macos: build.sh"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-4d598a216404d160"
+
+[vector.change]
+"toolchains/p2996/build.sh" = '''
+#!/usr/bin/env bash
+cmake -G Ninja -DLLVM_ENABLE_ASSERTIONS=ON ../llvm
+'''
+
+[[vector]]
+name = "p2996 macos: a macOS recipe file"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-294e692c8e246c99"
+
+[vector.change]
+"toolchains/p2996/macos/darwin.patch" = '''
+--- a/z
++++ b/z
+'''
+
+[[vector]]
+name = "p2996 macos: vm/inputs.toml"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-8092733b6c4768f8"
+
+[vector.change]
+"vm/inputs.toml" = '''
+image = "ghcr.io/cirruslabs/macos-golden-gate-xcode:27.2"
+digest = "sha256:abababababababababababababababababababababababababababababababab"
+cpu = 6
+memory = 16
+disk = 120
+'''
+
+[[vector]]
+name = "p2996 macos: the macos-arm64 lock slice"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-32a03f805a40bbcf"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+
+[[vector]]
+name = "p2996 macos: artifact/build"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-c58a10e3467655a1"
+
+[vector.change]
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build v2
+'''
+
+[[vector]]
+name = "p2996 macos: apt_compiler = true"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-b507c10e7f7c4f6c"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "p2996 macos: Linux inputs are not macOS inputs"
+artifact = "p2996-macos-arm64"
+same = true
+tag = "p2996-macos-arm64-b23f8803620f6e20"
+
+[vector.change]
+"toolchains/p2996/linux/scc.patch" = '''
+--- a/y
++++ b/y
+'''
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = { version = "16.2.0-4ubuntu1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "p2996 linux: macOS inputs are not Linux inputs"
+artifact = "p2996-linux-arm64"
+same = true
+tag = "p2996-linux-arm64-b2f8eae5aa0987ee"
+
+[vector.change]
+"toolchains/p2996/macos/darwin.patch" = '''
+--- a/z
++++ b/z
+'''
+"vm/inputs.toml" = '''
+image = "other"
+'''
+
+[[vector]]
+name = "a macOS toolchain for amd64"
+artifact = "p2996-macos-amd64"
+tag = "error: macOS toolchains are built for arm64 only"
+
+# --- runner image (PC qcow2): the tools-amd64 tag, runner/pc/**, the job-started hook,
+# image/runner.inputs.toml and artifact/build (D164) ---
+
+[[vector]]
+name = "runner-pc"
+artifact = "runner-pc"
+tag = "runner-pc-d6334611332ac7cd"
+
+[[vector]]
+name = "runner-pc: the tools tag"
+artifact = "runner-pc"
+tag = "runner-pc-bc3603eebb1ea33a"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+"pypi:gcovr" = "8.9"
+'''
+
+[[vector]]
+name = "runner-pc: a runner/pc file"
+artifact = "runner-pc"
+tag = "runner-pc-593ccf950906c6a7"
+
+[vector.change]
+"runner/pc/cloud-init.yaml" = '''
+#cloud-config
+runcmd: [true]
+'''
+
+[[vector]]
+name = "runner-pc: a new runner/pc file"
+artifact = "runner-pc"
+tag = "runner-pc-7ad9d3be1b0607a5"
+
+[vector.change]
+"runner/pc/extra.sh" = '''
+#!/usr/bin/env bash
+'''
+
+[[vector]]
+name = "runner-pc: the job-started hook"
+artifact = "runner-pc"
+tag = "runner-pc-6cb4fb733990c786"
+
+[vector.change]
+"runner/hook/job-started.sh" = '''
+#!/usr/bin/env bash
+exit 1
+'''
+
+[[vector]]
+name = "runner-pc: runner.inputs.toml"
+artifact = "runner-pc"
+tag = "runner-pc-79b8c65f8f4b10ea"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner-pc: artifact/build"
+artifact = "runner-pc"
+tag = "runner-pc-70f393addb870e3d"
+
+[vector.change]
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build v2
+'''
+
+[[vector]]
+name = "runner-pc: Mac inputs are not inputs"
+artifact = "runner-pc"
+same = true
+tag = "runner-pc-d6334611332ac7cd"
+
+[vector.change]
+"vm/inputs.toml" = '''
+image = "other"
+'''
+".mise/tasks/vm/golden" = '''
+#!/usr/bin/env bash
+echo golden v2
+'''
+
+[[vector]]
+name = "runner-pc: an empty runner/pc"
+artifact = "runner-pc"
+remove = ["runner/pc/cloud-init.yaml", "runner/pc/image.pkr.hcl"]
+tag = "error: runner/pc/ has no files in the commit"
+
+[[vector]]
+name = "runner-pc: no runner.inputs.toml"
+artifact = "runner-pc"
+remove = ["image/runner.inputs.toml"]
+tag = "error: input image/runner.inputs.toml is not in commit HEAD"
+
+# --- Mac golden image: vm/inputs.toml, image/base.inputs.toml, tools.toml, the macos-arm64
+# lock slice, vm:golden, the job-started hook, image/runner.inputs.toml and artifact/build
+# (D164) ---
+
+[[vector]]
+name = "golden"
+artifact = "golden"
+tag = "golden-macos-arm64-007bc13798bebb6b"
+
+[[vector]]
+name = "golden: vm/inputs.toml"
+artifact = "golden"
+tag = "golden-macos-arm64-6cc93282787dea73"
+
+[vector.change]
+"vm/inputs.toml" = '''
+image = "ghcr.io/cirruslabs/macos-golden-gate-xcode:27.2"
+digest = "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+cpu = 6
+memory = 16
+disk = 120
+'''
+
+[[vector]]
+name = "golden: base inputs (the mise pin)"
+artifact = "golden"
+tag = "golden-macos-arm64-8c468c85e8213884"
+
+[vector.change]
+"image/base.inputs.toml" = '''
+image = "ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7"
+mise = "2026.11.10"
+mise_signer = "ps1_0123abcd"
+packslip_image = "ghcr.io/jdx/packslip@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+'''
+
+[[vector]]
+name = "golden: tools.toml"
+artifact = "golden"
+tag = "golden-macos-arm64-310ed5092526d21f"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+"pypi:gcovr" = "8.8"  # gcovr
+'''
+
+[[vector]]
+name = "golden: the macos-arm64 lock slice"
+artifact = "golden"
+tag = "golden-macos-arm64-4f418d21de01ba7e"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+
+[[vector]]
+name = "golden: vm:golden"
+artifact = "golden"
+tag = "golden-macos-arm64-2485d7839f8ddf0f"
+
+[vector.change]
+".mise/tasks/vm/golden" = '''
+#!/usr/bin/env bash
+echo golden v2
+'''
+
+[[vector]]
+name = "golden: the job-started hook"
+artifact = "golden"
+tag = "golden-macos-arm64-964e1e91b7002a6d"
+
+[vector.change]
+"runner/hook/job-started.sh" = '''
+#!/usr/bin/env bash
+exit 1
+'''
+
+[[vector]]
+name = "golden: runner.inputs.toml"
+artifact = "golden"
+tag = "golden-macos-arm64-d1b6becc981f0213"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "golden: artifact/build"
+artifact = "golden"
+tag = "golden-macos-arm64-3087dbcdea4e3f35"
+
+[vector.change]
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build v2
+'''
+
+[[vector]]
+name = "golden: Linux and PC inputs are not inputs"
+artifact = "golden"
+same = true
+tag = "golden-macos-arm64-007bc13798bebb6b"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+"runner/pc/cloud-init.yaml" = '''
+#cloud-config
+runcmd: [true]
+'''
+"image/base.Dockerfile" = '''
+ARG UBUNTU
+FROM ubuntu@${UBUNTU}
+RUN true
+'''
+
+[[vector]]
+name = "golden: no runner.inputs.toml"
+artifact = "golden"
+remove = ["image/runner.inputs.toml"]
+tag = "error: input image/runner.inputs.toml is not in commit HEAD"
+
+[[vector]]
+name = "tools: a sidecar the lock names but the commit lacks"
+artifact = "tools"
+remove = [
+  ".mise/locks/pypi-gcovr/8.8~abc/pyproject.toml",
+  ".mise/locks/pypi-gcovr/8.8~abc/uv.lock",
+]
+tag = "error: sidecar .mise/locks/pypi-gcovr/8.8~abc of pypi:gcovr is not in the commit"
+
+# A file that is no input of any hash (mise.toml is left out on purpose, section 2) leaves
+# every tag unchanged.
+[[vector]]
+name = "base: mise.toml is not an input"
+artifact = "base"
+same = true
+tag = "base-arm64-909497c37754de11"
+
+[vector.change]
+"mise.toml" = '''
+min_version = "2026.11.9"
+'''
+
+[[vector]]
+name = "tools: mise.toml is not an input"
+artifact = "tools"
+same = true
+tag = "tools-arm64-ed28e447e439914d"
+
+[vector.change]
+"mise.toml" = '''
+min_version = "2026.11.9"
+'''
+
+[[vector]]
+name = "p2996: another toolchain's files are not inputs"
+artifact = "p2996-linux-arm64"
+same = true
+tag = "p2996-linux-arm64-b2f8eae5aa0987ee"
+
+[vector.change]
+"toolchains/gcc/build.sh" = '''
+#!/usr/bin/env bash
+'''
+"toolchains/p2996/README.md" = '''
+Not an input.
+'''
+
+# D164: image/runner.inputs.toml is an input of runner-pc and golden only.
+
+[[vector]]
+name = "base: runner.inputs.toml is not an input"
+artifact = "base"
+same = true
+tag = "base-arm64-909497c37754de11"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+'''
+
+[[vector]]
+name = "tools: runner.inputs.toml is not an input"
+artifact = "tools"
+same = true
+tag = "tools-arm64-ed28e447e439914d"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+'''
+
+[[vector]]
+name = "p2996-linux-arm64: runner.inputs.toml is not an input"
+artifact = "p2996-linux-arm64"
+same = true
+tag = "p2996-linux-arm64-b2f8eae5aa0987ee"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+'''
+
+[[vector]]
+name = "p2996-macos-arm64: runner.inputs.toml is not an input"
+artifact = "p2996-macos-arm64"
+same = true
+tag = "p2996-macos-arm64-b23f8803620f6e20"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+'''

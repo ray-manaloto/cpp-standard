@@ -1,0 +1,42 @@
+# The allowlist for `mise run pins:validate` (D51, environment-standard.md section 3). Owner-owned:
+# a name or host joins here before a pin may use it.
+
+# Hosts every URL in .mise/mise.lock, the apt sources, image/base.inputs.toml and
+# toolchains/*/pins.toml must come from (https only).
+hosts = [
+  "api.github.com",
+  "conda.anaconda.org",
+  "download.docker.com",
+  "ftp.gnu.org",
+  "gcc.gnu.org",
+  "github.com",
+  "raw.githubusercontent.com",
+]
+
+# Tool names the [tools] pin fragments (tools.toml, lint.toml) may pin.
+tools = [
+  "aqua:owenlamont/ryl",
+  "betterleaks",
+  "editorconfig-checker",
+  "ghalint",
+  "hk",
+  "jactionlint",
+  "jq",
+  "pinact",
+  "pkl",
+  "rumdl",
+  "shellcheck",
+  "shfmt",
+  "tombi",
+  "typos",
+  "zizmor",
+]
+
+# Ubuntu and apt.llvm.org package names the [bootstrap.packages] pin fragments (apt.toml,
+# apt-toolchain-host.toml) may pin, without the apt: prefix.
+apt = []
+
+# .mise/conf.d fragments that are not pins (D161): the host playbooks' tools for the Mac (with
+# their [env]), which no image or toolchain reads. They get only the URL host check above. Any
+# other fragment that is not one of the five pin fragments fails.
+other_fragments = ["build.toml", "docker.toml", "llvm.toml", "python.toml", "vm.toml"]

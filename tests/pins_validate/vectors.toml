@@ -1,0 +1,701 @@
+# Golden vectors for `mise run pins:validate` (D51, D72, environment-standard.md section 3).
+# [tree] is a valid tree; each vector applies `change` (files replaced or added) and `remove`
+# to it, and `reject` names the one rule that must fail. A vector without `reject` must pass.
+# The rules come from the design, not from the implementation.
+
+[tree]
+"pins-allowlist.toml" = '''
+hosts = ["github.com", "apt.llvm.org", "ftp.gnu.org"]
+tools = ["cmake", "hk"]
+apt = ["g++-16", "clang-23"]
+other_fragments = []
+'''
+"mise.toml" = '''
+min_version = "2026.11.9"
+[settings]
+lockfile = true
+'''
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+'''
+".mise/conf.d/lint.toml" = '''
+[tools]
+hk = "2.13.0"
+'''
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = { version = "16.2.0-3ubuntu1", os = ["linux"] }
+'''
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6~++20261116+1-1~exp1~20261116000000.1", os = ["linux"] }
+'''
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+'''
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[[tools.hk]]
+version = "2.13.0"
+backend = "aqua:jdx/hk"
+'''
+"image/base.inputs.toml" = '''
+image = "ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7"
+mise = "2026.11.9"
+mise_signer = "ps1_0123abcd"
+packslip_image = "ghcr.io/jdx/packslip@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+'''
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = false
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "the valid tree passes"
+
+# D51: a pin fragment holds only [tools] or [bootstrap.packages].
+[[vector]]
+name = "tools.toml with an [env] section"
+reject = "section"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+[env]
+CC = "gcc-16"
+'''
+
+[[vector]]
+name = "apt.toml with a [tasks] section"
+reject = "section"
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = "1:23.1.6-1"
+[tasks.x]
+run = "true"
+'''
+
+[[vector]]
+name = "apt.toml with a bootstrap.files table"
+reject = "section"
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.files."/etc/x"]
+content = "x"
+'''
+
+# D51: names come from the owner-owned allowlist.
+[[vector]]
+name = "a tool that is not on the allowlist"
+reject = "name"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+ninja = "1.13.2"
+'''
+".mise/mise.lock" = '''
+lockfile_version = 4
+[[tools.cmake]]
+version = "4.5.0"
+[[tools.hk]]
+version = "2.13.0"
+[[tools.ninja]]
+version = "1.13.2"
+'''
+
+[[vector]]
+name = "an apt package that is not on the allowlist"
+reject = "name"
+
+[vector.change]
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = "16.2.0-3ubuntu1"
+"apt:netcat" = "1.0"
+'''
+
+# D51: every URL comes from an allowlisted host.
+[[vector]]
+name = "a lock URL from a host that is not allowlisted"
+reject = "host"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+[[tools.cmake]]
+version = "4.5.0"
+[tools.cmake."platforms.linux-arm64"]
+url = "https://example.com/cmake-4.5.0-linux-aarch64.tar.gz"
+[[tools.hk]]
+version = "2.13.0"
+'''
+
+[[vector]]
+name = "an apt source over http"
+reject = "host"
+
+[vector.change]
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "http://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+'''
+
+[[vector]]
+name = "a toolchain source from a host that is not allowlisted"
+reject = "host"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = false
+host_tools = ["cmake"]
+source = { url = "https://example.com/p2996.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+'''
+
+# D51, D85: a toolchain inputs file holds only versions, URLs and checksums.
+[[vector]]
+name = "a toolchain pins file with configure flags"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = false
+host_tools = ["cmake"]
+cmake_args = ["-DLLVM_ENABLE_PROJECTS=clang"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+'''
+
+[[vector]]
+name = "a toolchain source with a build option"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = false
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", configure = "--enable-shared" }
+'''
+
+[[vector]]
+name = "a toolchain host tool that tools.toml does not pin"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = false
+host_tools = ["cmake", "ninja"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+'''
+
+[[vector]]
+name = "image/base.inputs.toml with an extra key"
+reject = "inputs"
+
+[vector.change]
+"image/base.inputs.toml" = '''
+image = "ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7"
+mise = "2026.11.9"
+mise_signer = "ps1_0123abcd"
+packslip_image = "ghcr.io/jdx/packslip@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+build_args = "--no-cache"
+'''
+
+[[vector]]
+name = "image/base.inputs.toml with an image tag instead of a digest"
+reject = "inputs"
+
+[vector.change]
+"image/base.inputs.toml" = '''
+image = "ubuntu:26.10"
+mise = "2026.11.9"
+mise_signer = "ps1_0123abcd"
+packslip_image = "ghcr.io/jdx/packslip@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+'''
+
+# Section 3: the apt key fingerprint is 40 hex characters.
+[[vector]]
+name = "an apt source fingerprint that is not 40 hex"
+reject = "schema"
+
+[vector.change]
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "15CF4D18AF4F7421"
+'''
+
+# A fragment that is neither a pin fragment nor listed as another fragment.
+[[vector]]
+name = "an unlisted conf.d fragment"
+reject = "fragment"
+
+[vector.change]
+".mise/conf.d/extra.toml" = '''
+[env]
+CC = "gcc-16"
+'''
+
+[[vector]]
+name = "a listed non-pin fragment passes"
+
+[vector.change]
+"pins-allowlist.toml" = '''
+hosts = ["github.com", "apt.llvm.org", "ftp.gnu.org"]
+tools = ["cmake", "hk"]
+apt = ["g++-16", "clang-23"]
+other_fragments = ["extra.toml"]
+'''
+".mise/conf.d/extra.toml" = '''
+[env]
+CC = "gcc-16"
+'''
+
+# D51: a pin file and the tool lock agree.
+[[vector]]
+name = "a pin and the lock name different versions"
+reject = "lock"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.1"
+'''
+
+[[vector]]
+name = "a pin that is not locked"
+reject = "lock"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+[[tools.hk]]
+version = "2.13.0"
+'''
+
+[[vector]]
+name = "a lock entry that no fragment pins"
+reject = "lock"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+[[tools.cmake]]
+version = "4.5.0"
+[[tools.hk]]
+version = "2.13.0"
+[[tools.ninja]]
+version = "1.13.2"
+'''
+
+# D72: mise.toml and the lock name no toolchain version.
+[[vector]]
+name = "mise.toml names a toolchain version"
+reject = "toolchain-version"
+
+[vector.change]
+"mise.toml" = '''
+min_version = "2026.11.9"
+[settings]
+lockfile = true
+[tools]
+p2996 = "21.0.0-p2996+0123456789abcdef"
+'''
+
+[[vector]]
+name = "the lock names a toolchain version"
+reject = "toolchain-version"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+[[tools.cmake]]
+version = "4.5.0"
+[[tools.hk]]
+version = "2.13.0"
+[[tools."github:ray-manaloto/cpp-standard/p2996"]]
+version = "21.0.0-p2996+0123456789abcdef"
+'''
+
+[[vector]]
+name = "a URL that does not start its value"
+reject = "host"
+
+[vector.change]
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "see https://example.com/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+'''
+
+[[vector]]
+name = "a tool URL in a [tools] pin fragment"
+reject = "host"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = { version = "4.5.0", url = "https://example.com/cmake.tar.gz" }
+'''
+
+# A URL whose parsed host is allowlisted but that is not a plain https URL.
+[[vector]]
+name = "a URL with a backslash before an allowlisted host"
+reject = "host"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+[[tools.cmake]]
+version = "4.5.0"
+[tools.cmake."platforms.linux-arm64"]
+url = "https://evil.example\\@github.com/x.tar.gz"
+[[tools.hk]]
+version = "2.13.0"
+'''
+
+[[vector]]
+name = "a URL with userinfo"
+reject = "host"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+[[tools.cmake]]
+version = "4.5.0"
+[tools.cmake."platforms.linux-arm64"]
+url = "https://evil.example@github.com/x.tar.gz"
+[[tools.hk]]
+version = "2.13.0"
+'''
+
+# fullmatch: a value with a trailing newline fails.
+[[vector]]
+name = "a base input with a trailing newline"
+reject = "inputs"
+
+[vector.change]
+"image/base.inputs.toml" = '''
+image = "ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7"
+mise = "2026.11.9\n"
+mise_signer = "ps1_0123abcd"
+packslip_image = "ghcr.io/jdx/packslip@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+'''
+
+# Toolchain pins: a flag that does not start with `-`, a bad upstream, and the [macos] schema.
+[[vector]]
+name = "a toolchain upstream that is not a version"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "CMAKE_BUILD_TYPE=Release"
+salt = 0
+apt_compiler = false
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+'''
+
+[[vector]]
+name = "a valid [macos] table passes"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "16.2.0"
+salt = 0
+apt_compiler = false
+host_tools = []
+source = { url = "https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+[macos]
+patch_url = "https://github.com/Homebrew/homebrew-core/raw/4a334d2f90f786c3fc86cbc9cf72b2f13961b078/Patches/gcc/gcc-16.2.0.diff"
+patch_sha256 = "578a78ae0bc62a02f260b6a20c7f23e71deee16ed644e9cb5619247be4df5a71"
+prerequisites = ["gmp-6.3.0.tar.bz2"]
+zstd = "without"
+make = "/usr/bin/make (GNU Make 3.81)"
+sdk_major = "27"
+'''
+
+[[vector]]
+name = "a [macos] value that is a flag without a dash"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "16.2.0"
+salt = 0
+apt_compiler = false
+host_tools = []
+source = { url = "https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+[macos]
+bootstrap_cc = "CC=clang"
+'''
+
+[[vector]]
+name = "an unknown [macos] key"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "16.2.0"
+salt = 0
+apt_compiler = false
+host_tools = []
+source = { url = "https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+[macos]
+configure = "enable-shared"
+'''
+
+# The section rule for the other pin fragments.
+[[vector]]
+name = "lint.toml with an [env] section"
+reject = "section"
+
+[vector.change]
+".mise/conf.d/lint.toml" = '''
+[tools]
+hk = "2.13.0"
+[env]
+HK_PROFILE = "x"
+'''
+
+[[vector]]
+name = "apt-toolchain-host.toml with a [tools] section"
+reject = "section"
+
+[vector.change]
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = "16.2.0-3ubuntu1"
+[tools]
+cmake = "4.5.0"
+'''
+
+[[vector]]
+name = "apt-sources.toml with a [bootstrap.packages] section"
+reject = "section"
+
+[vector.change]
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+[bootstrap.packages]
+"apt:clang-23" = "1:23.1.6-1"
+'''
+
+[[vector]]
+name = "the lock names a toolchain by its bare name"
+reject = "toolchain-version"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+[[tools.cmake]]
+version = "4.5.0"
+[[tools.hk]]
+version = "2.13.0"
+[[tools.p2996]]
+version = "21.0.0-p2996+0123456789abcdef"
+'''
+
+# D161: a listed non-pin fragment still gets the URL host check.
+[[vector]]
+name = "a listed non-pin fragment with a URL from a host that is not allowlisted"
+reject = "host"
+
+[vector.change]
+"pins-allowlist.toml" = '''
+hosts = ["github.com", "apt.llvm.org", "ftp.gnu.org"]
+tools = ["cmake", "hk"]
+apt = ["g++-16", "clang-23"]
+other_fragments = ["extra.toml"]
+'''
+".mise/conf.d/extra.toml" = '''
+[env]
+MIRROR = "https://example.com/mirror"
+'''
+
+# D162: each toolchain pins.toml says whether build.sh bootstraps with an apt compiler.
+[[vector]]
+name = "a toolchain pins file without apt_compiler"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+'''
+
+[[vector]]
+name = "a toolchain apt_compiler that is not a boolean"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = "false"
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+'''
+
+[[vector]]
+name = "a toolchain with apt_compiler = true passes"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = true
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+'''
+
+# D164: image/runner.inputs.toml holds only the exact actions/runner version and, for
+# linux-x64 and osx-arm64, the release URL and sha256.
+
+[[vector]]
+name = "a valid runner.inputs.toml passes"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with an extra key"
+reject = "inputs"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+labels = "self-hosted"
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with a version that is not exact"
+reject = "inputs"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with a trailing newline in the version"
+reject = "inputs"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0\n"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with a URL from a host that is not allowlisted"
+reject = "host"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+
+[linux-x64]
+url = "https://example.com/actions-runner.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with a sha256 that is not 64 hex"
+reject = "inputs"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "abcd"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''

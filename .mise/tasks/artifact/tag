@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#MISE description="Print the artifact tag of base, tools, runner-pc, golden or <toolchain>-<os>-<arch> from git (D90, D164)"
+#USAGE arg "<name>" help="base, tools, runner-pc, golden or <toolchain>-<os>-<arch>, e.g. p2996-linux-arm64"
+#USAGE flag "--arch <arch>" help="Docker arch of base and tools (runner-pc is amd64, golden arm64)" default="arm64" {
+#USAGE   choices "arm64" "amd64"
+#USAGE }
+#USAGE flag "--commit <commit>" help="Commit whose files are hashed" default="HEAD"
+#
+# environment-standard.md section 2: the inputs hash of the files in the hash-input table at
+# the commit, plus the .mise/mise.lock slices; golden vectors in tests/artifact_tag/. It fails
+# while an input file is not in the commit (the Dockerfiles and artifact/build arrive in PR 2,
+# vm/inputs.toml in M3, runner/ and image/runner.inputs.toml in M2).
+set -euo pipefail
+
+# tomllib needs Python 3.11 or later.
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || {
+  echo "FAIL: python3 is $(python3 --version 2>&1); 3.11 or later is needed" >&2
+  exit 1
+}
+
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+exec python3 -I "$root/python/pins/pins.py" tag "${usage_name:?}" \
+  --arch "${usage_arch:-arm64}" --commit "${usage_commit:-HEAD}" --root "$root"
