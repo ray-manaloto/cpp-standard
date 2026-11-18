@@ -5,7 +5,7 @@
 #      each CLI's own commands (D147), at the latest version on every build.
 # No credential is baked in. The PC's agent-secrets service writes Claude Code's key and a one-hour GitHub App token
 # into a folder that agents:up mounts read-only at /run/agent-secrets (D155); Codex and the Antigravity CLI keep the
-# owner's own login, made once per container onto a named volume (D151).
+# owner's own login, made once per project on each machine onto a named volume (D151).
 #
 # Build on the PC:  mise run agents:image      Start:  mise run agents:up
 # The volumes are named per container, and Docker fills an empty named volume from the image's
