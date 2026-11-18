@@ -2,6 +2,23 @@
 
 lockfile_version = 4
 
+[[tools."github:ast-grep/ast-grep"]]
+version = "0.51.3"
+backend = "github:ast-grep/ast-grep"
+specifiers = ["0.51.3"]
+
+[tools."github:ast-grep/ast-grep"."platforms.linux-arm64"]
+checksum = "sha256:5b44fd68e78744934b359b07badce347d4197ed50b341d50f1f99d056ecedb08"
+checksum_source = "mise-versions"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.51.3/app-aarch64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/753397190"
+
+[tools."github:ast-grep/ast-grep"."platforms.linux-x64"]
+checksum = "sha256:22803eb0c5bf83164fb7fd76d4721d355ecf0c8466ef47342c1ec7d80897ca47"
+checksum_source = "mise-versions"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.51.3/app-x86_64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/753396224"
+
 [[tools."pipx:datamodel-code-generator"]]
 version = "0.89.0"
 backend = "pipx:datamodel-code-generator"
