@@ -1,5 +1,6 @@
-# The required checks (D93). `lint` runs the hk gate (D102); the others are
-# stubs from setup step 3 that pass at once until M1a replaces them. Each job's
+# The required checks (D93). `lint` runs the hk gate (D102) and `pins-validate`
+# the pins check; `artifact-check`, `resolve` and `must-fail` are still stubs
+# from setup step 3 that pass at once until M1a replaces them. Each job's
 # name is its required-check name in .github/rulesets/main.json.
 name: ci
 
@@ -47,12 +48,29 @@ jobs:
         # --ci: the ci profile turns off the repotools suite, which is Mac-only for now (D163).
         run: mise run check --online --ci
 
+  # M1a PR 1 (#127): the D51 content check of the pins and the golden vectors
+  # for pin validation and artifact tags (D90). Standard-library Python on the
+  # runner and git only, so no pinned tool is installed.
   pins-validate:
     name: pins-validate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
     steps:
-      - run: echo "stub until M1a"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.9
+          install: false
+      - name: Validate the pins and run the golden vectors
+        run: |
+          python3 --version
+          mise run pins:validate
 
   artifact-check:
     name: artifact-check

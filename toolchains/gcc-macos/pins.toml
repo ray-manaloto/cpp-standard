@@ -5,6 +5,8 @@
 
 upstream = "16.2.0"
 salt = 0
+# build.sh bootstraps with Apple clang, not an apt compiler, so apt.toml is no input (D162).
+apt_compiler = false
 # Every build tool comes from Xcode 27.2 or the base system (/usr/bin/make 3.81); none is a mise tool.
 host_tools = []
 

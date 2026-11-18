@@ -482,7 +482,7 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    from git; no file records it. Each row lists the files the build reads or
    its Dockerfile COPYs. In addition to those files, every hash covers
    `.mise/tasks/artifact/build`, and a toolchain hash also covers
-   `apt.toml` if its `build.sh` bootstraps with an apt compiler. The
+   `apt.toml` when its `pins.toml` sets `apt_compiler = true` (D162). The
    Dockerfiles COPY only the conf.d fragments and the lock, never
    `mise.toml`. Two files are left out on purpose:
    - `mise.toml`, so that a settings change does not rebuild every
@@ -657,7 +657,8 @@ The schema in Detailed Implementation shows each fragment's contents.
   an allowlisted host,
   and the apt key fingerprint is 40 hex characters;
 - each `toolchains/*/pins.toml` holds only `upstream`, `source` (URL, sha256,
-  commit), `host_tools` (each a name in `tools.toml`) and `salt`, plus the
+  commit), `host_tools` (each a name in `tools.toml`), the required boolean
+  `apt_compiler` (D162) and `salt`, plus the
   `[macos]` table for GCC (D85). Configure flags live in `build.sh`, not in
   `pins.toml`;
 - `image/base.inputs.toml` holds only `ubuntu:26.10@sha256:<64 hex>`, an
@@ -1952,6 +1953,7 @@ packslip_image = "ghcr.io/jdx/packslip@sha256:<64 hex>"
 upstream = "<semver>"           # e.g. "16.2.0", or "21.0.0-p2996"; packslip versioning from it is M2 (D89, D134)
 source = { url = "<url>", sha256 = "<64 hex>", commit = "<sha, p2996 only>" }
 host_tools = ["cmake", "ninja"] # exact .mise/mise.lock entries hashed per platform
+apt_compiler = false            # required; true if build.sh bootstraps with an apt compiler (D162)
 salt = 0                        # bumped only to republish a deleted release (D72)
 # [macos] table only for gcc-macos: tarball, patch, deps, CLT, SDK major
 ```
