@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#MISE description="Open one guarded live-test Claude tab; refuses a folder the owner has not trusted and hands a trust dialog to the owner (#178)"
+#
+# The launcher is python/agents/testtab.py (standard library only); its docstring has the flags and exit codes:
+# 0 ready, 2 usage, 3 refused before any tab opened, 4 handed to the owner (a trust dialog or no ready prompt).
+# Arguments pass through, e.g. --space S --run DIR --folder DIR --name N --names a,b --tools Read,Grep --prompt TEXT.
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/testtab.py" "$@"

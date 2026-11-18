@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Check the guarded test-tab launcher offline: scratch trust record and stand-in herdr-app and hc, never the real ~/.claude.json (#178)"
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/testtab_check.py"
