@@ -77,13 +77,16 @@ verify() {
   admins="$(gh api "orgs/${repo%%/*}/members?role=admin" --jq 'length')"
   [[ "$admins" == 1 ]] || fail "the organization has $admins admins; the owner must be the only one"
 
-  # Every rule in main.json is live with the same parameter values.
+  # Every rule in main.json is live with the same parameters: the same keys and
+  # the same values. A field only the live rule has fails too, because applying
+  # main.json would drop it.
   local type
   while IFS= read -r type; do
     if ! jq -e --arg t "$type" --argjson w "$want" '
         ($w.rules[] | select(.type == $t) | .parameters // {}) as $p
         | any(.rules[]; .type == $t
-              and ((.parameters // {}) as $l | all($p | keys[]; . as $k | $l[$k] == $p[$k])))' \
+              and ((.parameters // {}) as $l | ($l | keys) == ($p | keys)
+                  and all($p | keys[]; . as $k | $l[$k] == $p[$k])))' \
       <<<"$live" >/dev/null; then
       fail "rule $type is missing or differs from main.json"
     fi
