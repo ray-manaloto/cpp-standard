@@ -79,9 +79,11 @@ RUN cd /opt/cpp-standard && mise install
 # gh for pushing and pull requests (D153). Ubuntu 26.10's apt has only gh 2.46, so mise installs
 # the current release for the dev user.
 ARG GH_VER=2.104.0
-# The doppler CLI is for the Mac's agent-secrets container (agents:up --host mac), pinned like mise.pc.toml's.
+# doppler and jq are for the Mac's agent-secrets container (agents:up --host mac), pinned like mise.pc.toml's
+# doppler and lint.toml's jq; global, so their shims work outside a project.
 ARG DOPPLER_VER=3.77.1
-RUN mise use -g "gh@${GH_VER}" "doppler@${DOPPLER_VER}"
+ARG JQ_VER=1.8.2
+RUN mise use -g "gh@${GH_VER}" "doppler@${DOPPLER_VER}" "jq@${JQ_VER}"
 # D155: git and gh read the App token from /run/agent-secrets at each use, so a refreshed token needs no restart;
 # the shells read Claude Code's key from it at each start. ~/.local/bin is first on PATH, so the gh
 # wrapper runs ahead of mise's shim, which it calls.
