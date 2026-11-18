@@ -11,9 +11,12 @@ under a lock: lane, holder, granted_at and expires_at (UTC, ISO 8601). One grant
 
 The caller is SLOT_HOLDER, else HC_TERMINAL_ID (every herdr tab has one); with neither set, check refuses. check
 passes when the record names the caller, has not expired, and the 5-minute load is below the start line
-(SLOT_LOAD_LINE, default 9). Heavy work starts only under 9; 11 is the pause line for work already running. Docker aimed at the PC runner host (the ssh alias `pc`, by its resolved host name),
-through DOCKER_HOST, DOCKER_CONTEXT, `--context`, `-H` or `ssh <pc> docker ...`, is refused with "owner required"
-whatever the grant, until the PC's credential isolation is verified.
+(SLOT_LOAD_LINE, default 9). Heavy work starts only under 9; 11 is the pause line for work already running.
+Container work aimed at the PC runner host (the ssh alias `pc`, by its resolved host name), through DOCKER_HOST,
+DOCKER_CONTEXT, `--context`, `-H` or `ssh <pc> docker ...`, needs the same grant, and the load it checks is the PC's:
+the 5-minute value of its /proc/loadavg and its `nproc`, over one `ssh -o BatchMode=yes pc` call. It starts only
+under 0.75 x cores, 0.9 x cores is the pause line, and an ssh call that fails refuses (owner, 2026-11-18: MVP, the
+PC treated like the Mac; its isolation is parked in #187).
 
 This is an accident guard, not a security boundary: any local process can write the grant file.
 Exit codes: 0 allowed or done, 1 refused, 2 usage error. hook exits 2 with the reason on stderr to block the call.
@@ -36,14 +39,20 @@ from pathlib import Path
 PC_ALIAS = "pc"
 LOAD_LINE = 9.0  # the start line; work already running pauses at 11 (PAUSE_LINE)
 PAUSE_LINE = 11.0
-# Container work that starts something heavy: run, create, build (also buildx, image build), compose up.
+# Container work that starts something heavy: run, create, build (also buildx, image build), compose up (global
+# options such as --context may come before compose).
 HEAVY = re.compile(
     r"\bdocker(?:\s+\S+)*?\s+(?:run|create|build|buildx\s+build|image\s+build)\b"
-    r"|\bdocker(?:-compose|\s+compose)\b(?:\s+\S+)*?\s+up\b",
+    r"|\bdocker(?:-compose\b|(?:\s+\S+)*?\s+compose\b)(?:\s+\S+)*?\s+up\b",
+)
+PRIVILEGED = re.compile(
+    r"--privileged(?:=(?:true|1))?(?![=\w-])|--cap-add[=\s]+ALL\b", re.IGNORECASE
 )
 DOCKER = re.compile(r"\bdocker(?:-compose)?\b")
 SEGMENTS = re.compile(r"&&|\|\||[;|&\n]")
-OWNER = "owner required: {reason} reaches the PC runner host, and agent Docker there waits on credential isolation"
+# On the PC the lines scale with its cores: start under 0.75 x cores, pause at 0.9 x cores.
+PC_START = 0.75
+PC_PAUSE = 0.9
 
 
 class RefusedError(Exception):
@@ -150,8 +159,31 @@ def load() -> float:
     return os.getloadavg()[1]
 
 
-def check() -> str:
-    """Refuse unless the caller holds a live grant and the 5-minute load is under the line."""
+def pc_load() -> tuple[float, int]:
+    """The PC's 5-minute load and core count, from one ssh call; any failure refuses."""
+    try:
+        done = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", PC_ALIAS, "cat /proc/loadavg; nproc"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        msg = f"cannot read the PC's load over ssh: {error}"
+        raise RefusedError(msg) from error
+    lines = done.stdout.split("\n")
+    try:
+        if done.returncode != 0:
+            raise ValueError(done.stderr.strip() or f"exit {done.returncode}")
+        return float(lines[0].split()[1]), int(lines[1])
+    except (IndexError, ValueError) as error:
+        msg = f"cannot read the PC's load over ssh: {error}"
+        raise RefusedError(msg) from error
+
+
+def check(*, pc: bool = False) -> str:
+    """Refuse unless the caller holds a live grant and the 5-minute load is under the line: the PC's for PC work."""
     holder = caller()
     record = read(state_file())
     if record is None:
@@ -163,15 +195,28 @@ def check() -> str:
     if expired(record):
         msg = f"{holder}'s grant expired at {record.get('expires_at')}: ask chief-of-staff again"
         raise RefusedError(msg)
-    line = float(os.environ.get("SLOT_LOAD_LINE") or LOAD_LINE)
-    measured = load()
+    if pc:
+        measured, cores = pc_load()
+        line, pause, where = (
+            PC_START * cores,
+            PC_PAUSE * cores,
+            f"the PC's ({cores} cores) ",
+        )
+    else:
+        line = float(os.environ.get("SLOT_LOAD_LINE") or LOAD_LINE)
+        measured, pause, where = load(), PAUSE_LINE, ""
     if measured >= line:
+        over = (
+            f", over the pause line {pause:g}"
+            if measured >= pause
+            else f"; the pause line is {pause:g}"
+        )
         msg = (
-            f"the 5-minute load is {measured:.1f}, at or over the start line {line:g}: wait for it to drop"
-            f" (work already running pauses at {PAUSE_LINE:g})"
+            f"{where}5-minute load is {measured:.1f}, at or over the start line {line:g}{over}: wait for it to drop"
+            " (work already running pauses at the pause line)"
         )
         raise RefusedError(msg)
-    return f"{holder} may start (load {measured:.1f} < {line:g})"
+    return f"{holder} may start ({where}load {measured:.1f} < {line:g}; pause line {pause:g})"
 
 
 def resolved_host(name: str) -> str:
@@ -265,15 +310,23 @@ def pc_reason(segment: str, env: dict[str, str]) -> str | None:
 
 
 def guard_command(command: str, env: dict[str, str]) -> None:
-    """Refuse a shell command that aims docker at the PC, or starts container work without a live grant."""
+    """Refuse a shell command that starts container work without a live grant, or under too high a load: the PC's
+    when the work is aimed at the PC."""
     if not DOCKER.search(command):
         return
-    segments = SEGMENTS.split(command)
-    for segment in segments:
-        reason = pc_reason(segment, env)
-        if reason:
-            raise RefusedError(OWNER.format(reason=reason))
-    if any(heavy(segment) for segment in segments):
+    started = [segment for segment in SEGMENTS.split(command) if heavy(segment)]
+    if not started:
+        return
+    aimed = [segment for segment in started if pc_reason(segment, env)]
+    # No --privileged container on the PC, grant or not: one that runs apt can apply its image's kernel settings
+    # to the PC itself (the agent rules' "No --privileged containers on the PC").
+    if any(PRIVILEGED.search(segment) for segment in aimed):
+        msg = "a --privileged container on the PC is never allowed: pass the one --device or --cap-add it needs"
+        raise RefusedError(msg)
+    # A command may start work in both places; each is checked against its own machine's load.
+    if aimed:
+        check(pc=True)
+    if len(aimed) < len(started):
         check()
 
 
@@ -319,6 +372,10 @@ def hook() -> None:
     except (ValueError, AttributeError) as error:
         sys.stderr.write(f"slot guard: unreadable hook payload: {error}\n")
         sys.exit(2)
+    except (OSError, subprocess.SubprocessError) as error:
+        # ssh -G or docker context inspect could not run: block rather than let an unchecked call through.
+        sys.stderr.write(f"slot guard: cannot tell where docker is aimed: {error}\n")
+        sys.exit(2)
 
 
 def main() -> None:
@@ -345,19 +402,15 @@ def main() -> None:
         elif args.action == "clear-expired":
             out = clear_expired()
         else:
-            refuse_pc_env()
-            out = check()
+            # The build tasks export DOCKER_HOST: work aimed at the PC is checked against the PC's load.
+            out = check(pc=pc_reason("docker", dict(os.environ)) is not None)
     except RefusedError as error:
         sys.stderr.write(f"slot: refused: {error}\n")
         sys.exit(1)
+    except (OSError, subprocess.SubprocessError) as error:
+        sys.stderr.write(f"slot: refused: cannot tell where docker is aimed: {error}\n")
+        sys.exit(1)
     sys.stdout.write(out + "\n")
-
-
-def refuse_pc_env() -> None:
-    """check also refuses when this environment points docker at the PC (the build tasks export DOCKER_HOST)."""
-    reason = pc_reason("docker", dict(os.environ))
-    if reason:
-        raise RefusedError(OWNER.format(reason=reason))
 
 
 if __name__ == "__main__":

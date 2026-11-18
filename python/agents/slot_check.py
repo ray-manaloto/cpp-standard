@@ -1,5 +1,5 @@
 """Check slot.py's refusal paths against #179's acceptance lines, offline: a scratch state directory and stand-in
-ssh and docker on PATH (ssh -G maps the alias `pc` to a made-up host). It never touches the real grant record, the
+ssh and docker on PATH (ssh -G maps the alias `pc` to a made-up host; its load comes from STUB_PC_* variables). It never touches the real grant record, the
 real ssh config or a Docker daemon. Prints one line per case and exits 1 when any fails.
 """
 
@@ -19,6 +19,12 @@ if name == "ssh" and sys.argv[1:2] == ["-G"]:
     host = {{"pc": "pc-host.example", "pc-host.example": "pc-host.example"}}.get(sys.argv[2], sys.argv[2])
     print("user dev")
     print("hostname " + host)
+elif name == "ssh" and sys.argv[-1] == "cat /proc/loadavg; nproc":
+    if os.environ.get("STUB_PC_FAIL"):
+        sys.stderr.write("ssh: connect to host pc-host.example port 22: Connection refused\\n")
+        sys.exit(255)
+    print(f"0.50 {{os.environ.get('STUB_PC_LOAD', '1.00')}} 0.40 2/900 4242")
+    print(os.environ.get("STUB_PC_CORES", "16"))
 elif name == "docker" and sys.argv[1:3] == ["context", "inspect"]:
     print({{"pcctx": "ssh://dev@pc", "localctx": "unix:///var/run/docker.sock"}}.get(sys.argv[3], ""))
 else:
@@ -54,6 +60,8 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
     nobody = {
         k: v for k, v in env.items() if k not in {"SLOT_HOLDER", "HC_TERMINAL_ID"}
     }
+    # A folder with docker but no ssh (main makes it): the hook must block when it cannot resolve a host.
+    no_ssh = str(Path(env["XDG_STATE_HOME"]).parent / "bin-no-ssh")
 
     def granted(minutes: str = "30") -> None:
         slot(env, "release", "--holder", "t1")
@@ -76,10 +84,14 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         done = slot(run_env, "check")
         return done.returncode == 1 and words in done.stderr
 
-    def owner(command: str, extra: dict[str, str] | None = None) -> bool:
+    # The Mac's line at 0: a PC case that passes was measured against the PC's load, not this machine's.
+    mac_busy = me | {"SLOT_LOAD_LINE": "0"}
+
+    def pc(command: str, extra: dict[str, str] | None = None, words: str = "") -> bool:
+        """The hook on PC work with a grant: allowed when words is empty, else blocked with words in the reason."""
         granted()
-        code, err = hook(me | (extra or {}), command)
-        return code == 2 and "owner required" in err
+        code, err = hook(mac_busy | (extra or {}), command)
+        return (code, words in err) == (2, True) if words else code == 0
 
     return [
         ("grant, second grant fails, release clears", grant_cycle),
@@ -108,27 +120,88 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             lambda: (granted(), slot(me, "check").returncode == 0)[1],
         ),
         (
-            "hook: ssh pc docker: owner required",
-            lambda: owner("ssh -o BatchMode=yes pc 'docker run --rm x'"),
+            "hook: ssh pc docker run, PC load under 0.75 x cores: allowed",
+            lambda: pc("ssh -o BatchMode=yes pc 'docker run --rm x'"),
         ),
         (
-            "hook: DOCKER_HOST=ssh://pc: owner required",
-            lambda: owner("DOCKER_HOST=ssh://pc docker build ."),
+            "hook: DOCKER_HOST=ssh://pc build at 0.75 x cores: blocked at the start line",
+            lambda: pc(
+                "DOCKER_HOST=ssh://pc docker build .",
+                {"STUB_PC_LOAD": "12.00"},
+                "PC's (16 cores) 5-minute load is 12.0, at or over the start line 12; the pause line is 14.4",
+            ),
         ),
         (
-            "hook: env DOCKER_HOST at the PC: owner required",
-            lambda: owner("docker ps", {"DOCKER_HOST": "ssh://pc"}),
+            "hook: -H at the PC over 0.9 x cores: blocked, over the pause line",
+            lambda: pc(
+                "docker -H ssh://dev@pc run x",
+                {"STUB_PC_LOAD": "15.00"},
+                "over the pause line 14.4",
+            ),
         ),
         (
-            "hook: --context at the PC: owner required",
-            lambda: owner("docker --context pcctx compose up -d"),
+            "hook: --context at the PC, ssh fails: blocked with ssh's reason",
+            lambda: pc(
+                "docker --context pcctx compose up -d",
+                {"STUB_PC_FAIL": "1"},
+                "Connection refused",
+            ),
         ),
         (
-            "task check with DOCKER_HOST at the PC: owner required",
+            "hook: env DOCKER_HOST at the PC, no grant: blocked",
+            lambda: (
+                slot(env, "release", "--holder", "t1"),
+                "chief-of-staff"
+                in hook(me | {"DOCKER_HOST": "ssh://pc"}, "docker run x")[1],
+            )[1],
+        ),
+        (
+            "hook: --privileged at the PC with a grant: blocked",
+            lambda: pc(
+                "ssh pc 'docker run --privileged x'",
+                words="--privileged container on the PC",
+            ),
+        ),
+        (
+            "hook: --privileged=1 at the PC with a grant: blocked",
+            lambda: pc(
+                "DOCKER_HOST=ssh://pc docker run --privileged=1 x",
+                words="--privileged container",
+            ),
+        ),
+        (
+            "hook: local and PC work in one command: the Mac's load checked too",
+            lambda: pc("docker run a && ssh pc docker run b", words="5-minute load is"),
+        ),
+        (
+            "hook: ssh missing, so the target is unknown: blocked",
             lambda: (
                 granted(),
-                "owner required"
-                in slot(me | {"DOCKER_HOST": "ssh://pc"}, "check").stderr,
+                hook(me | {"PATH": no_ssh}, "DOCKER_HOST=ssh://pc docker run x")[0]
+                == 2,
+            )[1],
+        ),
+        (
+            "hook: --cap-add=ALL at the PC with a grant: blocked",
+            lambda: pc(
+                "DOCKER_HOST=ssh://pc docker run --cap-add=ALL x",
+                words="--privileged container",
+            ),
+        ),
+        (
+            "hook: one --device at the PC with a grant: allowed",
+            lambda: pc("DOCKER_HOST=ssh://pc docker run --device /dev/fuse x"),
+        ),
+        (
+            "hook: docker ps at the PC: untouched",
+            lambda: hook(nobody | {"DOCKER_HOST": "ssh://pc"}, "docker ps")[0] == 0,
+        ),
+        (
+            "task check with DOCKER_HOST at the PC: the PC's load",
+            lambda: (
+                granted(),
+                "the PC's (16 cores) load 1.0 < 12"
+                in slot(mac_busy | {"DOCKER_HOST": "ssh://pc"}, "check").stdout,
             )[1],
         ),
         (
@@ -159,8 +232,13 @@ def main() -> None:
         root = Path(scratch).resolve()
         bin_dir = root / "bin"
         bin_dir.mkdir()
-        for name in ("ssh", "docker"):
-            path = bin_dir / name
+        (root / "bin-no-ssh").mkdir()
+        for folder, name in (
+            ("bin", "ssh"),
+            ("bin", "docker"),
+            ("bin-no-ssh", "docker"),
+        ):
+            path = root / folder / name
             path.write_text(STANDIN.format(python=sys.executable), encoding="utf-8")
             path.chmod(0o755)
         env = {
