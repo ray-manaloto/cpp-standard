@@ -16,8 +16,10 @@ HINT = "privacy:scan: replace each host path with ~ or a {{ env.HOME }} template
 
 
 @pytest.fixture
-def copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A git repository holding this checkout's working tree, committed and already on its remote."""
+def copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Path:
+    """A git repository holding this checkout's working tree, committed and already on its remote; uv_cache first
+    checks that uv's cache holds what the copy's offline sync needs."""
+    request.getfixturevalue("uv_cache")
     clean_git_env(monkeypatch)
     listed = subprocess.run(
         ["git", "-C", REPO, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],

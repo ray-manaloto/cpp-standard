@@ -13,4 +13,5 @@ python = [
   ] },
 ]
 "pipx:datamodel-code-generator" = { version = "0.89.0", os = ["linux"] }
+# After changing uv's pin, run `mise run uv:cache-warm`: a new uv can rename its cache buckets (#184).
 uv = { version = "0.13.8", os = ["linux"] }

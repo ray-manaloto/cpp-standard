@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Fill uv's cache online for repotools' offline tests; run it after changing uv's pin. Your installed tools and state stay as they are"
+set -euo pipefail
+# A new uv can rename its cache buckets, and repotools' tests install and sync with UV_OFFLINE=1 (#184): run this once
+# after a uv pin change (.mise/conf.d/build.toml, mise.ci.toml). Committed python/repo and python/workflow trees only:
+# tools-install refuses uncommitted changes there.
+unset UV_OFFLINE
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/uv-cache-warm.XXXXXX")"
+trap 'rm -rf "$scratch"' EXIT
+# The copy the tests run in has no venv, so privacy:scan and //repo:tools-install sync a fresh one with the dev group.
+export UV_PROJECT_ENVIRONMENT="$scratch/venv"
+uv sync --locked --project python/repo
+# //repo:tools-install's own command with scratch tool, bin and state folders, the way the tests' tool_env sets them.
+# uv run directly, not a nested mise run: mise keeps its config trust under XDG_STATE_HOME.
+UV_TOOL_DIR="$scratch/tools" UV_TOOL_BIN_DIR="$scratch/bin" XDG_STATE_HOME="$scratch/state" \
+  uv run --project python/repo --locked repotools tools-install

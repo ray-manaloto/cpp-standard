@@ -15,7 +15,7 @@ from repotools.models import ToolInstalled, ToolReceipt
 from tests import clean_git_env
 
 REPO = Path(__file__).resolve().parents[3]
-pytestmark = pytest.mark.usefixtures("candidate", "tool_env")
+pytestmark = pytest.mark.usefixtures("uv_cache", "candidate", "tool_env")
 
 
 def git(*args: str) -> str:
