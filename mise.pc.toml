@@ -377,6 +377,23 @@ COMMIT
 # END UFW AND DOCKER
 '''
 
+# The runner launcher and its README. Their source of truth was a local repository with no remote (2026-11-18); the
+# copies under docs/standard/gha-runner/ are the PC's installed files (the README with blank lines added for rumdl). No running slot is restarted
+# by a change here: each slot loop runs the script it started with until its next job.
+[bootstrap.files."/usr/local/sbin/gha-slot"]
+os = "linux"
+source = "~/dev/github/ray-manaloto/cpp-standard/docs/standard/gha-runner/gha-slot"
+owner = "root"
+group = "root"
+mode = "0755"
+
+[bootstrap.files."/etc/gha-runner/README.md"]
+os = "linux"
+source = "~/dev/github/ray-manaloto/cpp-standard/docs/standard/gha-runner/README.md"
+owner = "root"
+group = "root"
+mode = "0644"
+
 # The runner image, built on the PC by the launcher (gha-slot build). Bootstrap only keeps the file; a change here is
 # rebuilt by hand, and no running slot is restarted. runner.json holds private App ids and waits for #637's secrets.
 [bootstrap.files."/etc/gha-runner/Dockerfile"]
