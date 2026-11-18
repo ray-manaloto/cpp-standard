@@ -27,6 +27,8 @@ else
   platform=linux/amd64
   args=()
 fi
+# #179: container work an agent starts needs the coordinator's slot grant, and never the PC until credential isolation.
+[[ -z "${CLAUDECODE:-}${CODEX_THREAD_ID:-}" ]] || mise run -q slot:check
 docker build --platform "$platform" ${args[@]+"${args[@]}"} -t "$tag" -f - "$root/docs/standard" \
   <"$root/docs/standard/ubuntu-cert.Dockerfile"
 docker image inspect -f '{{.Id}}' "$tag"

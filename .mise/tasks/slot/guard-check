@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Check the slot grant and Docker guard offline: scratch state, stand-in ssh and docker, never the real grant or a daemon (#179)"
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/slot_check.py"

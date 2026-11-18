@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Grant the heavy slot: slot:grant <lane> <holder> [--minutes 30]; fails while another grant is active (#179)"
+#
+# python/agents/slot.py (standard library only) has the record format, the holder rule and the exit codes.
+# It is an accident guard, not a security boundary: any local process can write the grant file.
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/slot.py" clear-expired "$@"

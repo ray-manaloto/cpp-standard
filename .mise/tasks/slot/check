@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Exit 0 when this caller holds a live slot grant, the 5-minute load is under the line, and Docker is not aimed at the PC (#179)"
+#
+# python/agents/slot.py (standard library only) has the record format, the holder rule and the exit codes.
+# It is an accident guard, not a security boundary: any local process can write the grant file.
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/slot.py" check "$@"
