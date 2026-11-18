@@ -472,6 +472,21 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             lambda: aims(here, "(docker run x)", "echo $(docker run x)"),
         ),
         (
+            "hook: docker run in a loop, an if or a group is seen",
+            lambda: aims(
+                here,
+                "for i in 1 2; do docker run x; done",
+                "if true; then docker run x; fi",
+                "if ! docker run x; then :; else docker run y; fi",
+                "while ! docker run x; do :; done",
+                "{ docker run x; }",
+            ),
+        ),
+        (
+            "hook: ssh to the PC in a loop is PC work",
+            lambda: aims(there, "for i in 1 2; do ssh pc docker run x; done"),
+        ),
+        (
             "hook: a here-string is not a here-document",
             lambda: aims(here, "cat <<< 'x'\ndocker run x"),
         ),

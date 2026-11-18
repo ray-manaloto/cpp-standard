@@ -394,6 +394,8 @@ def segments(command: str) -> list[tuple[str, str]]:
 WRAPPERS = frozenset(
     {"env", "sudo", "nohup", "time", "exec", "command", "caffeinate", "nice"}
 )
+# Shell words that come before a command without being one: `do docker run x`, `then docker run x`, `{ docker ...`.
+RESERVED = frozenset({"do", "then", "else", "elif", "if", "while", "until", "{", "!"})
 ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
 # Docker's and compose's own options that take a value, so the word after one is not read as the subcommand.
 WITH_VALUE = frozenset(
@@ -431,7 +433,7 @@ def command_words(text: str) -> tuple[dict[str, str], list[str]]:
         if found:
             assigned[found.group(1)] = found.group(2)
             words = words[1:]
-        elif name in WRAPPERS:
+        elif name in WRAPPERS or words[0] in RESERVED:
             words = words[1:]
         elif name == "timeout":
             words = words[2:]
