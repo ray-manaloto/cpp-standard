@@ -1,7 +1,7 @@
-# nzxth1desktop GitHub runner: one-job container slots
+# The PC's GitHub runner: one-job container slots
 
-Owner decisions (2026-11-09): runner for hft-challenges-prototype, glaze, cpp-utilities and dotfiles (org
-`ray-manaloto`); **public repos run in one-job containers (this directory)**, hft in one-job libvirt VMs (later,
+Owner decisions (2026-11-09): runner for one private repository, glaze, cpp-utilities and dotfiles (org
+`ray-manaloto`); **public repos run in one-job containers (this directory)**, the private one in one-job libvirt VMs (later,
 after the KVM packages land via dotfiles); GitHub App auth; every tuning value in one config file; Eco mode plus
 per-slot CPU limits.
 
@@ -69,9 +69,9 @@ that job's `mise install` fails until the change reaches the default branch.
   *Administration: read & write* (broad: repo settings); org-level runners need only the organization permission
   *Self-hosted runners: read & write*, but on the Free plan every org runner sits in the default group, so public
   repos must be allowed into it. To choose with the owner.
-- H1 recall serial/riser check (owner), workflows: `runs-on: [self-hosted, nzxth1, container, <repo>]`, only on
+- H1 recall serial/riser check (owner), workflows: `runs-on: [self-hosted, <pc-label>, container, <repo>]`, only on
   `push` / `workflow_dispatch` / `schedule`, `permissions: contents: read`, never `pull_request_target`.
-- Weekly image rebuild timer; the hft VM slot.
+- Weekly image rebuild timer; the private repository's VM slot.
 
 ## Job containers: no --privileged
 
