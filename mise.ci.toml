@@ -1,6 +1,6 @@
 # CI's tools beyond mise.toml's (MISE_ENV=ci, set by ci.yml's lint job): Python and uv for the pctools gate on Linux.
-# The Mac gets the same pins from .mise/conf.d/build.toml. They live here, not in a conf.d fragment, so `mise -E
-# ubuntu bootstrap` (which installs every pinned tool) and the Ubuntu images do not gain them.
+# This environment's pins override .mise/conf.d/tools.toml's Python and uv (D74), which the Mac, the tools image and
+# `mise -E ubuntu bootstrap` install. The second Python and datamodel-codegen are CI's alone.
 [tools]
 # 3.15.2 beside it for workflowtools (python/workflow: requires-python >=3.15), whose //workflow:check also needs
 # datamodel-codegen; the Mac takes both from the owner's global config. repotools' suite is Mac-only for now (D163).

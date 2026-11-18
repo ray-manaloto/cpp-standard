@@ -5,6 +5,7 @@
 # toolchains/*/pins.toml must come from (https only).
 hosts = [
   "api.github.com",
+  "apt.llvm.org",
   "conda.anaconda.org",
   "download.docker.com",
   "ftp.gnu.org",
@@ -17,26 +18,96 @@ hosts = [
 tools = [
   "aqua:owenlamont/ryl",
   "betterleaks",
+  "cmake",
   "editorconfig-checker",
+  "fnox",
+  "gh",
   "ghalint",
+  "hadolint",
   "hk",
   "jactionlint",
+  "jouet",
   "jq",
+  "mold",
+  "ninja",
+  "packslip",
   "pinact",
+  "pipx:clang-format",
   "pkl",
+  "pypi:gcovr",
+  "python",
   "rumdl",
+  "sccache",
   "shellcheck",
   "shfmt",
   "tombi",
   "typos",
+  "uv",
   "zizmor",
 ]
 
 # Ubuntu and apt.llvm.org package names the [bootstrap.packages] pin fragments (apt.toml,
 # apt-toolchain-host.toml) may pin, without the apt: prefix.
-apt = []
+apt = [
+  "binutils",
+  "bison",
+  "bolt-23",
+  "ca-certificates",
+  "clang-23",
+  "clang-format-23",
+  "clang-tidy-23",
+  "clang-tools-23",
+  "cppcheck",
+  "curl",
+  "flex",
+  "g++-16",
+  "gcc-16",
+  "gcc-16-offload-nvptx",
+  "gdb",
+  "git",
+  "gnupg",
+  "libc++-23-dev",
+  "libc++abi-23-dev",
+  "libc6-dev",
+  "libclang-23-dev",
+  "libclang-cpp23-dev",
+  "libclang-rt-23-dev",
+  "libfuzzer-23-dev",
+  "liboffload-23",
+  "liboffload-23-dev",
+  "libomp-23-dev",
+  "linux-perf",
+  "lld-23",
+  "lldb-23",
+  "llvm-23",
+  "llvm-23-dev",
+  "llvm-23-tools",
+  "m4",
+  "make",
+  "mlir-23-tools",
+  "nvptx-tools",
+  "python3",
+  "python3-lldb-23",
+  "texinfo",
+  "unzip",
+  "valgrind",
+  "xz-utils",
+  "zip",
+  "zlib1g-dev",
+  "zstd",
+]
 
 # .mise/conf.d fragments that are not pins (D161): the host playbooks' tools for the Mac (with
 # their [env]), which no image or toolchain reads. They get only the URL host check above. Any
 # other fragment that is not one of the five pin fragments fails.
 other_fragments = ["build.toml", "docker.toml", "llvm.toml", "python.toml", "vm.toml"]
+
+# Apt sources (D12, D25): .mise/conf.d/apt-sources.toml may hold only these sources, each with
+# exactly these values. The fingerprint is the signing key's; a different key, URL or suite
+# needs the owner's yes here.
+[apt_sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"

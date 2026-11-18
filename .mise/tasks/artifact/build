@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#MISE description="Build one image layer (base or tools) from the files of its hash into dist/<tag>/ (D49, D98)"
+#USAGE arg "<name>" help="The layer: base or tools" {
+#USAGE   choices "base" "tools"
+#USAGE }
+#USAGE flag "--arch <arch>" help="Docker arch" default="arm64" {
+#USAGE   choices "arm64" "amd64"
+#USAGE }
+#USAGE flag "--commit <commit>" help="Commit whose files are built" default="HEAD"
+#USAGE flag "--base <dir>" help="dist/<base tag>/ of the base a tools build starts from (default: dist/ of this commit's base tag)"
+#
+# environment-standard.md section 2 and the artifact/build row of the file plan. The build
+# context is exactly the files of the layer's inputs hash, read from git at the commit
+# (python/pins/pins.py tag <name> --inputs), so nothing outside the hash reaches the image. It writes
+# dist/<tag>/image.tar (an OCI archive with one manifest, no provenance or SBOM manifest, so its
+# digest is the digest pushed) and dist/<tag>/image.txt (tag, digest, arch, the base digest of a
+# tools layer, and the build tools' versions). Workflow steps upload, push and attest it (D98);
+# this task holds no token. Toolchain builds arrive with M1a PR 3.
+#
+# Needs a buildx builder with the docker-container driver (docker/setup-buildx-action): the
+# default docker driver cannot write an OCI archive or read an OCI layout build context.
+# A heavy run on the owner's Mac (AGENTS.md, Workflow facts).
+set -euo pipefail
+
+name="${usage_name:?}"
+arch="${usage_arch:-arm64}"
+commit="${usage_commit:-HEAD}"
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+pins=(python3 -I "$root/python/pins/pins.py")
+cd "$root"
+
+tag="$("${pins[@]}" tag "$name" --arch "$arch" --commit "$commit" --root "$root")"
+out="dist/$tag"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# The context: the hashed files at the commit, nothing else.
+inputs=()
+while IFS= read -r f; do inputs+=("$f"); done < <("${pins[@]}" tag "$name" --inputs --arch "$arch" --commit "$commit" --root "$root")
+mkdir "$work/ctx"
+[[ ${#inputs[@]} -gt 0 ]] || {
+  echo "FAIL: no build inputs for $name at $commit" >&2
+  exit 1
+}
+git archive "$commit" -- "${inputs[@]}" | tar -x -C "$work/ctx"
+echo "context of $tag:"
+printf '  %s\n' "${inputs[@]}"
+
+oci_digest() { # <image.tar>: the digest of its one manifest
+  tar -xOf "$1" index.json | python3 -I -c '
+import json, sys
+m = json.load(sys.stdin)["manifests"]
+assert len(m) == 1, f"{len(m)} manifests"
+print(m[0]["digest"])'
+}
+
+args=(
+  --platform "linux/$arch" --provenance=false --sbom=false --progress=plain
+  --file "$work/ctx/image/$name.Dockerfile"
+  --output "type=oci,dest=$work/image.tar"
+)
+base_digest=""
+case "$name" in
+  base)
+    # The pins of the base (D69, D73, D86), from the commit.
+    inputs_toml="$(git show "$commit:image/base.inputs.toml")"
+    pin() { python3 -I -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())[sys.argv[1]])' "$1" <<<"$inputs_toml"; }
+    args+=(
+      --build-arg "UBUNTU_IMAGE=$(pin image)"
+      --build-arg "PACKSLIP_IMAGE=$(pin packslip_image)"
+      --build-arg "MISE_VERSION=$(pin mise)"
+      --build-arg "MISE_SIGNER=$(pin mise_signer)"
+    )
+    ;;
+  tools)
+    base_tag="$("${pins[@]}" tag base --arch "$arch" --commit "$commit" --root "$root")"
+    base_dir="${usage_base:-dist/$base_tag}"
+    [[ "$(sed -n 's/^tag=//p' "$base_dir/image.txt")" == "$base_tag" ]] || {
+      echo "FAIL: $base_dir/image.txt is not base $base_tag; build it first" >&2
+      exit 1
+    }
+    base_digest="$(oci_digest "$base_dir/image.tar")"
+    mkdir "$work/base"
+    tar -xf "$base_dir/image.tar" -C "$work/base"
+    # FROM ${BASE_IMAGE} = <base image>@sha256:<digest>, served from the base build's OCI
+    # layout by a build context of the same name, so the builder needs no registry access.
+    base_ref="$(python3 -I "$root/python/artifact/artifact.py" names "$base_tag" | sed -n 's/^image=//p')@$base_digest"
+    args+=(
+      --build-context "$base_ref=oci-layout://$work/base@$base_digest"
+      --build-arg "BASE_IMAGE=$base_ref"
+    )
+    ;;
+esac
+
+docker buildx build "${args[@]}" "$work/ctx"
+digest="$(oci_digest "$work/image.tar")"
+rm -rf "$out"
+mkdir -p "$out"
+mv "$work/image.tar" "$out/image.tar"
+{
+  echo "tag=$tag"
+  echo "digest=$digest"
+  echo "arch=$arch"
+  echo "commit=$(git rev-parse "$commit")"
+  [[ -z "$base_digest" ]] || echo "base_digest=$base_digest"
+  echo "docker=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"
+  echo "buildx=$(docker buildx version)"
+} >"$out/image.txt"
+cat "$out/image.txt"
+echo "PASS: $out"

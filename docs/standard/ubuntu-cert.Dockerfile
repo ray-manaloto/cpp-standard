@@ -66,6 +66,8 @@ RUN case "$TARGETARCH" in amd64) a=x64 h="$MISE_SHA256_AMD64" ;; arm64) a=arm64 
 ENV PATH=/root/.local/share/mise/shims:$PATH MISE_YES=1 \
     MISE_GLOBAL_CONFIG_FILE=/opt/cpp-standard-tools/mise.toml MISE_TRUSTED_CONFIG_PATHS=/opt/cpp-standard-tools
 COPY ubuntu-cert-tools/ /opt/cpp-standard-tools/
+# The cd is scoped to this one RUN; WORKDIR would change the image's default directory.
+# hadolint ignore=DL3003
 RUN cd /opt/cpp-standard-tools && mise install --locked && mise ls --current
 WORKDIR /root
 
@@ -97,6 +99,8 @@ FROM base AS llvm23-offload
 ARG LLVM_VER
 ARG LLVM23_COMMIT
 ARG BUILD_JOBS
+# This stage inherits SHELL bash from base; hadolint does not follow FROM.
+# hadolint ignore=SC3057
 RUN [[ "$LLVM_VER" == *"+${LLVM23_COMMIT:0:12}-"* ]] \
     && apt-get update && apt-get install -y --no-install-recommends \
       llvm-23-dev="$LLVM_VER" libclang-23-dev="$LLVM_VER" libclang-cpp23-dev="$LLVM_VER" \
@@ -135,6 +139,8 @@ ARG CUDA13_CUDART=13.2.86:d6be2b3546fa93e5dec9e3d118d31f9540d0b7af5319ee3c6726f2
 ARG CUDA12_NVCC=12.9.86:7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35:0aa1fce92dbae76c059c27eefb9d0ffb58e1291151e44ff7c7f1fc2dd9376c0d
 ARG CUDA12_CUDART=12.9.79:1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99:8b422a3b2cb8452cb678181b0bf9d7aa7342df168b5319c5488ae3b8514101fc
 # get PREFIX PACKAGE VERSION:SHA-X86_64:SHA-SBSA fetches one archive, checks it, unpacks it.
+# This stage inherits SHELL bash -o pipefail from base; hadolint does not follow FROM.
+# hadolint ignore=SC3014,DL4006
 RUN case "$TARGETARCH" in amd64) p=linux-x86_64 ;; arm64) p=linux-sbsa ;; *) exit 1 ;; esac \
     && get() { \
       local v h f h_x h_s; IFS=: read -r v h_x h_s <<<"$3"; \
@@ -164,6 +170,8 @@ ARG CLANGD_SHA256_ARM64=44f1e4b7a125b2763d56386a199928dd57ec32e151cc6042dce2f7b0
 # have (E2). Until a stonking suite exists, clangd comes from the nearest LLVM
 # release tarball, checked against GitHub's published digest.
 # Unpacked to /opt/llvm-23.1.5 on both architectures.
+# This stage inherits SHELL bash -o pipefail from base; hadolint does not follow FROM.
+# hadolint ignore=DL4006
 RUN case "$TARGETARCH" in amd64) t=LLVM-23.1.5-Linux-X64 h="$CLANGD_SHA256_AMD64" ;; \
       arm64) t=LLVM-23.1.5-Linux-ARM64 h="$CLANGD_SHA256_ARM64" ;; *) exit 1 ;; esac \
     && curl -fsSLo /tmp/llvm.tar.xz \

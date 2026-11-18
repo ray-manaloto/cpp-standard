@@ -163,9 +163,9 @@ and then used, not grown.
 
 - **G1. One pinned environment from one configuration, kept current.** A single mise bootstrap project builds a Tart macOS VM and
   Ubuntu 26.10 arm64 and amd64 images (D13, D25, D45).
-  - Every input is pinned by version, hash or digest, and Renovate bumps
-    them daily (§7). Images and toolchains are tagged by a hash of their
-    inputs (D49).
+  - Every input is pinned by version, hash or digest, and a daily job
+    bumps it: Renovate, or `mise run pins:apt-bump` for apt pins (§7, D165).
+    Images and toolchains are tagged by a hash of their inputs (D49).
   - Measure: the tags computed from a commit's inputs resolve to the same
     toolchain versions while their releases exist, so an old commit is
     reproduced by pulling, not rebuilding (a deleted release returns after
@@ -331,9 +331,11 @@ Settled questions are at the end of the Technical Plan
 
 ### CUJ 4: A dependency update arrives
 
-- **Given**: Renovate finds new versions of pinned inputs: mise tools, apt
-  packages, GitHub Actions, or a toolchain input such as the p2996 commit.
-- **When**: Renovate opens its daily PRs (D31, D61).
+- **Given**: Renovate finds new versions of pinned inputs: mise tools,
+  GitHub Actions, or a toolchain input such as the p2996 commit; or
+  `mise run pins:apt-bump` finds newer apt packages (D165).
+- **When**: Renovate opens its daily PRs (D31, D61), and the daily apt
+  bump job opens its one PR (D165, #193).
 - **Then**: the §7 merge rule decides. Linux artifacts build on hosted
   runners before merge, Mac toolchains after (D62). A red PR does not
   merge.
@@ -396,7 +398,7 @@ flowchart LR
   JOB --> CI[mise run ci<br/>probes vs capability lock]
   DC --> CI
   VM --> CI
-  REN[Renovate, daily] --> PINS
+  REN[Renovate and pins:apt-bump, daily] --> PINS
 ```
 
 There is one configuration: `mise.toml` with five conf.d pins fragments
@@ -411,7 +413,7 @@ on a self-hosted runner; agent code runs on hosted runners and in the dev VM
 
 | | macOS VM (arm64) | Ubuntu 26.10 arm64 | Ubuntu 26.10 amd64 |
 |---|---|---|---|
-| **LLVM/clang 23 + libc++** | LLVM release tarball via mise `github:` (D38) | apt.llvm.org `resolute-23`, exact pins, in the base image (D27, D45) | same |
+| **LLVM/clang 23 + libc++** | LLVM release tarball via mise `github:` (D38) | apt.llvm.org `resolute-23`, exact pins moved by `pins:apt-bump`, in the base image (D27, D45, D165) | same |
 | **GCC 16.2.0 + libstdc++** | source build, Homebrew recipe + Darwin patch (D33) | Ubuntu archive `g++-16`, in the base image (D25) | same |
 | **clang-p2996 + libc++** | source build (D30) | source build with compiler-rt (D32) | same |
 
@@ -1066,6 +1068,14 @@ fails if the queue stops being required.
   - Built-in managers cover mise tools, Docker digests and the vcpkg
     baseline, with tool bumps grouped into one daily PR; custom regex
     managers cover the other pins (file plan, `renovate.json5`).
+  - The apt pins are not Renovate's (D165): `mise run pins:apt-bump`,
+    and the skill of the same name, move every pin in `apt.toml`,
+    `apt-toolchain-host.toml` and `mise.ubuntu.toml` to the newest version
+    in its index. A daily job runs it, opens one PR and merges it on its
+    checks, LLVM lines in a group of their own, so the image tags change
+    and the daily build rebuilds; a daily check fails when a pinned
+    version is gone from its index (#193). Until the job lands, the
+    coordinator runs the bump by hand.
   - A change to `apt-toolchain-host.toml` or a toolchain's `pins.toml`
     changes the toolchain hash, so the builder rebuilds the Linux toolchain
     in that PR; nothing is written back (D75, D85). One PR bumps every OS;
@@ -1632,7 +1642,7 @@ otherwise. Each names the section it relates to and the deciding decision.
 | A merged pin or tool change swaps the source of a signed toolchain or image | accepted | a PR changes a toolchain commit or adds a tool within the allowlist | Pins merge on green (D101) within the host allowlist, and the change is visible in the digest; stronger source checks are M2 design work (D134) | D101, D134 |
 | Agents on the Mac host can reach the PC SSH key, the Docker context and the App keys | accepted | before M2 | From M2 agents run in the dev VM or as a separate macOS user without them (D127, an M2 entry condition) | D70, D127 |
 | A new PR job named like a required check satisfies it | accepted | a same-repo PR adds a workflow | The job can only fake a PR or queue result; nothing it makes is trusted by `main`, and the post-merge run on `main` catches a faked result; pinning a check to one workflow needs Enterprise Cloud | D54, D134 |
-| Ubuntu 26.10 is an interim release, supported to about July 2027, and the archive drops superseded exact versions | dependency | end of support, or a pinned package version leaves the archive | Old bases are reproduced only by pulling their images; the move to the next release is a base upgrade (§7) | D27, D36 |
+| Ubuntu 26.10 is an interim release, supported to about July 2027, and the archive drops superseded exact versions | dependency | end of support, or a pinned package version leaves the archive | The daily apt bump moves each pin to the newest version, and a daily check fails when a pinned version is gone (§7); old bases are reproduced only by pulling their images; the move to the next release is a base upgrade (§7) | D27, D36, D165 |
 
 ## Detailed Implementation
 
@@ -1981,7 +1991,7 @@ salt = 0                        # bumped only to republish a deleted release (D7
 
 | File | What and why |
 |---|---|
-| `renovate.json5` **(O)** | Daily (D31). Automerge follows §7. Tool bumps grouped (D61). Action SHAs are batched weekly. Custom regex managers cover `apt.toml` and `apt-toolchain-host.toml` (`deb` datasource, following dotfiles-legacy), `image/base.inputs.toml` (Ubuntu digest, mise version, packslip digest; D86), the `toolchains/*/pins.toml` refs and tarballs (one PR for every OS; D85), the `ubuntu:YY.MM` tag and the canary refs. A `mise.managerFilePatterns` entry that matches `.mise/conf.d/*.toml` (the exact regex is in `spikes/m0/README.md`, (f)) lets the mise manager find the `conf.d` fragments; without it the manager finds no files (M0 (f), D104). Which identity runs Renovate is open question Q6 (D124), due before M1b. No `postUpgradeTasks` (D75). |
+| `renovate.json5` **(O)** | Daily (D31). Automerge follows §7. Tool bumps grouped (D61). Action SHAs are batched weekly. Custom regex managers cover `image/base.inputs.toml` (Ubuntu digest, mise version, packslip digest; D86), the `toolchains/*/pins.toml` refs and tarballs (one PR for every OS; D85), the `ubuntu:YY.MM` tag and the canary refs. A `mise.managerFilePatterns` entry that matches `.mise/conf.d/*.toml` (the exact regex is in `spikes/m0/README.md`, (f)) lets the mise manager find the `conf.d` fragments; without it the manager finds no files (M0 (f), D104). Which identity runs Renovate is open question Q6 (D124), due before M1b. No `postUpgradeTasks` (D75). Renovate does not bump the apt pins, because Renovate 44.251.0 cannot verify Ubuntu 26.10's indexes (SHA512 only); `mise run pins:apt-bump` moves them (D165). |
 | `.mise/tasks/review/digest` **(O)** + `.github/workflows/digest.yml` **(O)** | The no-model daily digest (§9), moved from M5 to M1b with cut position 3 (D84). The cadence is a workflow input (D14). |
 | `.github/workflows/retention.yml` **(O)** | Daily: for each PR closed (merged or not) more than 1 day ago and not reopened, deletes its `pr-<n>-` GHCR versions (`DELETE /orgs/ray-manaloto/packages/container/<pkg>/versions/<id>`, `packages: write`, needed since PR images use `pr-` tags again, D134) and its caches (`gh cache delete --ref refs/pull/<n>/merge`, `actions: write`). PR builder artifacts expire on their own (`retention-days: 7`). Never deletes anything `main`'s history references. Test: a dry-run mode lists what it would delete, checked against a fixture PR (D79). |
 | `.github/rulesets/toolchain-tags.json` **(O)** | The tag ruleset that blocks deleting or moving toolchain tags; applied with immutable releases by `repo:rulesets` (D59, D77). |

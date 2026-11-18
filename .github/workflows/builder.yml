@@ -1,29 +1,45 @@
-# M0 (i) spike builder (environment-standard.md section 10, setup step 7).
-# It tests the packslip and cache leg with a toy toolchain built from
-# spikes/m0/i/input.txt. M1a replaces these jobs with the real builder
-# (section 2, D59, D98). Toolchain signatures name this file at
-# refs/heads/main, so its path must not change.
+# The builder (environment-standard.md section 2 steps 3 and 4, D49, D59, D61, D98, D112, D114).
+# M1a PR 2: the base and tools images, by inputs hash, on hosted arm64 runners. Toolchains arrive
+# with PR 3, amd64 and the PC runners with M2. A trust root (D108), because from M2 it runs on
+# the self-hosted runners.
 #
-#   pull_request   build: uploads the artifact and saves the PR cache
-#   merge_group    build, mq-fetch: the PR cache must miss and the PR run's
-#                  artifact (by run id) must be readable
-#   dispatch main  build, publish: draft, upload, sign, publish, then
-#                  packslip install with the exact main identity
-#   dispatch other build, branch-sign: a bundle signed on a branch must be
-#                  refused for the main identity
-#   every event    mise-checks: bootstrap status and lock regeneration in
-#                  an Ubuntu container with the pinned mise
+#   tags        computes this commit's tags and probes GHCR for main's tools image; any probe
+#               answer other than found or not found fails (the probe of dotfiles-legacy
+#               dotfiles/.github/workflows/build-publish.yml lines 199-216)
+#   build       builds what main does not have yet with `mise run artifact:build` and uploads
+#               each layer as the artifact image-<tag> (D98); read-only token, no OIDC
+#   pr-image    pull_request and merge_group: pushes the layers under the run's own
+#               pr-<n>-[mq-]<arch>-<hash> tags (D54, D134) and posts a commit status per tag
+#   dispatch    on main: dispatches publish.yml with this run's id; publish.yml alone pushes
+#               main's tags and attests (D114)
+#
+# It holds no id-token and no attestations permission: only publish.yml signs (D114).
 name: builder
 
 on:
-  pull_request:
-  merge_group:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * *'
   workflow_dispatch:
+  # Pull requests that change an image input (python/pins/pins.py tag <name> --inputs) or this file. The
+  # merge queue cannot filter paths; there `tags` finds main's image and nothing builds.
+  pull_request:
+    paths:
+      - image/**
+      - .mise/conf.d/**
+      - .mise/mise.lock
+      - .mise/locks/**
+      - .mise/tasks/artifact/build
+      # The hashing rule itself (a schema bump changes every tag).
+      - python/pins/**
+      - .github/workflows/builder.yml
+  merge_group:
 
 permissions: {}
 
-# One run per PR or ref. Only pull-request runs are cancelled, so an
-# in-progress dispatch run (which may be publishing) is never cancelled.
+# One run per PR or ref. Only pull-request runs are cancelled, so a main run (which may be
+# dispatching publish.yml) is never cut off.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -33,286 +49,143 @@ defaults:
     shell: bash
 
 env:
-  PROJECT: m0i-linux-arm64
-  IDENTITY: https://github.com/ray-manaloto/cpp-standard/.github/workflows/builder.yml@refs/heads/main
-  ISSUER: https://token.actions.githubusercontent.com
+  ARCH: arm64
 
 jobs:
-  build:
-    name: build
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
+  tags:
+    name: tags
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 5
     permissions:
       contents: read
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
+      base: ${{ steps.tags.outputs.base }}
+      tools: ${{ steps.tags.outputs.tools }}
+      build: ${{ steps.probe.outputs.exists == 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - id: tag
-        name: Compute the artifact tag
-        shell: bash
+      - id: tags
+        name: Compute the tags
         run: |
-          hash="$({ echo 'schema = 1'; cat spikes/m0/i/input.txt; } | sha256sum | cut -c1-16)"
-          echo "tag=$PROJECT-$hash" >> "$GITHUB_OUTPUT"
-      - name: Build the toy toolchain
+          for name in base tools; do
+            echo "$name=$(python3 -I python/pins/pins.py tag "$name" --arch "$ARCH")" >> "$GITHUB_OUTPUT"
+          done
+          cat "$GITHUB_OUTPUT"
+      - id: probe
+        name: Probe GHCR for main's tools image
         env:
-          TAG: ${{ steps.tag.outputs.tag }}
+          TAG: ${{ steps.tags.outputs.tools }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p stage/bin "dist/$TAG"
-          printf '#!/bin/sh\necho "%s"\n' "$TAG" > stage/bin/m0i
-          chmod 755 stage/bin/m0i
-          tar -C stage --zstd -cf "dist/$TAG/$TAG.tar.zst" bin
-          echo "${TAG##*-}" > "dist/$TAG/inputs-hash.txt"
+          ref="$(python3 -I python/artifact/artifact.py names "$TAG" | sed -n 's/^ref=//p')"
+          python3 -I python/artifact/artifact.py probe "$ref"
+
+  build:
+    name: build
+    needs: tags
+    if: ${{ needs.tags.outputs.build == 'true' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    # One build of a tag at a time, across events and refs (D135): a later run waits for it.
+    concurrency:
+      group: builder-${{ needs.tags.outputs.tools }}
+      cancel-in-progress: false
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+    steps:
+      # dotfiles-legacy dotfiles/.github/workflows/build-publish.yml line 221.
+      - uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.9
+          install: false
+      - name: Build the base layer
+        run: mise run artifact:build base --arch "$ARCH"
+      - name: Build the tools layer
+        run: mise run artifact:build tools --arch "$ARCH"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: toolchain-${{ steps.tag.outputs.tag }}
-          path: dist/${{ steps.tag.outputs.tag }}/
+          name: image-${{ needs.tags.outputs.base }}
+          path: dist/${{ needs.tags.outputs.base }}/
           if-no-files-found: error
           retention-days: 7
-      - if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          path: dist/${{ steps.tag.outputs.tag }}/
-          key: toolchain-${{ steps.tag.outputs.tag }}
+          name: image-${{ needs.tags.outputs.tools }}
+          path: dist/${{ needs.tags.outputs.tools }}/
+          if-no-files-found: error
+          retention-days: 7
 
-  mq-fetch:
-    name: mq-fetch
-    if: ${{ github.event_name == 'merge_group' }}
-    needs: build
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
-    permissions:
-      actions: read  # read the PR run's caches, runs and artifact
-      pull-requests: read  # read the PR head commit
-    env:
-      TAG: ${{ needs.build.outputs.tag }}
-    steps:
-      - id: pr
-        name: Find the PR, and check that its run saved the cache
-        env:
-          REF: ${{ github.ref_name }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          n="$(sed -E 's#^gh-readonly-queue/[^/]+/pr-([0-9]+)-.*#\1#' <<<"$REF")"
-          [[ "$n" =~ ^[0-9]+$ ]] || { echo "::error::no PR number in $REF"; exit 1; }
-          echo "n=$n" >> "$GITHUB_OUTPUT"
-          # Without this, a miss below would prove nothing about ref scoping.
-          saved="$(gh api "repos/$GITHUB_REPOSITORY/actions/caches?key=toolchain-$TAG&ref=refs/pull/$n/merge" \
-            --jq '[.actions_caches[] | select(.key == "toolchain-'"$TAG"'")] | length')"
-          if [[ "$saved" -lt 1 ]]; then
-            echo "::error::the PR run saved no cache toolchain-$TAG on refs/pull/$n/merge"
-            exit 1
-          fi
-      - id: cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: dist/${{ needs.build.outputs.tag }}/
-          key: toolchain-${{ needs.build.outputs.tag }}
-          lookup-only: true
-      - name: Check that the PR cache is not readable here
-        env:
-          HIT: ${{ steps.cache.outputs.cache-hit }}
-        run: |
-          if [[ "$HIT" == true ]]; then
-            echo "::error::M0 (i) FAIL: the PR cache is readable from the merge-group ref"
-            exit 1
-          fi
-          echo "M0 (i) PASS: the PR cache is not readable from the merge-group ref"
-      - id: run
-        name: Find the PR builder run
-        env:
-          N: ${{ steps.pr.outputs.n }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          head="$(gh pr view "$N" -R "$GITHUB_REPOSITORY" --json headRefOid -q .headRefOid)"
-          # The newest PR run for the head; the artifact download below shows
-          # whether its build job uploaded, whatever the other jobs did.
-          id="$(gh run list -R "$GITHUB_REPOSITORY" --workflow builder.yml --commit "$head" \
-            --event pull_request --json databaseId -q '.[0].databaseId')"
-          [[ -n "$id" ]] || { echo "::error::no PR builder run for $head"; exit 1; }
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
-        with:
-          name: toolchain-${{ needs.build.outputs.tag }}
-          run-id: ${{ steps.run.outputs.id }}
-          github-token: ${{ github.token }}
-          path: staged/
-      - name: Check the PR run's artifact
-        run: |
-          test -s "staged/$TAG.tar.zst"
-          test "$(cat staged/inputs-hash.txt)" = "${TAG##*-}"
-          echo "M0 (i) PASS: the PR run's artifact is readable by run id"
-
-  publish:
-    name: publish
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
-    needs: build
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
-    permissions:
-      contents: write  # create, upload to and publish the release
-      id-token: write  # packslip signs the release with the workflow identity
-    env:
-      TAG: ${{ needs.build.outputs.tag }}
-      # run_attempt keeps a re-run from colliding with a failed attempt's draft.
-      VERSION: 0.0.1-r.${{ github.run_number }}.${{ github.run_attempt }}
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
-        with:
-          name: toolchain-${{ needs.build.outputs.tag }}
-          path: dist/
-      - id: names
-        run: echo "release=$PROJECT-v$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Create a draft release and upload the files
-        env:
-          RELEASE: ${{ steps.names.outputs.release }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$RELEASE" -R "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
-            --title "$TAG" --notes "M0 (i) test release. It is deleted before M1b."
-          gh release upload "$RELEASE" -R "$GITHUB_REPOSITORY" "dist/$TAG.tar.zst" dist/inputs-hash.txt
-      - uses: jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564  # v1.11.4
-        with:
-          project: github.com/ray-manaloto/cpp-standard/${{ env.PROJECT }}
-          version: ${{ env.VERSION }}
-          tag: ${{ steps.names.outputs.release }}
-          artifacts: dist/${{ needs.build.outputs.tag }}.tar.zst
-          bin: m0i=bin/m0i
-          attest: 'false'
-      - name: Publish the release
-        env:
-          RELEASE: ${{ steps.names.outputs.release }}
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$RELEASE" -R "$GITHUB_REPOSITORY" --draft=false
-      - name: Install it with the exact main identity
-        env:
-          # packslip reads GH_TOKEN for its GitHub requests.
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          packslip install "github.com/ray-manaloto/cpp-standard/$PROJECT" --version "$VERSION" \
-            --identity "$IDENTITY" --issuer "$ISSUER" \
-            --install-dir "$RUNNER_TEMP/m0i" --bin-dir "$RUNNER_TEMP/m0i-bin"
-          test "$("$RUNNER_TEMP/m0i-bin/m0i")" = "$TAG"
-          echo "M0 (i) PASS: packslip install with the main identity"
-
-  # The one exception to "only publish holds id-token: write" (section 2):
-  # the refusal test needs a real branch signature. It has no write scope and
-  # uploads nothing. verify stands in for install, which runs the same
-  # identity check on the bundle.
-  branch-sign:
-    name: branch-sign
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
-    needs: build
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write  # a real branch signature for the refusal test
-    env:
-      TAG: ${{ needs.build.outputs.tag }}
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
-        with:
-          name: toolchain-${{ needs.build.outputs.tag }}
-          path: dist/
-      - id: sign
-        uses: jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564  # v1.11.4
-        with:
-          project: github.com/ray-manaloto/cpp-standard/${{ env.PROJECT }}
-          version: 0.0.1-b.${{ github.run_number }}.${{ github.run_attempt }}
-          tag: ${{ env.PROJECT }}-v0.0.1-b.${{ github.run_number }}.${{ github.run_attempt }}
-          artifacts: dist/${{ needs.build.outputs.tag }}.tar.zst
-          bin: m0i=bin/m0i
-          attest: 'false'
-          upload: 'false'
-      - name: Check that the main identity refuses a branch signature
-        env:
-          BUNDLE: ${{ steps.sign.outputs.bundle }}
-          BRANCH_IDENTITY: https://github.com/ray-manaloto/cpp-standard/.github/workflows/builder.yml@${{ github.ref }}
-        run: |
-          # Control: the bundle verifies for the identity that signed it.
-          packslip verify "$BUNDLE" --identity "$BRANCH_IDENTITY" --issuer "$ISSUER" -a "dist/$TAG.tar.zst"
-          if packslip verify "$BUNDLE" --identity "$IDENTITY" --issuer "$ISSUER" -a "dist/$TAG.tar.zst"; then
-            echo "::error::M0 (i) FAIL: a branch signature passed the main identity"
-            exit 1
-          fi
-          echo "M0 (i) PASS: a branch signature is refused for the main identity"
-
-  mise-checks:
-    name: mise-checks
-    runs-on: ubuntu-24.04-arm
+  pr-image:
+    name: pr-image
+    needs: [tags, build]
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 15
     permissions:
-      contents: read
-    container: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+      contents: read  # check out python/artifact for the pr- tag names
+      packages: write  # only pr-<n>- tags (D54, accepted risk)
+      statuses: write  # one commit status per tag
     env:
-      MISE_VERSION: 2026.11.9
-      MISE_SHA256: cf2900bfb4279f8d8f8a19d5c27bf1bde826b3e742182f3f67511c588498c786
+      BASE: ${{ needs.tags.outputs.base }}
+      TOOLS: ${{ needs.tags.outputs.tools }}
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: Install mise (pinned version and digest)
-        run: |
-          apt-get update -q && apt-get install -qy --no-install-recommends ca-certificates curl
-          curl -fsSLo /tmp/mise.tar.gz \
-            "https://github.com/jdx/mise/releases/download/v$MISE_VERSION/mise-v$MISE_VERSION-linux-arm64.tar.gz"
-          echo "$MISE_SHA256  /tmp/mise.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/mise.tar.gz -C /usr/local --strip-components=1 mise/bin/mise
-          mise --version
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: Bootstrap packages, then status --missing must exit 0
-        working-directory: spikes/m0/i/mise
-        shell: bash
-        run: |
-          MISE_CEILING_PATHS="$(dirname "$PWD")"
-          export MISE_CEILING_PATHS MISE_TRUSTED_CONFIG_PATHS="$PWD"
-          # Control: make is not in the image, so before bootstrap the status
-          # check must report it missing. Otherwise mise did not read apt.toml.
-          if command -v make || mise bootstrap packages status --missing; then
-            echo "::error::M0 (i) FAIL: make is present, or status --missing passed before bootstrap"
-            exit 1
-          fi
-          mise bootstrap --skip tools --yes
-          mise bootstrap packages status --missing
-          command -v make
-          echo "M0 (i) PASS: mise bootstrap packages status --missing exits 0"
-      - name: Regenerate the lock and compare it with the Mac's
-        working-directory: spikes/m0/i/mise
-        shell: bash
-        run: |
-          MISE_CEILING_PATHS="$(dirname "$PWD")"
-          export MISE_CEILING_PATHS MISE_TRUSTED_CONFIG_PATHS="$PWD"
-          # The committed lock was generated from nothing on the Mac host with
-          # mise 2026.11.8; 2026.11.9 regenerates the same files (D146). Remove
-          # it, so mise resolves everything again.
-          cp -a .mise "$RUNNER_TEMP/mac"
-          # mise lock needs uv on PATH for the PyPI sidecars; install the
-          # pinned uv from the committed lock first.
-          mise install uv
-          PATH="$(dirname "$(mise which uv)"):$PATH"
-          uv --version
-          rm -rf .mise/mise.lock .mise/locks
-          mise lock --platform macos-arm64,linux-x64,linux-arm64
-          if diff -r "$RUNNER_TEMP/mac" .mise; then
-            echo "M0 (i) PASS: the lock regenerates the same on the Mac and in the container"
-          else
-            # uv.lock carries exclude-newer, a time set when it is written, and
-            # mise.lock carries the sidecar digest. Say whether they are all
-            # that differs, for the M0 exit review.
-            if diff -r -I '^exclude-newer = ' -I '^uv = { path = ' "$RUNNER_TEMP/mac" .mise >/dev/null; then
-              echo "::error::M0 (i) FAIL: the lock differs only in exclude-newer and the sidecar digest"
-            else
-              echo "::error::M0 (i) FAIL: the regenerated lock differs from the Mac's beyond exclude-newer"
-            fi
-            exit 1
-          fi
-      - if: ${{ always() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: m0i-container-lock
-          path: spikes/m0/i/mise/.mise/
-          include-hidden-files: true
-          if-no-files-found: warn  # always-run: a failure before checkout leaves nothing
-          retention-days: 7
+          pattern: image-*
+          path: dist/
+      - name: Push the pr- tags and post the statuses
+        env:
+          ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          skopeo --version
+          skopeo login ghcr.io --username "$ACTOR" --password-stdin <<<"$GH_TOKEN"
+          for tag in "$BASE" "$TOOLS"; do
+            # The pr- tag artifact-check and resolve look for: artifact.py takes the PR number
+            # from GITHUB_EVENT_NAME and GITHUB_REF, as they do.
+            ref="$(python3 -I python/artifact/artifact.py names "$tag" | sed -n 's/^pr_ref=//p')"
+            [[ -n "$ref" ]] || { echo "::error::no pr- tag for $tag"; exit 1; }
+            digest="$(sed -n 's/^digest=//p' "dist/image-$tag/image.txt")"
+            skopeo copy --preserve-digests "oci-archive:dist/image-$tag/image.tar" "docker://$ref"
+            pushed="sha256:$(skopeo inspect --raw "docker://$ref" | sha256sum | cut -d' ' -f1)"
+            [[ "$pushed" == "$digest" ]] || { echo "::error::$ref is $pushed, built $digest"; exit 1; }
+            echo "pushed $ref@$digest"
+            gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=success -f context="builder/$tag" \
+              -f description="pr- image pushed (unattested)" \
+              -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          done
+
+  dispatch:
+    name: dispatch
+    needs: build
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 5
+    permissions:
+      actions: write  # dispatch publish.yml (D114)
+    steps:
+      - name: Dispatch publish.yml with this run's id
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main -f run_id="$GITHUB_RUN_ID"

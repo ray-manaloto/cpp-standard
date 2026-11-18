@@ -1,18 +1,10 @@
 # Build, cache, dependency, coverage, docs and timing tools (playbook B1),
 # pinned here so a fresh Mac or the Tart guest gets them from this repository
-# alone, not from a user's global mise config. macOS only for now: the Linux
-# images pin their own tools layer (D45).
+# alone, not from a user's global mise config. macOS only: cmake, ninja,
+# python, uv and gcovr moved to tools.toml, which the tools image installs too (D74).
 [tools]
-cmake = { version = "4.5.0", os = ["macos"] }
-ninja = { version = "1.13.2", os = ["macos"] }
 sccache = { version = "0.19.0", os = ["macos"] }
 hyperfine = { version = "2.0.0", os = ["macos"] }
-# gcovr installs from its uv lock (.mise/locks/pypi-gcovr) into a uv
-# environment on this pinned Python; mise needs uv 0.12.10 or later for that.
-python = { version = "3.14.8", os = ["macos"] }
-# After changing uv's pin, run `mise run uv:cache-warm`: a new uv can rename its cache buckets (#184).
-uv = { version = "0.13.9", os = ["macos"] }
-"pypi:gcovr" = { version = "8.8", python = "3.14.8", os = ["macos"] }
 # Doxygen is not in the mise registry; conda-forge has it.
 "conda:doxygen" = { version = "1.18.0", os = ["macos"] }
 

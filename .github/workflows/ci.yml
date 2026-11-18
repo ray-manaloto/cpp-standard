@@ -1,6 +1,7 @@
-# The required checks (D93). `lint` runs the hk gate (D102) and `pins-validate`
-# the pins check; `artifact-check`, `resolve` and `must-fail` are still stubs
-# from setup step 3 that pass at once until M1a replaces them. Each job's
+# The required checks (D93). `lint` runs the hk gate (D102), `pins-validate`
+# the pins check, `artifact-check` and `resolve` pick the tools image (M1a PR 2)
+# and `gate-linux-arm64` runs the gate in it; `must-fail` is still a stub from
+# setup step 3 that passes at once until M1a PR 3 replaces it. Each job's
 # name is its required-check name in .github/rulesets/main.json.
 name: ci
 
@@ -88,43 +89,20 @@ jobs:
           python3 --version
           mise run pins:validate
 
+  # M1a PR 2 (#128): waits until the tools image this commit needs exists, as main's image or,
+  # in a pull-request or merge-queue run, the builder run's own pr- image (D54, D61, D62, D134),
+  # for at most 180 minutes (D61, D159). It also checks that publish.yml's inline names and
+  # `artifact:names` agree (D114) and runs the unit tests of the wait and of resolve.
   artifact-check:
     name: artifact-check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - run: echo "stub until M1a"
-
-  resolve:
-    name: resolve
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - run: echo "stub until M1a"
-
-  # The tracer bullet (#125): `mise run ci` on the gcc16-coverage preset. No
-  # project image exists yet, so it runs in the digest-pinned Ubuntu container
-  # of the M0 coverage spike, with GCC 16, CMake, Ninja and gcovr from apt.
-  # M1a PR 2 replaces the container and the apt step with the tools image
-  # that `resolve` picks; PR 4 adds the other presets.
-  gate-linux-arm64:
-    name: gate-linux-arm64
     runs-on: ubuntu-26.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 190
     permissions:
       contents: read
-    container:
-      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+      actions: read  # the builder run's artifacts and caches (section 6, D135)
     env:
-      DEBIAN_FRONTEND: noninteractive
-      # `mise run` would otherwise install every pinned tool (the hk lint
-      # tools) first; the gate needs only the apt tools below.
       MISE_TASK_RUN_AUTO_INSTALL: 'false'
     steps:
-      - name: Install GCC 16, CMake, Ninja and gcovr
-        run: |
-          apt-get update -q
-          apt-get install -qy --no-install-recommends ca-certificates curl git g++-16 cmake ninja-build gcovr
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
@@ -132,6 +110,89 @@ jobs:
         with:
           version: 2026.11.9
           install: false
+      - name: Publisher and artifact:names agree; the wait and resolve cases
+        run: python3 -I tests/artifact/test_artifact.py
+      - name: Wait for this commit's tools image
+        timeout-minutes: 181
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILDER_RUN: the builder.yml run for ${{ github.sha }}
+        run: mise run artifact:check --timeout 10800 --interval 60
+
+  # M1a PR 2 (#128): picks the tools image the gate jobs run in. main's attested image is
+  # verified (image:verify) and used by digest; else, in a pull-request or merge-queue run only,
+  # the run's own unattested pr- image; on any other event it fails (D54, D98, D134). The
+  # branch-signed refusal test runs in every run (spec #122 Testing Decisions).
+  resolve:
+    name: resolve
+    needs: artifact-check
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read  # gh attestation verify
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+      source: ${{ steps.resolve.outputs.source }}
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.9
+          install: false
+      - name: Log in to GHCR for gh attestation verify
+        env:
+          ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: docker login ghcr.io --username "$ACTOR" --password-stdin <<<"$GH_TOKEN"
+      - name: An image attested from a branch is refused
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tests/image_verify/run.sh
+      - id: resolve
+        name: Resolve the tools image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise run image:resolve --arch arm64
+
+  # The gate (#125, M1a PR 2): `mise run ci` in the tools image, by the digest `resolve`
+  # picked. PR 4 adds the other presets and the toolchain fetch.
+  gate-linux-arm64:
+    name: gate-linux-arm64
+    needs: [artifact-check, resolve]
+    if: ${{ needs.artifact-check.result == 'success' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    container:
+      # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
+      image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    env:
+      # The tools image holds the tools of .mise/conf.d/tools.toml; the hk lint tools are not
+      # in it and the gate does not need them.
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+    steps:
+      - name: The image resolve verified
+        env:
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          SOURCE: ${{ needs.resolve.outputs.source }}
+        run: |
+          echo "Running in $IMAGE ($SOURCE: main is attested and verified, pr is this run's own)"
+          id
+          mise --version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trust the checkout's mise config
+        run: mise trust "$GITHUB_WORKSPACE"
       - name: Run the gate
         run: mise run ci
 

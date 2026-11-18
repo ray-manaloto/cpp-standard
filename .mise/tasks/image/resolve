@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Pick the tools image a CI job runs in: main's attested image, else the run's own pr- image (D54, D98, D134)"
+#USAGE flag "--arch <arch>" help="Docker arch" default="arm64" {
+#USAGE   choices "arm64" "amd64"
+#USAGE }
+#
+# The `resolve` job (environment-standard.md file plan, ci.yml row). For this commit's tools tag:
+# main's tools:<arch>-<hash>, verified like image:verify, is used by digest; if it does not
+# exist, a pull-request or merge-queue run uses its own unattested pr- image, and any other run
+# fails. A main image whose attestation is refused fails; there is no fall back. Prints, and
+# appends to $GITHUB_OUTPUT, image=<image>@sha256:<digest> and source=main|pr. The event and the
+# PR number come from GITHUB_EVENT_NAME and GITHUB_REF.
+set -euo pipefail
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+tag="$(python3 -I "$root/python/pins/pins.py" tag tools --arch "${usage_arch:-arm64}" --root "$root")"
+exec python3 -I "$root/python/artifact/artifact.py" resolve "$tag"

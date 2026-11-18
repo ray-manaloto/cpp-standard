@@ -1,0 +1,8 @@
+# The base image's inputs (section 3, D69, D73, D86): the Ubuntu image by digest (the one the
+# tracer bullet's gate container uses), the only mise pin, mise's packslip signer key (the
+# repository fingerprint from mise's install docs) and the packslip image by its multi-platform
+# index digest (1.11.4).
+image = "ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7"
+mise = "2026.11.9"
+mise_signer = "ps1_nlhmwtfeufglxv5myvwvronk7a"
+packslip_image = "ghcr.io/jdx/packslip@sha256:e0d121c6848e8705375180ee5c4f37ec2a6bcb84daa5dccebec714dff4cbbf99"

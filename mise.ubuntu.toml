@@ -24,8 +24,9 @@ phase = "pre-packages"
 
 # The Ubuntu archive pins below are exact, and several are -updates/-security versions, which
 # Ubuntu's live indexes drop when the next update ships. apt reads the archive as it was at this
-# snapshot (snapshot.ubuntu.com) instead, so the pins keep installing. Bump the date on purpose,
-# with the pins, to take newer security fixes. apt.llvm.org has no snapshots.
+# snapshot (snapshot.ubuntu.com) instead, so the pins keep installing. `mise run pins:apt-bump`
+# (#193, D165) moves the date with the pins to take newer security fixes. apt.llvm.org has no
+# snapshots.
 [bootstrap.files."/etc/apt/apt.conf.d/50-snapshot"]
 content = """
 APT::Snapshot "20261116T000000Z";
@@ -59,27 +60,27 @@ fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 "apt:cppcheck" = "2.21.0-1"
 "apt:gcc-16-offload-nvptx" = "16.2.0-3ubuntu1"
 "apt:nvptx-tools" = "0.20260402-1"
-# LLVM 23 from apt.llvm.org: "latest", not an exact pin. apt.llvm.org deletes old snapshots
-# within days (D27): the Dockerfile's pin from the morning of 2026-11-16 was gone the same
-# day. The certified snapshot is the one probe C1 prints in the report.
-"apt:clang-23" = "latest"
-"apt:clang-tools-23" = "latest"
-"apt:llvm-23" = "latest"
-"apt:llvm-23-tools" = "latest"
-"apt:libc++-23-dev" = "latest"
-"apt:libc++abi-23-dev" = "latest"
-"apt:libclang-rt-23-dev" = "latest"
-"apt:lld-23" = "latest"
-"apt:lldb-23" = "latest"
-"apt:python3-lldb-23" = "latest"
-"apt:clang-tidy-23" = "latest"
-"apt:clang-format-23" = "latest"
-"apt:bolt-23" = "latest"
-"apt:libfuzzer-23-dev" = "latest"
-"apt:mlir-23-tools" = "latest"
-"apt:libomp-23-dev" = "latest"
-"apt:liboffload-23" = "latest"
-"apt:liboffload-23-dev" = "latest"
+# LLVM 23 from apt.llvm.org: exact pins (D27, D165). apt.llvm.org deletes old snapshots within
+# days and has no snapshot service, so `mise run pins:apt-bump` (#193) moves these pins to its
+# newest build, daily, together with the Ubuntu pins and the snapshot date above.
+"apt:clang-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:clang-tools-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:llvm-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:llvm-23-tools" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:libc++-23-dev" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:libc++abi-23-dev" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:libclang-rt-23-dev" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:lld-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:lldb-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:python3-lldb-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:clang-tidy-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:clang-format-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:bolt-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:libfuzzer-23-dev" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:mlir-23-tools" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:libomp-23-dev" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:liboffload-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+"apt:liboffload-23-dev" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
 
 # clangd (E2): only bin/clangd and lib/clang from the llvmorg-23.1.5 release tarball, into
 # /opt/llvm-23.1.5, the image's layout. The whole tarball through mise's github backend is a

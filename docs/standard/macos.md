@@ -89,7 +89,7 @@ results came from running the probes below on macOS 27.2.1 with Xcode 27.2.
 | clang-p2996 + libc++ | `bloomberg/clang-p2996` at a pinned commit | **yes** | No prebuilt binary exists. It is the reflection reference compiler (D30). |
 | include-what-you-use for p2996 | IWYU `clang_21` branch, built out of tree against p2996 | **yes** | p2996 is based on LLVM 21. Homebrew's IWYU uses clang 23 and cannot parse `^^` (D136). |
 | include-what-you-use for clang 23 | IWYU 0.27 (`c9cbc836a1af`), built out of tree against the LLVM 23 tarball by `mise run toolchain:iwyu-llvm23` | **yes** | Homebrew's IWYU is built against Homebrew's LLVM, not the tarball (T3). |
-| CMake 4.5, Ninja, sccache, vcpkg, gcovr, Doxygen, hyperfine | mise (`.mise/conf.d/build.toml`) | no | Build, cache, dependencies, coverage report, docs, timing. |
+| CMake 4.5, Ninja, sccache, vcpkg, gcovr, Doxygen, hyperfine | mise (`.mise/conf.d/tools.toml`, `build.toml`) | no | Build, cache, dependencies, coverage report, docs, timing. |
 | Tart | mise, `aqua:openai/tart` (pinned in `.mise/conf.d/vm.toml` and in the dotfiles global config) | no | VM host (host only). Never from Homebrew: every tool is mise-managed. |
 
 ### The p2996 build configuration
@@ -188,8 +188,8 @@ Expected: CMake `4.5.x`; every other tool prints a version. PASS if all
 eight print a version and CMake is 4.5 or later. Why CMake 4.5: it removed
 `CMAKE_CXX_MODULE_STD`; `import std` is used whenever module scanning is on,
 and `CMAKE_CXX_STDLIB_MODULES_JSON` overrides where it looks.
-Source: `.mise/conf.d/build.toml` pins all of them except mise (macOS only;
-gcovr also needs the Python and uv pinned there), so a guest or a fresh Mac
+Source: `.mise/conf.d/tools.toml` (CMake, Ninja, gcovr and the Python and uv
+gcovr needs) and `build.toml` (macOS only) pin all of them except mise, so a guest or a fresh Mac
 gets them from this repository, not from a user's global config. The first
 guest run (2026-11-15) failed B1 because these came only from the host's
 global config.

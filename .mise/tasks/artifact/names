@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#MISE description="Print the image references or release names of an artifact tag (D98, D134)"
+#USAGE arg "<tag>" help="An artifact tag, e.g. tools-arm64-<hash> or p2996-linux-arm64-<hash>"
+#USAGE flag "--pr <n>" help="Also print the PR image tag of PR n"
+#USAGE flag "--mq" help="The PR image tag of a merge-queue run"
+#
+# The artifact:names row of the file plan: for tests and local use. publish.yml computes the same
+# names inline and never runs this (D114); tests/artifact/ checks that the two agree. Prints
+# key=value lines, and appends them to $GITHUB_OUTPUT when it is set.
+set -euo pipefail
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+args=(names "${usage_tag:?}")
+[[ -z "${usage_pr:-}" ]] || args+=(--pr "$usage_pr")
+[[ "${usage_mq:-false}" != true ]] || args+=(--mq)
+exec python3 -I "$root/python/artifact/artifact.py" "${args[@]}"

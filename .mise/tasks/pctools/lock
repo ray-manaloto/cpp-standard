@@ -2,5 +2,5 @@
 #MISE description="Re-resolve pctools' dependencies to their latest releases before the cutoff in pyproject.toml"
 #MISE dir="{{config_root}}/python/pctools"
 set -euo pipefail
-# mise's pinned Python (build.toml on the Mac, mise.ci.toml in CI), never one uv finds or downloads.
+# mise's pinned Python (tools.toml on the Mac, mise.ci.toml in CI), never one uv finds or downloads.
 UV_PYTHON="$(mise which python)" UV_PYTHON_DOWNLOADS=never exec uv lock --upgrade
