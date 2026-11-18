@@ -17,3 +17,14 @@ dist/
 
 # CMake build trees, one per preset (build/<preset>).
 /build/
+
+# repotools and workflowtools (python/repo, python/workflow): their venvs and what their tests leave. Here, not in
+# the packages, so the copied files stay dotfiles' own (#154).
+/python/repo/.venv/
+/python/workflow/.venv/
+__pycache__/
+.coverage
+# A subprocess writes its own .coverage.<host>.pid<n>.<random> until pytest-cov combines them.
+.coverage.*
+.pytest_cache/
+.ruff_cache/

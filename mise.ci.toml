@@ -2,5 +2,15 @@
 # The Mac gets the same pins from .mise/conf.d/build.toml. They live here, not in a conf.d fragment, so `mise -E
 # ubuntu bootstrap` (which installs every pinned tool) and the Ubuntu images do not gain them.
 [tools]
-python = { version = "3.14.8", os = ["linux"] }
+# 3.15.2 beside it for workflowtools (python/workflow: requires-python >=3.15), whose //workflow:check also needs
+# datamodel-codegen; the Mac takes both from the owner's global config. repotools' suite is Mac-only for now (D163).
+python = [
+  { version = "3.14.8", os = [
+    "linux",
+  ] },
+  { version = "3.15.2", os = [
+    "linux",
+  ] },
+]
+"pipx:datamodel-code-generator" = { version = "0.89.0", os = ["linux"] }
 uv = { version = "0.13.8", os = ["linux"] }
