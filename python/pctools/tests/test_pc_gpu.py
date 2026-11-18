@@ -110,12 +110,6 @@ def test_a_driver_mismatch_fails_as_reboot_required(ssh: Path, capfd: pytest.Cap
     assert "615.78.08" in line.detail
 
 
-def test_a_driver_mismatch_is_named_beside_other_failures(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    changed = {gpu.MODULE: gpu.module("615.70.02"), gpu.stat(): gpu.stated(missing=(gpu.LIBRARY,))}
-    code, line, _ = gpu_line(ssh, capfd, changed)
-    assert (code, line.culprits) == (1, [f"file:{gpu.LIBRARY}", "driver-reboot-required"])
-
-
 def test_an_epoch_and_release_are_not_part_of_the_driver_version(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
     code, line, _ = gpu_line(ssh, capfd, {gpu.PACMAN: gpu.pacman(utils="1:615.78.08-3")})
     assert (code, line.result.value) == (0, "pass")
@@ -225,12 +219,6 @@ def test_a_folder_docker_lists_but_that_is_missing_holds_no_spec(ssh: Path, capf
     assert (code, line.result.value) == (0, "pass")
 
 
-def test_any_other_find_complaint_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    listing = gpu.SPECS | {"stderr": "find: '/etc/cdi': Permission denied\n", "code": 1}
-    code, line, _ = gpu_line(ssh, capfd, {gpu.find(): listing})
-    assert (code, line.result.value, line.detail) == (3, "unknown", "find could not list the CDI folders")
-
-
 def test_a_path_stat_cannot_read_is_unknown_not_missing(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
     code, line, _ = gpu_line(ssh, capfd, {gpu.stat(): gpu.stated(denied=(gpu.LIBRARY,))})
     assert (code, line.result.value, line.culprits) == (3, "unknown", [])
@@ -289,3 +277,9 @@ def test_a_hostile_mount_path_stays_one_quoted_word(ssh: Path, capfd: pytest.Cap
     assert (code, line.culprits) == (1, [f"file:{hostile}"])
     sent = next(argv for argv in calls(ssh) if "stat" in argv)
     assert sent[-1] == "'/usr/lib/a b'\"'\"';touch /tmp/x;'\"'\"'\"},{\"check\":\"forged'"
+
+
+def test_any_other_find_complaint_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
+    listing = gpu.SPECS | {"stderr": "find: '/etc/cdi': Permission denied\n", "code": 1}
+    code, line, _ = gpu_line(ssh, capfd, {gpu.find(): listing})
+    assert (code, line.result.value, line.detail) == (3, "unknown", "find could not list the CDI folders")

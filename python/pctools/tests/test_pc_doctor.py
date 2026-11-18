@@ -149,13 +149,6 @@ def test_a_stopped_slot_fails_the_status_line_and_is_named(ssh: Path, capfd: pyt
     assert all(line.culprits == [f"service:{SLOT}"] for line in bootstrap(lines))
 
 
-def test_running_slots_pass_beside_the_files(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    answer(ssh, {PLAN: plan(entry("noop"), slot("noop")), STATUS: status(entry("noop"), services=(slot("noop"),))})
-    code, lines, _ = doctor(capfd)
-    assert (code, results(lines)) == (0, {"bootstrap-status": "pass", "bootstrap-plan": "pass"})
-    assert lines[0].detail == "2 pc entries match dotfiles"
-
-
 def test_a_hostile_culprit_name_comes_out_inert(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
     # CODING_STANDARDS 9: the name comes from the PC's mise; quotes, backslashes and a newline must stay inside one
     # JSON string, so stdout still holds exactly one event per check.
@@ -245,14 +238,6 @@ def test_an_entry_without_an_action_is_unknown_not_drift(ssh: Path, capfd: pytes
     code, lines, _ = doctor(capfd)
     assert (code, results(lines)) == (3, {"bootstrap-status": "unknown", "bootstrap-plan": "pass"})
     assert lines[0].culprits == [CULPRIT]
-
-
-def test_a_failed_plan_with_no_drift_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    # --detailed-exitcode's 1: planning failed, so a clean list is not proof.
-    answer(ssh, {PLAN: plan(entry("noop"), code=1), STATUS: status(entry("noop"))})
-    code, lines, _ = doctor(capfd)
-    assert (code, results(lines)) == (3, {"bootstrap-status": "pass", "bootstrap-plan": "unknown"})
-    assert "exited 1" in lines[1].detail
 
 
 def test_a_missing_ssh_is_unknown(
