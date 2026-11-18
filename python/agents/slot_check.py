@@ -590,6 +590,135 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             lambda: aims(here, "# don't skip this\ndocker run x"),
         ),
         (
+            "hook: a wrapper's own options do not hide the container start",
+            lambda: aims(
+                there,
+                "caffeinate -i docker build .",
+                "timeout -k 5 600 docker run x",
+                "sudo -E docker run x",
+                "nice -n 5 docker run x",
+                "echo a | xargs -n 1 docker run",
+                "for i in 1 2; do timeout 5 docker run x; done",
+                extra=at_pc,
+            ),
+        ),
+        (
+            "hook: env -u and env -i clear the inherited target",
+            lambda: aims(
+                here,
+                "env -u DOCKER_HOST docker run x",
+                "env -i docker run x",
+                extra=at_pc,
+            ),
+        ),
+        (
+            "hook: text given to a shell or eval is read as a command",
+            lambda: aims(
+                there,
+                "bash -lc 'cd x && docker run y'",
+                "eval 'docker run x'",
+                "bash <<EOF\ndocker run x\nEOF",
+                "bash -c 'ssh pc \"cd a && docker run x\"'",
+                extra=at_pc,
+            ),
+        ),
+        (
+            "hook: a here-document that is not a command: untouched",
+            lambda: all(
+                hook(nobody, command)[0] == 0
+                for command in (
+                    "git commit -F - <<'EOF'\ndocker run x\nEOF",
+                    "bash script.sh <<EOF\ndocker run x\nEOF",
+                )
+            ),
+        ),
+        (
+            "hook: lines after a here-document or a shift are still read",
+            lambda: aims(
+                here,
+                "echo $((1<<2))\ndocker run x",
+                "cat <<\\EOF\nhi\nEOF\ndocker run x",
+            ),
+        ),
+        (
+            "hook: a here-document that never closes before docker: blocked",
+            lambda: (
+                also("mac"),
+                also("pc"),
+                blocked(me, "cat <<EOF\nnever\ndocker run x", "cannot read"),
+            )[2],
+        ),
+        (
+            "hook: text piped to ssh or a shell is read as its command",
+            lambda: (
+                aims(
+                    there,
+                    "cat <<EOF | ssh pc bash\ndocker run x\nEOF",
+                    "echo 'docker run x' | ssh pc bash",
+                )
+                and aims(here, "echo 'docker run x' | bash")
+                and hook(nobody, "echo 'docker run x'; ssh pc ls")[0] == 0
+            ),
+        ),
+        (
+            "hook: function, coproc, builtin, stdbuf, mise x and tailscale ssh are seen through",
+            lambda: aims(
+                there,
+                "function f { docker run x; }; f",
+                "time -p docker run x",
+                "coproc docker run x",
+                "builtin command docker run x",
+                "stdbuf -oL docker run x",
+                "timeout --foreground 60 docker run x",
+                "mise x -- docker run x",
+                "tailscale ssh pc docker run x",
+                extra=at_pc,
+            ),
+        ),
+        (
+            "hook: declare -x, a bare host:port and other endpoint spellings aim at the PC",
+            lambda: aims(
+                there,
+                "declare -x DOCKER_HOST=ssh://pc; docker run x",
+                "DOCKER_HOST=pc:2375 docker run x",
+                "docker -H pc:2375 run x",
+                "DOCKER_HOST=SSH://pc docker run x",
+                "ssh ssh://dev@pc:22 docker run x",
+            ),
+        ),
+        (
+            "hook: a target that holds a variable: blocked, a variable elsewhere is not",
+            lambda: (
+                (
+                    also("mac"),
+                    also("pc"),
+                    all(
+                        blocked(me, command, "not expanded")
+                        for command in (
+                            "H=ssh://pc; DOCKER_HOST=$H docker run x",
+                            'docker -H "$PCH" run x',
+                            "ssh $PCALIAS docker run x",
+                        )
+                    ),
+                    hook(me, "docker run -e A=$B x")[0] == 0,
+                )[2:]
+                == (True, True)
+            ),
+        ),
+        (
+            "hook: the default context is DOCKER_HOST when that is set",
+            lambda: aims(
+                there,
+                "docker --context default run x",
+                "DOCKER_CONTEXT=default docker run x",
+                extra=at_pc,
+            ),
+        ),
+        (
+            "hook: a line continued with a backslash is one command",
+            lambda: aims(there, "docker \\\n  -H ssh://pc \\\n  run x"),
+        ),
+        (
             "a live grant survives clear-expired and another holder's release",
             keeps_live,
         ),

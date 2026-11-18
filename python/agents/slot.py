@@ -290,7 +290,12 @@ def resolved_host(name: str) -> str:
 
 def host_of(endpoint: str) -> str | None:
     """The host of a Docker endpoint such as ssh://user@host:22 or tcp://host:2376; None for a local socket."""
-    match = re.match(r"(?:ssh|tcp|https?)://(?:[^@/]+@)?(\[[^\]]+\]|[^:/]+)", endpoint)
+    if re.match(r"(?:unix|npipe|fd)://|/", endpoint, re.IGNORECASE):
+        return None
+    # Docker reads a bare host:port as tcp://host:port.
+    match = re.match(
+        r"(?:[a-z+]+://)?(?:[^@/]+@)?(\[[^\]]+\]|[^:/]+)", endpoint, re.IGNORECASE
+    )
     return match.group(1) if match else None
 
 
@@ -322,14 +327,16 @@ def ssh_call(words: list[str], body: str = "") -> tuple[str | None, str]:
     remote = " ".join(rest[i + 1 :]) + "\n" + body
     if i >= len(rest) or not DOCKER.search(remote):
         return None, ""
-    return rest[i].rsplit("@", 1)[-1], remote
+    return host_of(rest[i]) if "://" in rest[i] else rest[i].rsplit("@", 1)[-1], remote
 
 
-def segments(command: str) -> list[tuple[str, str]]:
-    """The command's simple commands in order, each with the here-document text sent to it. Separators (&& || ;
+def segments(command: str) -> list[tuple[str, str, bool]]:
+    """The command's simple commands in order, each with the here-document text sent to it and whether it reads
+    the command before it through a pipe. Separators (&& || ;
     | & newlines, parentheses and backquotes) split only outside quotes, so a quoted remote command stays one
-    word of its ssh call. Raises ValueError for a quote that never closes."""
-    out: list[tuple[list[str], list[str]]] = [([], [])]
+    word of its ssh call. Raises ValueError for a quote or a here-document that never closes: the lines after
+    it would otherwise be taken for its text and go unread."""
+    out: list[tuple[list[str], list[str], bool]] = [([], [], False)]
     waiting: list[
         tuple[str, bool, list[str]]
     ] = []  # delimiter, whether <<-, the owning command's body
@@ -356,44 +363,85 @@ def segments(command: str) -> list[tuple[str, str]]:
             text.append(char)
         elif char == "#" and (not text or text[-1].isspace()):
             step = (command.find("\n", i) if "\n" in command[i:] else size) - i
+        elif command.startswith("$((", i) and "))" in command[i:]:
+            # Arithmetic: its << is a shift, not a here-document.
+            step = command.index("))", i) + 2 - i
+            text.append(command[i : i + step])
         elif command.startswith("<<<", i):
             text.append("<<<")
             step = 3
         elif found := HEREDOC.match(command, i):
-            waiting.append((found.group(3), bool(found.group(1)), out[-1][1]))
+            word = found.group(3).replace("\\", "")
+            waiting.append((word, bool(found.group(1)), out[-1][1]))
             step = found.end() - i
         elif char == "\n" and waiting:
             lines = command[i + 1 :].split("\n")
             used = 0
             for word, tabs, body in waiting:
-                while used < len(lines):
+                closed = False
+                while used < len(lines) and not closed:
                     line = lines[used]
                     used += 1
-                    if (line.lstrip("\t") if tabs else line) == word:
-                        break
-                    body.append(line)
+                    closed = (line.lstrip("\t") if tabs else line) == word
+                    if not closed:
+                        body.append(line)
+                if not closed:
+                    raise ValueError(UNCLOSED.format(word))
             waiting.clear()
-            out.append(([], []))
+            out.append(([], [], False))
             step = 1 + sum(len(line) + 1 for line in lines[:used])
         elif command.startswith(("&&", "||"), i):
-            out.append(([], []))
+            out.append(([], [], False))
             step = 2
+        elif char == "&" and out[-1][2] and not text:
+            pass  # |& is a pipe too
         elif char in ";|&\n()`":
-            out.append(([], []))
+            out.append(([], [], char == "|"))
         else:
             text.append(char)
         i += step
     if quote:
         msg = f"a {quote} quote never closes"
         raise ValueError(msg)
+    if waiting:
+        raise ValueError(UNCLOSED.format(waiting[0][0]))
     return [
-        ("".join(text), "\n".join(body)) for text, body in out if "".join(text).strip()
+        ("".join(text), "\n".join(body), piped)
+        for text, body, piped in out
+        if "".join(text).strip()
     ]
 
 
-WRAPPERS = frozenset(
-    {"env", "sudo", "nohup", "time", "exec", "command", "caffeinate", "nice"}
-)
+UNCLOSED = "the here-document {} never closes"
+# Commands that run the command after them, each with its own options that take a value: a container started
+# through timeout with -k, or caffeinate with -i, starts just as it does from the bare command.
+WRAPPERS: dict[str, frozenset[str]] = {
+    "env": frozenset({"-u", "--unset", "-C", "--chdir", "-P", "-S"}),
+    "sudo": frozenset(
+        {"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U", "-r", "-t"}
+    ),
+    "nohup": frozenset(),
+    "time": frozenset({"-o", "-f"}),
+    "exec": frozenset({"-a"}),
+    "command": frozenset(),
+    "builtin": frozenset(),
+    "coproc": frozenset(),
+    "stdbuf": frozenset({"-i", "-o", "-e"}),
+    "ionice": frozenset({"-c", "-n", "-p"}),
+    "caffeinate": frozenset({"-t", "-w"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
+    "xargs": frozenset(
+        {"-I", "-n", "-P", "-L", "-s", "-E", "-d", "-a", "-R", "-S", "-J"}
+    ),
+}
+# Builtins that set a variable for the commands after them, as export does.
+DECLARES = frozenset({"export", "declare", "typeset", "readonly", "local"})
+# Commands whose words or here-document go down a pipe to the command after them.
+PRINTS = frozenset({"echo", "printf", "cat", "tee"})
+UNEXPANDED = "the docker target {} holds a variable, which is not expanded here"
+# Shells that run the text given after -c, or a here-document sent to them.
+SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 # Shell words that come before a command without being one: `do docker run x`, `then docker run x`, `{ docker ...`.
 RESERVED = frozenset({"do", "then", "else", "elif", "if", "while", "until", "{", "!"})
 ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
@@ -422,9 +470,28 @@ WITH_VALUE = frozenset(
 CURRENT = "docker context use"
 
 
+def wrapped(name: str, words: list[str], assigned: dict[str, str]) -> list[str]:
+    """The words after a wrapper's own options (and timeout's duration). `env -u NAME` and `env -i` clear a
+    variable for the command, which is read as assigning it the empty value."""
+    takes = WRAPPERS[name]
+    i = 0
+    while i < len(words) and words[i].startswith("-") and words[i] != "--":
+        word = words[i]
+        if name == "env" and word in {"-u", "--unset"} and i + 1 < len(words):
+            assigned[words[i + 1]] = ""
+        elif name == "env" and word.startswith("--unset="):
+            assigned[word.partition("=")[2]] = ""
+        elif name == "env" and word in {"-", "-i", "--ignore-environment"}:
+            assigned.update(DOCKER_HOST="", DOCKER_CONTEXT="")
+        i += 2 if word in takes else 1
+    if i < len(words) and words[i] == "--":
+        i += 1
+    return words[i + 1 :] if name == "timeout" else words[i:]
+
+
 def command_words(text: str) -> tuple[dict[str, str], list[str]]:
     """A simple command's leading assignments and its words from the command word on, wrappers such as env and
-    timeout dropped and the command word without its folder, so /usr/bin/ssh reads as ssh."""
+    timeout dropped with their options and the command word without its folder, so /usr/bin/ssh reads as ssh."""
     words = shlex.split(text)
     assigned: dict[str, str] = {}
     while words:
@@ -433,14 +500,33 @@ def command_words(text: str) -> tuple[dict[str, str], list[str]]:
         if found:
             assigned[found.group(1)] = found.group(2)
             words = words[1:]
-        elif name in WRAPPERS or words[0] in RESERVED:
+        elif words[0] in RESERVED:
             words = words[1:]
-        elif name == "timeout":
+        elif words[0] == "function":
             words = words[2:]
+        elif name == "mise" and words[1:2] in (["x"], ["exec"]) and "--" in words:
+            words = words[words.index("--") + 1 :]
+        elif words[:2] == ["tailscale", "ssh"]:
+            words = words[1:]
+        elif name in WRAPPERS:
+            words = wrapped(name, words[1:], assigned)
         else:
             words[0] = name
             break
     return assigned, words
+
+
+def shell_text(words: list[str], body: str) -> str:
+    """The command text a shell or eval is given: eval's words, the word after a shell's -c, or the
+    here-document sent to a shell that names no script."""
+    if words[0] == "eval":
+        return " ".join(words[1:])
+    for i, word in enumerate(words[1:], 1):
+        if not word.startswith("-") or word == "--":
+            return ""  # a script file, which is not read
+        if not word.startswith("--") and "c" in word:
+            return words[i + 1] if i + 1 < len(words) else ""
+    return body
 
 
 def docker_target(words: list[str]) -> tuple[dict[str, str], list[str]]:
@@ -467,6 +553,9 @@ def docker_target(words: list[str]) -> tuple[dict[str, str], list[str]]:
                 i += 1
         elif re.match(r"-[cH].", word):
             given["context" if word[1] == "c" else "host"] = word[2:].removeprefix("=")
+        elif name == "--config":
+            given["config"] = value if joined else "".join(words[i + 1 : i + 2])
+            i += 0 if joined else 1
         elif word in WITH_VALUE:
             i += 1
         i += 1
@@ -501,26 +590,40 @@ def pc_reason(given: dict[str, str], env: dict[str, str]) -> str | None:
     return None
 
 
+def unexpanded(target: str) -> None:
+    """Refuse a target that names a variable: read as written it would look like Mac work."""
+    if "$" in target:
+        raise ValueError(UNEXPANDED.format(target))
+
+
 def started(command: str, env: dict[str, str]) -> list[tuple[str, str | None]]:
     """Each heavy container start in the command, in order: its text, and why it is aimed at the PC (None when
     it runs here). A target an earlier command sets (export, a bare assignment, unset, docker context use) holds
     for the ones after it. docker or ssh must be the command word, so `grep "docker run" notes.md` starts
-    nothing. Raises ValueError when the quoting cannot be read."""
+    nothing; the text given to `bash -c`, to eval or to a shell as a here-document is read as a command too. Raises ValueError when the quoting cannot be read."""
     shell = dict(env)
     out: list[tuple[str, str | None]] = []
-    for text, body in segments(command):
+    sent = ""  # what the command before writes to a pipe, as far as it can be read
+    for text, body, piped in segments(command):
         assigned, words = command_words(text)
+        fed = "\n".join(filter(None, (body, sent if piped else "")))
+        sent = ""
         if not words:
             shell.update(assigned)
-        elif words[0] == "export":
+        elif words[0] in PRINTS:
+            sent = body if words[0] in {"cat", "tee"} else " ".join(words[1:])
+        elif words[0] in DECLARES:
             shell.update(w.split("=", 1) for w in words[1:] if "=" in w)
         elif words[0] == "unset":
             for word in words[1:]:
                 shell.pop(word, None)
+        elif words[0] == "eval" or words[0] in SHELLS:
+            out += started(shell_text(words, fed), shell | assigned)
         elif words[0] == "ssh":
             # The remote command is opaque to the word rules here; any heavy docker in it counts.
-            target, remote = ssh_call(words, body)
+            target, remote = ssh_call(words, fed)
             if target and HEAVY.search(remote):
+                unexpanded(target)
                 aimed = f"docker over ssh to {target}" if is_pc(target) else None
                 out.append((remote, aimed))
         elif DOCKER.fullmatch(words[0]):
@@ -528,7 +631,14 @@ def started(command: str, env: dict[str, str]) -> list[tuple[str, str | None]]:
             if rest[:2] == ["context", "use"] and len(rest) > 2:
                 shell[CURRENT] = rest[2]
             elif HEAVY.search(shlex.join(words)):
-                out.append((text, pc_reason(given, shell | assigned)))
+                around = shell | assigned
+                if "config" in given:
+                    around["DOCKER_CONFIG"] = given["config"]
+                for name in ("context", "host"):
+                    unexpanded(given.get(name, ""))
+                for name in ("DOCKER_HOST", "DOCKER_CONTEXT"):
+                    unexpanded(around.get(name, ""))
+                out.append((text, pc_reason(given, around)))
     return out
 
 
@@ -542,7 +652,9 @@ def guard_command(command: str, env: dict[str, str]) -> None:
     except ValueError as error:
         # Guessing here is how PC work was once read as Mac work; a command that names docker and cannot be
         # read does not run.
-        msg = f"cannot read this command's quoting ({error}), so cannot tell where its docker runs"
+        msg = (
+            f"cannot read this command ({error}), so cannot tell where its docker runs"
+        )
         raise RefusedError(msg) from error
     aimed = [text for text, reason in work if reason]
     # No --privileged container on the PC, grant or not: one that runs apt can apply its image's kernel settings
