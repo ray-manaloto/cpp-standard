@@ -1,0 +1,1 @@
+{ "name": "run-skill-auto", "version": "0.1.0", "license": "MIT", "description": "Runs /run-skill-generator once for each retro line `/run-skill-generator <unit>: <what>` this session writes." }
