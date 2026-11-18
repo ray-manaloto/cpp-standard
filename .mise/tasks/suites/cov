@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Run the suite recorder check (record_check.py) under coverage; fail below python/suites' floor (#186)"
+set -euo pipefail
+# A git hook exports GIT_DIR, GIT_INDEX_FILE and the rest; nothing under a check may write into this repository.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+cd "$root"
+data="$(mktemp -d)"
+trap 'rm -rf "$data"' EXIT
+export COVERAGE_FILE="$data/.coverage"
+rc=python/suites/pyproject.toml
+cov=(uv run --no-project --quiet --with coverage==7.17.3 python -I -m coverage)
+"${cov[@]}" run --rcfile="$rc" python/suites/record_check.py >/dev/null
+"${cov[@]}" combine --rcfile="$rc" --quiet "$data"
+exec "${cov[@]}" report --rcfile="$rc"

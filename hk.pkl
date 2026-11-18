@@ -115,6 +115,10 @@ local gateSteps = new Mapping<String, Step> {
       )
     check = "mise run pins:cov"
   }
+  ["suites-cov"] {
+    glob = List("python/suites/**", ".mise/tasks/suites/**")
+    check = "mise run suites:cov"
+  }
   ["agents-cov"] {
     glob = List("python/agents/**", ".mise/tasks/agents/cov", ".mise/tasks/slot/**")
     check = "mise run agents:cov"

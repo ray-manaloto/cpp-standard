@@ -11,4 +11,5 @@ rises. A change that lowers it says why in its commit message and pull request.
 | `pctools` | `mise run pctools:test` | 100% line and branch (`pyproject.toml`) |
 | `pins` | `mise run pins:cov` (the `pins-cov` hk step) | floor in `pins/pyproject.toml` |
 | `agents` | `mise run agents:cov` (the `agents-cov` hk step) | floor in `agents/pyproject.toml` |
+| `suites` | `mise run suites:cov` (the `suites-cov` hk step) | floor in `suites/pyproject.toml` |
 | `guards` | none here | No floor: a byte-for-byte copy of dotfiles' `python/guards`, gated at 100% there. |
