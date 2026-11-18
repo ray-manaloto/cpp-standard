@@ -60,6 +60,8 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
     nobody = {
         k: v for k, v in env.items() if k not in {"SLOT_HOLDER", "HC_TERMINAL_ID"}
     }
+    # A folder with docker but no ssh (main makes it): the hook must block when it cannot resolve a host.
+    no_ssh = str(Path(env["XDG_STATE_HOME"]).parent / "bin-no-ssh")
 
     def granted(minutes: str = "30") -> None:
         slot(env, "release", "--holder", "t1")
@@ -161,6 +163,25 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             ),
         ),
         (
+            "hook: --privileged=1 at the PC with a grant: blocked",
+            lambda: pc(
+                "DOCKER_HOST=ssh://pc docker run --privileged=1 x",
+                words="--privileged container",
+            ),
+        ),
+        (
+            "hook: local and PC work in one command: the Mac's load checked too",
+            lambda: pc("docker run a && ssh pc docker run b", words="5-minute load is"),
+        ),
+        (
+            "hook: ssh missing, so the target is unknown: blocked",
+            lambda: (
+                granted(),
+                hook(me | {"PATH": no_ssh}, "DOCKER_HOST=ssh://pc docker run x")[0]
+                == 2,
+            )[1],
+        ),
+        (
             "hook: --cap-add=ALL at the PC with a grant: blocked",
             lambda: pc(
                 "DOCKER_HOST=ssh://pc docker run --cap-add=ALL x",
@@ -211,8 +232,13 @@ def main() -> None:
         root = Path(scratch).resolve()
         bin_dir = root / "bin"
         bin_dir.mkdir()
-        for name in ("ssh", "docker"):
-            path = bin_dir / name
+        (root / "bin-no-ssh").mkdir()
+        for folder, name in (
+            ("bin", "ssh"),
+            ("bin", "docker"),
+            ("bin-no-ssh", "docker"),
+        ):
+            path = root / folder / name
             path.write_text(STANDIN.format(python=sys.executable), encoding="utf-8")
             path.chmod(0o755)
         env = {

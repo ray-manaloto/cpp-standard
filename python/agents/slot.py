@@ -46,7 +46,7 @@ HEAVY = re.compile(
     r"|\bdocker(?:-compose\b|(?:\s+\S+)*?\s+compose\b)(?:\s+\S+)*?\s+up\b",
 )
 PRIVILEGED = re.compile(
-    r"--privileged(?:=true)?(?![=\w-])|--cap-add[=\s]+ALL\b", re.IGNORECASE
+    r"--privileged(?:=(?:true|1))?(?![=\w-])|--cap-add[=\s]+ALL\b", re.IGNORECASE
 )
 DOCKER = re.compile(r"\bdocker(?:-compose)?\b")
 SEGMENTS = re.compile(r"&&|\|\||[;|&\n]")
@@ -323,7 +323,11 @@ def guard_command(command: str, env: dict[str, str]) -> None:
     if any(PRIVILEGED.search(segment) for segment in aimed):
         msg = "a --privileged container on the PC is never allowed: pass the one --device or --cap-add it needs"
         raise RefusedError(msg)
-    check(pc=bool(aimed))
+    # A command may start work in both places; each is checked against its own machine's load.
+    if aimed:
+        check(pc=True)
+    if len(aimed) < len(started):
+        check()
 
 
 WRAPPERS = frozenset(
@@ -368,6 +372,10 @@ def hook() -> None:
     except (ValueError, AttributeError) as error:
         sys.stderr.write(f"slot guard: unreadable hook payload: {error}\n")
         sys.exit(2)
+    except (OSError, subprocess.SubprocessError) as error:
+        # ssh -G or docker context inspect could not run: block rather than let an unchecked call through.
+        sys.stderr.write(f"slot guard: cannot tell where docker is aimed: {error}\n")
+        sys.exit(2)
 
 
 def main() -> None:
@@ -398,6 +406,9 @@ def main() -> None:
             out = check(pc=pc_reason("docker", dict(os.environ)) is not None)
     except RefusedError as error:
         sys.stderr.write(f"slot: refused: {error}\n")
+        sys.exit(1)
+    except (OSError, subprocess.SubprocessError) as error:
+        sys.stderr.write(f"slot: refused: cannot tell where docker is aimed: {error}\n")
         sys.exit(1)
     sys.stdout.write(out + "\n")
 
