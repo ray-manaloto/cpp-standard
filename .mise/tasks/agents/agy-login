@@ -1,22 +1,112 @@
 #!/usr/bin/env bash
-#MISE description="Signs the Antigravity CLI in to the owner's Google account in a project container, from a terminal (D155, D166)"
+#MISE description="Signs the Antigravity CLI in to the owner's Google account in a project container: in a terminal, or in two steps an agent can drive (D155, D166, D167)"
 #USAGE arg "<project>" help="Project name; the container is <project>-agents"
 #USAGE flag "--host <host>" default="pc" help="The PC (over ssh) or this Mac (its current Docker context)" {
 #USAGE   choices "pc" "mac"
 #USAGE }
+#USAGE flag "--step <step>" help="Without a terminal: start prints Google's sign-in link, finish reads the one-time code on stdin, status says whether a login is stored" {
+#USAGE   choices "start" "finish" "status"
+#USAGE }
 #
-# agy's sign-in is interactive: it prints a link, which is opened in a browser and signed in with the owner's Google
-# account. agents:up does not start agy; it only names this task. The login stays on the project's gemini volume,
-# once per project per machine.
+# agy signs in when it starts without a login: it prints a Google link, waits 60 seconds, and takes the one-time
+# code that Google's page shows after the sign-in. The login is one file on the project's gemini volume, once per
+# project per machine; agy renews it by itself. agents:up does not start agy; it only names this task.
+#
+# Without --step this runs agy in a terminal. With --step, nothing needs a terminal:
+#   start   starts agy in the container and prints the link, or says a login is already stored.
+#   finish  hands agy the code from stdin and reports the result. It must follow start within 60 seconds; when
+#           the wait has run out, run start again for a new link.
+#   status  exits 0 when a login is stored, 1 when not.
+# The browser part is not in this task. An agent opens the link in the owner's signed-in browser, reads each page
+# before it clicks, chooses the account, confirms, and pipes the code in without showing it: on the Mac, the page's copy button and then
+# `pbpaste | mise run agents:agy-login <project> --step finish`. The agent stops and tells the owner when Google
+# asks for a password, a passkey, a second factor or a CAPTCHA. The login file is never copied between containers
+# or hosts.
 set -euo pipefail
 name="${usage_project:?}-agents"
-# The sign-in needs a terminal.
-[[ -t 0 && -t 1 ]] || {
-  echo "agents:agy-login: needs a terminal: agy's Google sign-in is interactive" >&2
-  exit 2
-}
-if [[ "${usage_host:-pc}" == mac ]]; then
-  unset DOCKER_HOST
-  exec docker exec -it "$name" bash -lc agy
+host="${usage_host:-pc}"
+step="${usage_step:-}"
+
+if [[ -z "$step" ]]; then
+  [[ -t 0 && -t 1 ]] || {
+    echo "agents:agy-login: no terminal: use --step start, then --step finish" >&2
+    exit 2
+  }
+  if [[ "$host" == mac ]]; then
+    unset DOCKER_HOST
+    exec docker exec -it "$name" bash -lc agy
+  fi
+  exec ssh -t pc docker exec -it "$name" bash -lc agy
 fi
-exec ssh -t pc docker exec -it "$name" bash -lc agy
+
+# Runs in the container. agy only takes a pasted code on a terminal, so `script` gives it one; its input is a
+# named pipe that a background `tail` keeps open between start and finish. The transcript holds the code once
+# finish has run, so every path that ends a sign-in removes the folder. Nothing in the container reaps the ended
+# `tail` and `script`, so each start leaves them in the process table until the container restarts.
+# shellcheck disable=SC2016  # expands in the container
+in_container='
+set -euo pipefail
+d=/tmp/agy-login
+token="$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+stop() {
+  # The pid may be gone already, after a container restart.
+  [[ -f $d/tail.pid ]] && kill "$(cat "$d/tail.pid")" 2>/dev/null || true
+  rm -rf "$d"
+}
+case "$1" in
+status)
+  [[ -s $token ]] && { echo "agents:agy-login: a login is stored"; exit 0; }
+  echo "agents:agy-login: no login stored"
+  exit 1
+  ;;
+start)
+  stop
+  (umask 077 && mkdir "$d" && mkfifo "$d/in")
+  tail -f /dev/null >"$d/in" 2>/dev/null </dev/null &
+  echo $! >"$d/tail.pid"
+  (umask 077 && nohup script -qfc "agy -p \"say ok\"" "$d/out" <"$d/in" >/dev/null 2>&1 &)
+  for _ in $(seq 1 40); do
+    link="$(grep -a -o "https://accounts.google.com[^[:space:]]*" "$d/out" 2>/dev/null | head -1 || true)"
+    [[ -n $link ]] && { echo "$link"; exit 0; }
+    grep -a -q "^Script done" "$d/out" 2>/dev/null && break
+    sleep 0.5
+  done
+  stop
+  [[ -s $token ]] && { echo "agents:agy-login: already signed in; no link needed"; exit 0; }
+  echo "agents:agy-login: agy printed no sign-in link" >&2
+  exit 1
+  ;;
+finish)
+  [[ -p $d/in ]] || { echo "agents:agy-login: no sign-in is waiting; run --step start first" >&2; exit 1; }
+  if grep -a -q "^Script done" "$d/out"; then
+    stop
+    echo "agents:agy-login: the 60-second wait ran out; run --step start again" >&2
+    exit 1
+  fi
+  # agy waits for Enter, and a clipboard paste has no line end.
+  IFS= read -r code || true
+  [[ -n $code ]] || { echo "agents:agy-login: no code on stdin" >&2; exit 1; }
+  printf "%s\n" "$code" >"$d/in"
+  unset code
+  for _ in $(seq 1 120); do
+    grep -a -q "^Script done" "$d/out" && break
+    sleep 0.5
+  done
+  if [[ -s $token && $token -nt $d/tail.pid ]]; then
+    stop
+    echo "agents:agy-login: signed in"
+    exit 0
+  fi
+  stop
+  echo "agents:agy-login: agy did not accept the code; run --step start again" >&2
+  exit 1
+  ;;
+esac
+'
+
+if [[ "$host" == mac ]]; then
+  unset DOCKER_HOST
+  exec docker exec -i "$name" bash -lc "$in_container" agy-login "$step"
+fi
+# ssh joins its arguments into one remote command line, so each is quoted for the PC's shell.
+exec ssh -o BatchMode=yes pc "$(printf '%q ' docker exec -i "$name" bash -lc "$in_container" agy-login "$step")"

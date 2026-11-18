@@ -13,7 +13,7 @@
 # GitHub App token for this repository only and keeps it fresh, beside CLAUDE_CODE_OAUTH_TOKEN, in
 # ~/.local/state/agent-secrets/<container>/ on the host, mounted read-only at /run/agent-secrets. git and gh read the
 # token at each use; shells read Claude Code's key at each start. Commits are the App bot's. The Antigravity CLI and
-# Codex each keep the owner's own login on their volumes, made once per project on this machine (D151).
+# Codex each keep the owner's own login on their volumes, made once per project on this machine (D151, D167).
 # The service: on the PC a user service (mise.pc.toml); on the Mac, which has no bash 4, flock or GNU stat, the same
 # script in a container `agent-secrets` from this image, started here when missing or on an older image. It writes
 # through a bind mount at the same path as on the Mac, so the folder it prints is the Mac's.
@@ -123,4 +123,4 @@ docker exec "$name" git config --global user.email "$bot_email"
 docker ps --filter "name=^${name}$" --format '{{.Names}} {{.Status}} {{.Image}}'
 echo "agents:up: Claude Code, OpenCode, git and gh need no login. Once per project on this machine (the logins stay on its volumes):"
 echo "  codex: $enter bash -lc 'codex login --device-auth'   (the device code is approved in the owner's browser)"
-echo "  owner: mise run agents:agy-login $project --host $host   (agy's Google sign-in, in a terminal)"
+echo "  agy: mise run agents:agy-login $project --host $host --step start   (then --step finish with Google's code on stdin; D167)"
