@@ -2,10 +2,12 @@
 #MISE description="Run the hk checks on every file (--fix applies the fixers)"
 #USAGE flag "--fix" help="Run hk fix instead of hk check"
 #USAGE flag "--online" help="Also run the checks that call the GitHub API (needs GH_TOKEN)"
+#USAGE flag "--ci" help="Skip the steps that cannot run on CI's Linux runner yet (the ci profile; D163)"
 set -euo pipefail
 mode=check
 [[ "${usage_fix:-false}" == "true" ]] && mode=fix
 args=()
 [[ "${usage_online:-false}" == "true" ]] && args+=(--profile online)
+[[ "${usage_ci:-false}" == "true" ]] && args+=(--profile ci)
 # The +-guard keeps an empty array legal under set -u in bash 3.2 (macOS).
 exec hk ${args[@]+"${args[@]}"} "$mode" --all --no-progress --no-fail-fast

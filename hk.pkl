@@ -19,7 +19,12 @@ exclude = List("**/*.lock", "**/.mise/locks/**", "**/*.patch", "toolchains/*/mac
 // dotfiles' files, copied byte for byte by M1 of docs/designs/level-1/machine-bootstrap-migration.md
 // (D150) so that mise.mac.toml's sources stay dotfiles' own. The style steps below skip them; every
 // secret and hygiene step still runs on them. The excludes come out in M2, when the copy becomes ours to edit.
-local dotfilesCopy = List("unix/home/**", "python/guards/**")
+//
+// repotools and workflowtools (python/repo, python/workflow) are copied the same way by #154 (D160), from the dotfiles
+// commit named on #153, so the pull request can show each difference from it. Their own checks (//repo:check,
+// //workflow:check, below) hold them to their package rules: ruff, ruff format, ty, codegen drift and 100% tests.
+local dotfilesCopy =
+  List("unix/home/**", "python/guards/**", "python/repo/**", "python/workflow/**")
 
 local shellFiles = List(new FileSelector { glob = List("**/*.sh", "**/*.bash", ".mise/tasks/**") })
 // mise.pc.toml: test_pc_fence.py reads its fence rules.
@@ -152,15 +157,40 @@ local gateSteps = new Mapping<String, Step> {
   ["forbid-submodules"] = Builtins.forbid_submodules
   ["check-executables-have-shebangs"] = Builtins.check_executables_have_shebangs
   ["check-shebang-scripts-are-executable"] = Builtins.check_shebang_scripts_are_executable
-  ["detect-private-key"] = Builtins.detect_private_key
+  // test_fnox_refs.py's PEM is a stand-in key ("AAAA") that the fnox-refs check must refuse.
+  ["detect-private-key"] = (Builtins.detect_private_key) {
+    exclude = List("python/repo/tests/test_fnox_refs.py")
+  }
   ["check-added-large-files"] = Builtins.check_added_large_files
 }
 
-// Top-level steps give hk its implicit check, fix and pre-commit hooks
+// The repotools and workflowtools suites (#154, D163): lint, types, codegen drift and 100%-coverage tests through each
+// package's mise task. They take minutes, so they run in `hk check` (mise run check, CI, pr-merge's hk check --pr) and
+// not on pre-commit, as dotfiles ran them at pre-push and in check.
+local suites = new Mapping<String, Step> {
+  // Mac-only for now (D163): its copied tests fail on Linux until a follow-up makes them portable. The ci
+  // profile (mise run check --ci, which CI's lint job passes) turns it off.
+  ["repo-check"] {
+    profiles = List("!ci")
+    glob = List("python/repo/**")
+    check = "mise run //repo:check"
+  }
+  ["workflow-check"] {
+    glob = List("python/workflow/**")
+    check = "mise run //workflow:check"
+  }
+}
+
+// Top-level steps give hk its implicit fix and pre-commit hooks
 // (pre-commit fixes and stages the selected files, stashing unstaged changes).
 steps = gateSteps
 
 hooks {
+  ["check"] {
+    steps = (gateSteps) {
+      ...suites
+    }
+  }
   ["commit-msg"] {
     steps {
       ["typos-msg"] {

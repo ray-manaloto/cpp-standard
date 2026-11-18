@@ -1,8 +1,24 @@
 # Bootstrap project config (environment-standard.md section 3, D13). It holds
 # settings only: tool pins live in .mise/conf.d/*.toml fragments and every
 # task is its own file under .mise/tasks/ (D93), so parallel changes rarely
-# touch the same file.
+# touch the same file. The one exception is the two packages copied from
+# dotfiles below, whose tasks stay in their own mise.toml.
 min_version = "2026.11.9"
+# repotools and workflowtools (python/repo, python/workflow), copied from dotfiles by #154, keep their own (D163)
+# mise.toml as config roots, so their tasks run as //repo:<task> and //workflow:<task>, as in dotfiles.
+monorepo_root = true
+
+[monorepo]
+config_roots = ["python/repo", "python/workflow"]
+
+[monorepo.path_aliases]
+repo = "python/repo"
+workflow = "python/workflow"
+
+# Their test tasks run `pytest -n auto`, one worker per core; hk runs two steps at a time, so at most 8 workers
+# (dotfiles' cap, owner 2026-11-13: the load passed 200 on 12 cores).
+[env]
+PYTEST_XDIST_AUTO_NUM_WORKERS = "4"
 
 [settings]
 # A fixed cutoff instead of the default 24h age, so `mise lock` gives the

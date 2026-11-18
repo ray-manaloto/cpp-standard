@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#MISE description="Refuse this machine's home path in tracked files, given files, or outgoing commits"
+#USAGE flag "--outgoing" help="Scan every commit not yet on a remote, branches and tags (pre-push)"
+#USAGE arg "[file]" var=#true help="Files to scan; default every tracked file"
+set -euo pipefail
+# dotfiles' root privacy:scan (its mise.toml [vars] private_home and private_user), which repotools' tests run in a
+# copy of this checkout (#154). The patterns come from this machine's environment, so the repository holds none.
+# Empty stays empty, as in dotfiles; only an unset USER falls back to id -un.
+user="${USER-$(id -un)}"
+patterns="$HOME"$'\n'"/Users/$user/"$'\n'"/home/$user/"
+args=()
+[[ "${usage_outgoing:-false}" == "true" ]] && args+=(--outgoing)
+# --option=value: a value that starts with - would otherwise be read by argparse as an option.
+exec uv run --project python/repo --locked repotools privacy-scan --patterns="$patterns" --files="${usage_file:-}" ${args[@]+"${args[@]}"}

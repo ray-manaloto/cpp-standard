@@ -44,7 +44,8 @@ jobs:
           # avoids the anonymous rate limit.
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: mise run check --online
+        # --ci: the ci profile turns off the repotools suite, which is Mac-only for now (D163).
+        run: mise run check --online --ci
 
   pins-validate:
     name: pins-validate
