@@ -18,7 +18,8 @@
 # source fails the start.
 #
 # The secrets come from Doppler with the read-only service token in ~/.config/agent-secrets/doppler-token (0600;
-# the token's config holds AGENTS_APP_PRIVATE_KEY, AGENTS_APP_CLIENT_ID, CLAUDE_CODE_OAUTH_TOKEN and GEMINI_API_KEY).
+# a token for Doppler project agent-containers, config prd, which holds only AGENTS_APP_PRIVATE_KEY,
+# AGENTS_APP_CLIENT_ID, CLAUDE_CODE_OAUTH_TOKEN and GEMINI_API_KEY; agents:pc-doppler puts it there).
 # No secret is ever an argument (ps shows those) or printed: they pass in variables, pipes and /dev/fd.
 # The JWT is the same openssl RS256 signing the runner launcher (gha-slot) uses for its App.
 set -euo pipefail

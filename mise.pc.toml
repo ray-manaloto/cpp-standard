@@ -475,7 +475,7 @@ enabled = true
 on_change = "restart"
 
 # Zero-touch logins for project agent containers (D155). agent-secrets runs as the PC user: it reads the agents' keys
-# from Doppler with the read-only token that `mise run agents:pc-doppler` (run once by the owner on the Mac) puts in
+# from Doppler (project agent-containers, config prd) with the read-only token that `mise run agents:pc-doppler` (run once by the owner on the Mac) puts in
 # ~/.config/agent-secrets/doppler-token, and writes each registered container's files into
 # ~/.local/state/agent-secrets/<container>/, which agents:up mounts read-only at /run/agent-secrets. The script is the
 # PC checkout's own file (the source is read from the home folder, so the checkout's relative path does not matter to
