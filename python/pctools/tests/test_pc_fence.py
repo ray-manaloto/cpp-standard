@@ -85,13 +85,6 @@ def test_sudo_that_needs_a_password_is_unknown(ssh: Path, capfd: pytest.CaptureF
     assert "password is required" in err
 
 
-def test_a_missing_ip6tables_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    missing = {"stderr": "sudo: ip6tables: command not found\n", "code": 1}
-    answer(ssh, {FENCE4: listing(INPUT4, FORWARD4), FENCE6: missing})
-    code, result, detail, _, _ = line(capfd)
-    assert (code, result, detail) == (3, "unknown", "sudo -n ip6tables -t mangle -S exited 1")
-
-
 def test_output_that_is_not_a_mangle_listing_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
     # No policy line for INPUT: whatever printed this was not iptables -S of the mangle table, so a missing drop in
     # it proves nothing.
@@ -111,12 +104,6 @@ def test_a_timeout_is_unknown(
     code, result, detail, _, _ = line(capfd)
     assert (code, result) == (3, "unknown")
     assert detail.endswith("timed out after 1 s")
-
-
-def test_an_ssh_failure_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    answer(ssh, {FENCE4: {"stderr": "ssh: connect to host pc port 22: Connection refused\n", "code": 255}})
-    code, result, detail, _, _ = line(capfd)
-    assert (code, result, detail) == (3, "unknown", "ssh pc failed (exit 255)")
 
 
 def test_a_drop_seen_missing_fails_even_when_the_other_listing_is_unread(

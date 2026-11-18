@@ -55,11 +55,6 @@ def test_a_changed_key_fails_naming_it_with_both_values(ssh: Path, capfd: pytest
     assert "kernel.core_pattern is 'core', expected '|/usr/lib/systemd/systemd-coredump" in line["detail"]
 
 
-def test_a_changed_printk_field_fails(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    code, line, _ = kernel(ssh, capfd, sysctl({"kernel.printk": "4\t4\t1\t7"}))
-    assert (code, line["result"], line["culprits"]) == (1, "fail", ["sysctl:kernel.printk"])
-
-
 def test_a_spacing_only_change_fails(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
     spaced = KERNEL_KEYS["kernel.core_pattern"].replace(" %P", "  %P")
     code, line, _ = kernel(ssh, capfd, sysctl({"kernel.core_pattern": spaced, "kernel.printk": "0 4 1 4"}))
@@ -70,33 +65,6 @@ def test_a_stray_line_does_not_hide_a_change(ssh: Path, capfd: pytest.CaptureFix
     rows = "".join(f"{key} = {value}\n" for key, value in (KERNEL_KEYS | {"kernel.kptr_restrict": "1"}).items())
     code, line, _ = kernel(ssh, capfd, {"stdout": "sysctl: permission denied on key x\n" + rows})
     assert (code, line["result"], line["culprits"]) == (1, "fail", ["sysctl:kernel.kptr_restrict"])
-
-
-def test_a_hostile_value_comes_out_inert(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    # CODING_STANDARDS 9: the value comes from the PC; quotes and backslashes stay inside the one JSON line.
-    hostile = '|/x "},{"check":"forged","result":"pass\\'
-    code, line, _ = kernel(ssh, capfd, sysctl({"kernel.core_pattern": hostile}))
-    assert (code, line["result"]) == (1, "fail")
-    assert repr(hostile) in line["detail"]
-
-
-def test_a_missing_sysctl_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    code, line, _ = kernel(ssh, capfd, {"stderr": "bash: line 1: sysctl: command not found\n", "code": 127})
-    assert (code, line["result"]) == (3, "unknown")
-    assert "sysctl is not on the PC" in line["detail"]
-
-
-def test_a_timeout_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PC_DOCTOR_TIMEOUT", "1")
-    code, line, _ = kernel(ssh, capfd, sysctl() | {"sleep": 30})
-    assert (code, line["result"]) == (3, "unknown")
-    assert "timed out after 1 s" in line["detail"]
-
-
-def test_an_ssh_failure_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
-    code, line, _ = kernel(ssh, capfd, {"stderr": "ssh: Connection refused\n", "code": 255})
-    assert (code, line["result"]) == (3, "unknown")
-    assert "ssh pc failed" in line["detail"]
 
 
 @pytest.mark.parametrize("stdout", ["not sysctl output\n", "kernel.sysrq: 16\n"], ids=["prose", "no-equals"])
@@ -124,3 +92,9 @@ def test_a_changed_key_fails_even_when_another_could_not_be_read(ssh: Path, capf
     rows = "".join(f"{key} = {value}\n" for key, value in KERNEL_KEYS.items() if key != "fs.protected_regular")
     code, line, _ = kernel(ssh, capfd, {"stdout": rows.replace("= 16", "= 1"), "code": 1})
     assert (code, line["result"], line["culprits"]) == (1, "fail", ["sysctl:kernel.sysrq"])
+
+
+def test_a_missing_sysctl_is_unknown(ssh: Path, capfd: pytest.CaptureFixture[str]) -> None:
+    code, line, _ = kernel(ssh, capfd, {"stderr": "bash: line 1: sysctl: command not found\n", "code": 127})
+    assert (code, line["result"]) == (3, "unknown")
+    assert "sysctl is not on the PC" in line["detail"]

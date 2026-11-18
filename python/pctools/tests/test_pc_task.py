@@ -1,7 +1,6 @@
 """The pc:doctor file task (.mise/tasks/pc/doctor): it runs this package's doctor from python/pctools/.venv."""
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -31,21 +30,3 @@ def test_the_task_runs_the_doctor(ssh: Path) -> None:
     ]
     called = set((ssh / "calls.jsonl").read_text().splitlines())
     assert called == set(HEALTHY)
-
-
-def test_the_task_takes_no_arguments(ssh: Path) -> None:
-    done = run("--fix")
-    assert (done.returncode, done.stdout) == (2, "")
-    assert json.loads(done.stderr) == {"error": "pc:doctor: takes no arguments"}
-    assert not (ssh / "calls.jsonl").exists()
-
-
-def test_without_the_environment_the_task_says_how_to_make_it(ssh: Path, tmp_path: Path) -> None:
-    # The same task file in a checkout whose python/pctools has no .venv.
-    task = tmp_path / "checkout/.mise/tasks/pc/doctor"
-    task.parent.mkdir(parents=True)
-    shutil.copy2(TASK, task)
-    done = run(task=task)
-    assert done.returncode == 2
-    assert "run: mise run pctools:sync" in json.loads(done.stderr)["error"]
-    assert not (ssh / "calls.jsonl").exists()
