@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#MISE description="Build the agent image (docs/standard/agents.Dockerfile) on the PC's Docker, bootstrapped from this checkout's HEAD commit on GitHub"
+#USAGE flag "--tag <tag>" help="Image tag (default: cpp-standard-agents:dev)"
+#
+# The build runs on the PC over the tailnet (DOCKER_HOST=ssh://pc, D29, D150). HEAD must be
+# pushed, because the image bootstraps from GitHub, not from this working tree. Each agent
+# CLI is the latest native release (owner, 2026-11-17); the versions it got are printed.
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+tag="${usage_tag:-cpp-standard-agents:dev}"
+ref="$(git -C "$root" rev-parse HEAD)"
+git -C "$root" branch -r --contains "$ref" | grep -q . || {
+  echo "agents:image: HEAD $ref is not on GitHub yet; push it first" >&2
+  exit 2
+}
+export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
+docker build --progress=plain --build-arg "CPP_STANDARD_REF=$ref" --build-arg "AGENTS_CACHE_BUST=$(date +%s)" -t "$tag" \
+  -f "$root/docs/standard/agents.Dockerfile" "$root/docs/standard"
+docker run --rm "$tag" cat /home/dev/.agent-versions

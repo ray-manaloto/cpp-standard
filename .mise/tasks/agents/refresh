@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#MISE description="Update the agent CLIs and plugins inside a running project container, keeping its logins (D151, D152)"
+#USAGE arg "<project>" help="Project name; the container is <project>-agents on the PC"
+#
+# A named volume is filled from the image only once, so a new image does not reach the
+# plugins of a container that already exists. This reruns each CLI's native installer and
+# then agent-plugins refresh in the container, and prints the versions it got.
+set -euo pipefail
+name="${usage_project:?}-agents"
+export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
+docker exec "$name" bash -lc '
+  set -euo pipefail
+  export PATH=$HOME/.local/bin:$HOME/.opencode/bin:/usr/local/bin:/usr/bin:/bin
+  curl -fsSL https://claude.ai/install.sh | bash
+  curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+  curl -fsSL https://antigravity.google/cli/install.sh | bash
+  curl -fsSL https://opencode.ai/v2/install | bash -s -- --no-modify-path
+  agent-plugins refresh
+  { echo "claude $(claude --version)"; echo "codex $(codex --version)"; echo "agy $(agy --version)";
+    echo "opencode $(opencode --version)"; } | tee ~/.agent-versions'

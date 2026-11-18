@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# The one list of agent marketplaces and plugins in project containers (D143, D147), and the
+# two ways to apply it, each through the agent's own commands:
+#   agent-plugins install   at image build
+#   agent-plugins refresh   in a running container (mise run agents:refresh), keeping the logins
+# Refresh follows the D147 test results: Claude's `plugin update` keeps stale code under the
+# same version, so it reinstalls (--keep-data keeps plugin data); Codex upgrades its
+# marketplaces; agy reinstalls from the URL. OpenCode V2 gets no egm (egm supports V1 only).
+set -euo pipefail
+claude_marketplaces=(google/elephant-goldfish-model ray-manaloto/skills)
+claude_plugins=(egm@egm skills@ray-manaloto-skills)
+codex_marketplaces=(google/elephant-goldfish-model)
+codex_plugins=(egm@egm)
+agy_plugins=(https://github.com/google/elephant-goldfish-model)
+
+install() {
+  for m in "${claude_marketplaces[@]}"; do claude plugin marketplace add "$m"; done
+  for p in "${claude_plugins[@]}"; do claude plugin install "$p"; done
+  for m in "${codex_marketplaces[@]}"; do codex plugin marketplace add "$m"; done
+  for p in "${codex_plugins[@]}"; do codex plugin add "$p"; done
+  for u in "${agy_plugins[@]}"; do agy plugin install "$u"; done
+}
+
+refresh() {
+  claude plugin marketplace update
+  for p in "${claude_plugins[@]}"; do
+    claude plugin uninstall --keep-data "$p" || true
+    claude plugin install "$p"
+  done
+  codex plugin marketplace upgrade
+  for u in "${agy_plugins[@]}"; do agy plugin install "$u"; done
+}
+
+case "${1:-}" in
+  install) install ;;
+  refresh) refresh ;;
+  *) echo "usage: agent-plugins install|refresh" >&2; exit 2 ;;
+esac

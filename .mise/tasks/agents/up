@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#MISE description="Start (or reuse) a project container with its agents on the PC: repo clone mounted, one named volume per agent (D151)"
+#USAGE arg "<project>" help="Project name; the clone is <repo url> checked out under ~/dev/containers/<project> on the PC"
+#USAGE flag "--repo <url>" help="Git URL to clone (default: https://github.com/ray-manaloto/<project>.git)"
+#USAGE flag "--image <ref>" help="Image (default: cpp-standard-agents:dev)"
+#USAGE flag "--fresh" help="Remove the container and its agent volumes first (the logins are lost)"
+#
+# The container runs as the non-root user dev, with no --privileged and -e container=docker.
+# The project is a separate clone on the PC, never the PC's own checkout. Each agent keeps
+# its login and config on its own named volume, so a new image keeps the logins; the
+# owner logs in once per container (D151). Enter it with:
+#   ssh -t pc docker exec -it <project>-agents bash
+set -euo pipefail
+project="${usage_project:?}"
+name="${project}-agents"
+image="${usage_image:-cpp-standard-agents:dev}"
+repo="${usage_repo:-https://github.com/ray-manaloto/${project}.git}"
+# The container has no SSH key, only the gh login (D153), so a GitHub SSH URL is cloned over HTTPS.
+repo="${repo/#git@github.com:/https://github.com/}"
+repo="${repo/#ssh:\/\/git@github.com\//https://github.com/}"
+export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
+volumes=(claude codex gemini opencode-data opencode-config opencode-state gh)
+if [[ -n "${usage_fresh:-}" ]]; then
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  for v in "${volumes[@]}"; do docker volume rm "${name}-${v}" >/dev/null 2>&1 || true; done
+fi
+if docker container inspect "$name" >/dev/null 2>&1; then
+  docker start "$name" >/dev/null
+else
+  dir="dev/containers/${project}"
+  ssh -o BatchMode=yes pc "test -d ~/$dir/.git || git clone -q '$repo' ~/$dir"
+  home="$(ssh -o BatchMode=yes pc 'echo ~')"
+  docker run -d --name "$name" --hostname "$name" -e container=docker --restart unless-stopped \
+    -v "$home/$dir:/workspace" \
+    -v "${name}-claude:/home/dev/.claude" \
+    -v "${name}-codex:/home/dev/.codex" \
+    -v "${name}-gemini:/home/dev/.gemini" \
+    -v "${name}-opencode-data:/home/dev/.local/share/opencode" \
+    -v "${name}-opencode-config:/home/dev/.config/opencode" \
+    -v "${name}-opencode-state:/home/dev/.local/state/opencode" \
+    -v "${name}-gh:/home/dev/.config/gh" \
+    "$image" >/dev/null
+fi
+# The commit identity is the one this checkout commits with (a GitHub noreply address), read here so
+# no address is written into the repository or the image.
+docker exec "$name" git config --global user.name "$(git config user.name)"
+docker exec "$name" git config --global user.email "$(git config user.email)"
+# ~/.gitconfig is not on a volume, so a recreated container gets the gh credential helper back.
+docker exec "$name" bash -lc 'gh auth status >/dev/null 2>&1 && gh auth setup-git || true'
+docker ps --filter "name=^${name}$" --format '{{.Names}} {{.Status}} {{.Image}}'
