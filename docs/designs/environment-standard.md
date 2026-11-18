@@ -1653,9 +1653,22 @@ PR 3 then deletes them (M1a table).
 
 ### M1a: the critical path
 
-**PR order (D93).** Each PR goes through the merge queue, and the next starts
-only when its check holds. The "PR" column of the table below gives every
-M1a file its PR and says whether the PR adds it (new), changes the version
+**Spec #122 changes this plan (D156, D159).** A tracer bullet before PR 1
+makes `gate-linux-arm64` real on `gcc16` and the M0 stand-in module;
+`must-fail` becomes real in PR 3; PR 2 and PR 3 each get a second
+acceptance step after their publish run on `main`; PR 4 lands as five pull
+requests; four pieces come forward from PR 6 (the gate jobs on hosted arm64
+runners, a minimal devcontainer, the removal comparison in `gate:policy`
+and the Workflow facts section); what is left of PR 6 moves to the
+follow-up spec "M1a trust roots and repository rules"; the SARIF upload
+goes to the pull request that adds clang-tidy. The merge queue's check
+timeout is 240 minutes, and D159 gives each waiting step its time budget
+and latest-finish date. D158 defines "M1a green". Where the PR column of
+the file table below differs, D156 wins.
+
+**PR order (D93, D156).** Each PR goes through the merge queue, and the
+next starts only when its check holds. The "PR" column of the table below
+gives every M1a file its PR and says whether the PR adds it (new), changes the version
 on `main` (change) or deletes it. The `ci.yml` stub jobs become real in the
 PR that first needs them, and each PR's check is that job, green in the
 merge group (D135):
@@ -1666,30 +1679,41 @@ merge group (D135):
 2. the Dockerfiles, `builder.yml` (replacing the M0 (i) spike),
    `publish.yml`, `artifact:*` and `image:verify`. `artifact-check` and
    `resolve` become real. Check: the base and tools images are attested
-   on GHCR and `image:verify` passes on them;
+   on GHCR and `image:verify` passes on them; then, after the publish run
+   on `main`, the published image is verified by digest;
 3. `toolchains/p2996/*` and `toolchain:fetch`, then the deletion of the M0
-   spike files. Check: an attested `main` release (no packslip signature
-   until M2) installs, passes `gh attestation verify` and matches its
-   `inputs-hash.txt` (D111, D116, D131);
+   spike files. `must-fail` becomes real, with the `toolchain:fetch`
+   refusal tests (D156). Check: an attested `main` release (no packslip
+   signature until M2) installs, passes `gh attestation verify` and
+   matches its `inputs-hash.txt` (D111, D116, D131); then, after the
+   publish run on `main`, the released toolchain installs on a hosted
+   arm64 runner with only the release allowed as a source;
 4. CMake, presets, probes, the capability lock, `gate-policy.toml`,
-   `gate:policy`, the fixtures, `src/cppstd/core.cppm`, `post-merge.yml`
-   and `gate-items.toml`. `gate-linux-arm64` and `must-fail` become real.
-   Check: both jobs green on GCC and clang;
+   `gate:policy` with its removal comparison and `gate-removals.toml`
+   (D115), the fixtures, `src/cppstd/core.cppm`, `post-merge.yml` and
+   `gate-items.toml`, in five pull requests (D156). `gate-linux-arm64`
+   (real since the tracer bullet) and `must-fail` (real since PR 3) gain
+   every preset and fixture. Check: both jobs green on GCC and clang;
 5. `src/fix/encoder.cppm` and its tests. Check: 100% coverage on GCC and on
    p2996 (M0 (j) took no fallback, D106);
-6. the final `ci.yml` (no `workflow_dispatch`, gate jobs on arm64),
+6. moved to the follow-up spec (D156), except the gate jobs on hosted
+   arm64 runners, a minimal devcontainer, the removal comparison (now in
+   PR 4) and the Workflow facts section, which spec #122 carries. The
+   follow-up spec gets the final `ci.yml` (no `workflow_dispatch`),
    CODEOWNERS with the trust roots (replacing the step 6 version, D108),
-   the full `repo:rulesets`, `gate-removals.toml` with its `gate:policy`
-   check (D115), `agent:token` tests, `repo-verify.yml` and the App
-   manifest without actions write. Check: setup steps 9 and 10 pass.
+   the full `repo:rulesets`, trust-root protection of `gate-removals.toml`
+   and its checker, `agent:token` tests, `repo-verify.yml`, the App
+   manifest without actions write, the README and the standard's
+   compiler, build and check documents. Check: setup steps 9 and 10 pass.
 
-M1a is done when every PR above has merged and two runs are green on every
+M1a is done when PRs 1 to 5 have merged and two runs are green on every
 M1a preset and applicable must-fail fixture: the merge-group `ci.yml` run
 of the last M1a PR, and the `post-merge.yml` run for `main`'s tip. The M1a
 presets are `gcc16`, `p2996` and `clang23`, each with `coverage`,
 `asan-ubsan` and `hardening`, plus `tsan` where the capability lock allows
-it and `valgrind` on `gcc16`. M1b is done when each of its rows is green,
-or cut at its §10 cut date.
+it and `valgrind` on `gcc16`. D158 adds the devcontainer run and the
+refusal and removal tests to this rule. M1b is done when each of its rows
+is green, or cut at its §10 cut date.
 
 | File | PR | What and why |
 |---|---|---|
