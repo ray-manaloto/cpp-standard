@@ -45,20 +45,21 @@ secrets_json() {
 
 # GitHub REST call with a bearer token taken from the variable named by $1 (never from argv).
 gh_api() { # <token var> <method> <path> [body on stdin]
-  local -n tok="$1"
-  curl -fsS --max-time 20 -X "$2" -H @<(printf 'Authorization: Bearer %s\n' "$tok") \
+  # A unique name: a nameref named like its target is circular.
+  local -n _gh_api_tok="$1"
+  curl -fsS --max-time 20 -X "$2" -H @<(printf 'Authorization: Bearer %s\n' "$_gh_api_tok") \
     -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
     ${STDIN_BODY:+--data-binary @-} "$api$3"
 }
 
 # A 9-minute App JWT; the issuer may be the App's client ID (GitHub's JWT docs).
 app_jwt() { # <client id> <pem var>
-  local -n pem="$2"
+  local -n _app_jwt_pem="$2"
   local now hdr pay sig
   now=$(date +%s)
   hdr=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
   pay=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' $((now - 60)) $((now + 540)) "$1" | b64url)
-  sig=$(printf '%s.%s' "$hdr" "$pay" | openssl dgst -sha256 -sign <(printf '%s\n' "$pem") | b64url)
+  sig=$(printf '%s.%s' "$hdr" "$pay" | openssl dgst -sha256 -sign <(printf '%s\n' "$_app_jwt_pem") | b64url)
   printf '%s.%s.%s' "$hdr" "$pay" "$sig"
 }
 
@@ -80,6 +81,7 @@ refresh_dirs() { # <dir>...
   (($#)) || return 0
   local json pem client claude gemini jwt d repo owner name inst body tok slug uid
   json=$(secrets_json) || die "the Doppler read failed"
+  # shellcheck disable=SC2034 # app_jwt reads it by name
   pem=$(jq -er .AGENTS_APP_PRIVATE_KEY <<<"$json") || die "Doppler has no AGENTS_APP_PRIVATE_KEY"
   client=$(jq -er .AGENTS_APP_CLIENT_ID <<<"$json") || die "Doppler has no AGENTS_APP_CLIENT_ID"
   # Every value is read and checked before any file is written: jq prints "null" for a missing name.
