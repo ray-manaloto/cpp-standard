@@ -103,6 +103,22 @@ local gateSteps = new Mapping<String, Step> {
     glob = pctoolsFiles
     check = "mise run pctools:test"
   }
+  // The standard-library scripts: each one's checks under coverage, failing below its recorded floor (#185,
+  // python/README.md). They take seconds, so they run on every commit that touches their inputs.
+  ["pins-cov"] {
+    glob =
+      List(
+        "python/pins/**",
+        "tests/pins_validate/**",
+        "tests/artifact_tag/**",
+        ".mise/tasks/pins/**",
+      )
+    check = "mise run pins:cov"
+  }
+  ["agents-cov"] {
+    glob = List("python/agents/**", ".mise/tasks/agents/cov", ".mise/tasks/slot/**")
+    check = "mise run agents:cov"
+  }
 
   // Config and docs.
   ["mise"] = (Builtins.mise) {
