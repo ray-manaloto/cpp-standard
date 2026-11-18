@@ -17,3 +17,5 @@ python = [
 uv = { version = "0.13.8", os = ["linux"] }
 # //repo:lint's rule tests and scan; the Mac takes it from the owner's global config.
 "github:ast-grep/ast-grep" = { version = "0.51.3", os = ["linux"] }
+# repotools' shell:apply tests start a login zsh; the hosted runner has none (#181). conda-forge's build, as for doxygen.
+"conda:zsh" = { version = "5.9.2", os = ["linux"] }

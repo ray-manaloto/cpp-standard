@@ -41,9 +41,6 @@ jobs:
         with:
           version: 2026.11.9
           install_args: --locked
-      # Temporary (#181): the runner's git, zsh and uv, for the Linux test causes; removed before merge.
-      - name: Show the runner's git, zsh and uv
-        run: git --version; command -v zsh || echo "no zsh"; uv --version
       # repotools' tests install with UV_OFFLINE=1 (#184): fill uv's cache online first.
       - name: Warm uv's cache
         run: mise run uv:cache-warm
