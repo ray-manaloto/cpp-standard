@@ -38,6 +38,16 @@ fi
 # AGENT_SECRETS_CMD runs another copy of the service script, for tests before a change reaches the PC.
 keys="$(on_pc "${AGENT_SECRETS_CMD:-.local/bin/agent-secrets} register '$name' '$slug'")"
 home="$(on_pc 'echo ~')"
+# A container made before D155 (or with another key folder) lacks this mount, and a mount can only be added by
+# recreating it. Its named volumes, and the logins on them, are kept; the old gh volume is left, unused.
+if docker container inspect "$name" >/dev/null 2>&1; then
+  src="$(docker container inspect "$name" \
+    --format '{{range .Mounts}}{{if eq .Destination "/run/agent-secrets"}}{{.Source}}{{end}}{{end}}')"
+  if [[ "$src" != "$keys" ]]; then
+    echo "agents:up: $name has no D155 key mount; recreating it with its volumes kept" >&2
+    docker rm -f "$name" >/dev/null
+  fi
+fi
 if docker container inspect "$name" >/dev/null 2>&1; then
   docker start "$name" >/dev/null
 else

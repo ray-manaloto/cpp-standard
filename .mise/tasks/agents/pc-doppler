@@ -57,7 +57,8 @@ fi
 dp configs get "$dst_c" -p "$dst_p" >/dev/null 2>&1 ||
   stop "$dst_p has no config $dst_c; add the environment prd in the dashboard and rerun"
 keep=(DOPPLER_PROJECT DOPPLER_ENVIRONMENT DOPPLER_CONFIG "${names[@]}")
-extra="$(names_of "$dst_p" "$dst_c" | grep -vxF "${keep[@]/#/-e}" || true)"
+have="$(names_of "$dst_p" "$dst_c")" || stop "cannot list the names in $dst_p/$dst_c"
+extra="$(grep -vxF "${keep[@]/#/-e}" <<<"$have" || true)"
 [[ -z "$extra" ]] || stop "$dst_p/$dst_c also holds: $(tr '\n' ' ' <<<"$extra"); stopping, no token was made"
 
 # 3. Copy, compare, then drop the App's names from dev_personal.
@@ -68,7 +69,10 @@ for n in "${names[@]}"; do
         dp secrets set "$n" -p "$dst_p" -c "$dst_c" --no-interactive --silent >/dev/null
       say "copied $n to $dst_p/$dst_c"
     fi
-    [[ "$(digest "$dst_p" "$dst_c" "$n")" == "$(digest "$src_p" "$src_c" "$n")" ]] ||
+    # Both reads must succeed: two failed reads hash the same empty input.
+    a="$(digest "$dst_p" "$dst_c" "$n")" || stop "cannot read $n from $dst_p/$dst_c"
+    b="$(digest "$src_p" "$src_c" "$n")" || stop "cannot read $n from $src_p/$src_c"
+    [[ "$a" == "$b" ]] ||
       stop "$n differs between $dst_p/$dst_c and $src_p/$src_c; stopping (decide which value is current)"
   else
     # A rerun after the App's names left dev_personal: prd must have them.

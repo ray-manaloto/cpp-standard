@@ -50,7 +50,7 @@ def doppler_names() -> str:
     return out.stdout
 
 
-def store(name: str, value: str) -> None:
+def store(name: str, value: str) -> bool:
     # secret:set reads the value from stdin and prints only "stored NAME".
     run = subprocess.run(
         ["mise", "run", "-q", "secret:set", name],
@@ -61,10 +61,13 @@ def store(name: str, value: str) -> None:
         check=False,
     )
     if run.returncode != 0:
-        sys.exit(
-            f"agents:app-create: storing {name} in Doppler failed (exit {run.returncode})"
+        print(
+            f"agents:app-create: storing {name} in Doppler failed (exit {run.returncode})",
+            file=sys.stderr,
         )
+        return False
     print(f"agents:app-create: stored {name} in Doppler")
+    return True
 
 
 names = doppler_names()
@@ -170,9 +173,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             )
             result["error"] = "incomplete answer"
             return
-        store(KEY_NAME, pem)
+        settings = f"https://github.com/organizations/{ORG}/settings/apps/{slug}"
+        key_ok = store(KEY_NAME, pem)
         del pem
-        store(ID_NAME, client_id)
+        if not key_ok:
+            # The App exists but its only key is lost: a new key comes from its settings page.
+            self.reply(500, "storing the private key failed; see the terminal")
+            result["error"] = (
+                f"App {slug} exists, but its key was not stored. Generate a private key at "
+                f"{settings}, then pipe it into `mise run secret:set {KEY_NAME}`; client ID {client_id}"
+            )
+            return
+        if not store(ID_NAME, client_id):
+            # Not secret: print it, so the owner can store it by hand and the install still goes on.
+            print(
+                f"agents:app-create: store the client ID by hand: "
+                f"printf %s {client_id} | mise run secret:set {ID_NAME}",
+                file=sys.stderr,
+            )
         result.update(slug=slug, client_id=client_id)
         self.reply(
             302, "", location=f"https://github.com/apps/{slug}/installations/new"

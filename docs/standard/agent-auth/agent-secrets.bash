@@ -65,8 +65,12 @@ app_jwt() { # <client id> <pem var>
 # Atomic write of stdin to <dir>/<name>, mode 0600.
 put() { # <dir> <name>
   local tmp
-  tmp=$(mktemp "$1/.$2.XXXXXX")
-  cat >"$tmp"
+  tmp=$(mktemp "$1/.$2.XXXXXX") || return 1
+  # Explicit checks: set -e is off where callers test this function. A failed write never replaces the file.
+  if ! cat >"$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
   mv -f "$tmp" "$1/$2"
 }
 
@@ -110,6 +114,14 @@ refresh_dirs() { # <dir>...
   done
 }
 
+# One writer at a time: register, unregister, refresh and each serve round hold this lock, so a round in flight
+# cannot publish a token for a binding that register is changing.
+lock() {
+  mkdir -p "$state"
+  exec 9>"$state/.lock"
+  flock 9
+}
+
 valid_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "bad container name: $1"; }
 
 case "${1:-}" in
@@ -117,6 +129,11 @@ case "${1:-}" in
     [[ $# -eq 3 ]] || die "usage: agent-secrets register <container> <owner/repo>"
     valid_name "$2"
     [[ "$3" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || die "bad repository: $3"
+    lock
+    # A binding never changes while it exists: the container's checkout would get a token for another repository.
+    if [[ -s "$state/$2/repo" && "$(<"$state/$2/repo")" != "$3" ]]; then
+      die "$2 is registered for $(<"$state/$2/repo"); remove the container and run unregister first"
+    fi
     mkdir -p "$state/$2" # 0700 by the umask
     chmod 700 "$state" "$state/$2"
     printf '%s\n' "$3" | put "$state/$2" repo
@@ -127,9 +144,11 @@ case "${1:-}" in
   unregister)
     [[ $# -eq 2 ]] || die "usage: agent-secrets unregister <container>"
     valid_name "$2"
+    lock
     rm -rf -- "${state:?}/$2"
     ;;
   refresh)
+    lock
     if [[ $# -eq 2 ]]; then
       valid_name "$2"
       refresh_dirs "$state/$2"
@@ -142,9 +161,11 @@ case "${1:-}" in
   serve)
     mkdir -p "$state"
     chmod 700 "$state"
+    exec 9>"$state/.lock"
     shopt -s nullglob
     start=1 # the first round rewrites every folder: after a reboot a token may have expired
     while :; do
+      flock 9 # the whole round, from choosing folders to writing them
       todo=()
       for d in "$state"/*/; do
         [[ -f "$d/repo" ]] && { ((start)) || due "${d%/}"; } && todo+=("${d%/}")
@@ -152,6 +173,7 @@ case "${1:-}" in
       start=0
       # A failed round (Doppler or GitHub down) is logged and retried on the next tick.
       (refresh_dirs "${todo[@]}") || log "refresh failed; retrying in 15 s"
+      flock -u 9
       sleep 15
     done
     ;;
