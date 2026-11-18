@@ -188,10 +188,8 @@ local gateSteps = new Mapping<String, Step> {
 // package's mise task. They take minutes, so they run in `hk check` (mise run check, CI, pr-merge's hk check --pr) and
 // not on pre-commit, as dotfiles ran them at pre-push and in check.
 local suites = new Mapping<String, Step> {
-  // Mac-only for now (D163): its copied tests fail on Linux until a follow-up makes them portable. The ci
-  // profile (mise run check --ci, which CI's lint job passes) turns it off.
+  // Also on Linux in CI's lint job since #181; CI warms uv's cache first (uv:cache-warm), as its offline tests need.
   ["repo-check"] {
-    profiles = List("!ci")
     glob = List("python/repo/**")
     check = "mise run //repo:check"
   }

@@ -3,7 +3,7 @@
 # ubuntu bootstrap` (which installs every pinned tool) and the Ubuntu images do not gain them.
 [tools]
 # 3.15.2 beside it for workflowtools (python/workflow: requires-python >=3.15), whose //workflow:check also needs
-# datamodel-codegen; the Mac takes both from the owner's global config. repotools' suite is Mac-only for now (D163).
+# datamodel-codegen; the Mac takes both from the owner's global config. repotools' //repo:check runs here too (#181).
 python = [
   { version = "3.14.8", os = [
     "linux",
@@ -15,3 +15,7 @@ python = [
 "pipx:datamodel-code-generator" = { version = "0.89.0", os = ["linux"] }
 # After changing uv's pin, run `mise run uv:cache-warm`: a new uv can rename its cache buckets (#184).
 uv = { version = "0.13.8", os = ["linux"] }
+# //repo:lint's rule tests and scan; the Mac takes it from the owner's global config.
+"github:ast-grep/ast-grep" = { version = "0.51.3", os = ["linux"] }
+# repotools' shell:apply tests start a login zsh; the hosted runner has none (#181). conda-forge's build, as for doxygen.
+"conda:zsh" = { version = "5.9.2", os = ["linux"] }

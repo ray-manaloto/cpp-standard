@@ -41,13 +41,15 @@ jobs:
         with:
           version: 2026.11.9
           install_args: --locked
+      # repotools' tests install with UV_OFFLINE=1 (#184): fill uv's cache online first.
+      - name: Warm uv's cache
+        run: mise run uv:cache-warm
       - name: Run the hk gate
         env:
           # pinact and the online zizmor audits call the GitHub API; a token
           # avoids the anonymous rate limit.
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-        # --ci: the ci profile turns off the repotools suite, which is Mac-only for now (D163).
         run: mise run check --online --ci
       # Neither step can fail the job (#186): the table goes in the job summary and the records in an artifact.
       - name: Summarize the test suites

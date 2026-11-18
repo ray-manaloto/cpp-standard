@@ -28,8 +28,13 @@ def copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.Fixtur
         text=True,
     ).stdout
     root = tmp_path / "copy"
+    # The scan's $HOME pattern is this machine's home, and a CI runner's (/home/runner) is in this checkout's runner
+    # image files (#181): a file holding it stays out, so each test sees only the paths it writes.
+    home = str(Path.home()).encode()
     for name in sorted(set(listed.split("\0")[:-1])):
         source = REPO / name
+        if source.is_file() and not source.is_symlink() and home in source.read_bytes():
+            continue
         if source.is_symlink() or source.exists():  # a file deleted but not yet staged is gone
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, root / name, follow_symlinks=False)
