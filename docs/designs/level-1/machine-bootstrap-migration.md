@@ -271,9 +271,9 @@ that applies on the Mac.
 |---|---|---|---|
 | `unix/home/.config/mise/` (88 files) | The Mac's global mise config: `config.toml` with 80 `[dotfiles]` entries, `conf.d/`, tasks, lock | cpp-standard `mise.mac.toml`, the Mac's counterpart of `mise.pc.toml` | M1 |
 | `unix/home/.ssh/config.d/tailnet.conf.tera` | `pc` over the tailnet (the tailnet-only ruling of 2026-11-11), `pc-lan` break-glass, from Doppler `PC_HOST`/`PC_LAN_HOST` | `mise.mac.toml`, unchanged | M1 |
-| `unix/home/.config/agents/` (25), `.agents/skills`, `.claude/`, `.codex/`, `.gemini/`, `.config/opencode/` | The global agent rules (`AGENTS.md`, workflow, skills) and each agent's settings | `mise.mac.toml` and `mise.pc.toml`; the agent rules as one shared source | M1 |
+| `unix/home/.config/agents/` (25), `.agents/skills`, `.claude/`, `.codex/`, `.gemini/`, `.config/opencode/` | The global agent rules (`AGENTS.md`, workflow, skills) and each agent's settings | `mise.mac.toml` and `mise.pc.toml`; the agent rules as one shared source. The workflow documents and the `ticket-retro` and `session-retro` skills move earlier, with the tools (D160) | M1; those three by spec #147 |
 | `unix/home/.config/{zsh,git,fnox,jouet,herdr-app,dep-maps,starship.toml}`, `.local/bin`, `.local/share` | Shell, git, secrets and tool configs | `mise.mac.toml` (git settings with the owner's word, as before) | M1 |
-| `python/repo` (`repotools`), `python/workflow` (`workflowtools`) | The PR and workflow tools every repository uses | cpp-standard `python/`, installed as uv tools from it | M2 |
+| `python/repo` (`repotools`), `python/workflow` (`workflowtools`) | The PR and workflow tools every repository uses | cpp-standard `python/`, installed as uv tools from it | Spec #147, before the M1 switch (D160) |
 | `python/home` (`hometools`), `python/guards`, `python/depmaps`, `python/cbm`, `python/lsp`, `python/jbctl`, `python/visualplan`, `swift/` (`jbax`) | Machine and agent helpers | Each is kept only if something still calls it: moved to `python/`, else dropped. `hometools`' herdr filter for macos-development-environment is dead (that project was sunset on 2026-11-17) | M2 |
 | `python/toolchains/p2996`, `cmake/toolchains/` | The older p2996 build and toolchain files | Dropped: cpp-standard's toolchain work replaces them (D136) | M2 |
 | `cpp/`, `typescript/`, `python/src`, `python/tests` greet samples | Hello-world samples | Dropped | M2 |
@@ -282,13 +282,20 @@ that applies on the Mac.
 
 ### Order
 
+- **Ahead of M1, the tools move (D160, spec #147).** `repotools`, `workflowtools`, the workflow
+  documents and the `ticket-retro` and `session-retro` skills move first, copied from one named dotfiles
+  source commit (recorded on ticket #153), with no Mac switch: only the tools' install source and the home
+  links for the moved files change. From #153 until the old dotfiles copy is removed (#157), the moved
+  dotfiles paths are frozen: `python/repo/`, `python/workflow/`, `unix/home/.config/agents/workflow/`,
+  `unix/home/.config/agents/skills/ticket-retro/` and `unix/home/.config/agents/skills/session-retro/`.
 - **M1, the Mac's config.** Copy the entries unchanged into `mise.mac.toml`, check the plan shows no
   change, then switch the Mac as the PC was switched (one link, Phase 3 of this plan). The unmanaged
   LAN-address block for the PC in `~/.ssh/config`, from before the tailnet-only ruling, is removed in this
   step. Afterwards `mise -E mac bootstrap --from https://github.com/ray-manaloto/cpp-standard.git`
   sets up a Mac the way `-E pc` sets up the PC (tested on 2026-11-17: exit 0, no system change).
-- **M2, the tools.** Move what is still used, point `mise run //repo:tools-install` and the agent
-  rules at cpp-standard, drop the rest.
+- **M2, the other tools.** Move what else is still used and drop the rest. `repotools` and
+  `workflowtools` have already moved, and `mise run //repo:tools-install` and the agent rules already
+  name cpp-standard (D160).
 - **M3, the archive.** dotfiles becomes read-only on GitHub with a README pointing at cpp-standard.
   The owner archives it.
 
@@ -364,9 +371,11 @@ Hand-over notes from dotfiles-lead that the switch carries:
   4. `skills:doctor`.
 
   None of this is wired in M1: a post-merge hook here would switch the Mac on merge.
-- **`shell:apply`'s stdout bug, to fix when it moves.** It treats any stdout of `mise dot apply --dry-run`
-  as something to link. mise prints dry-run output even when everything is applied, so every run makes a
-  new `shell-backup/replaced-*` folder. The workaround in use runs it only when
+- **`shell:apply`'s stdout bug, to fix after the tools move (D160).** This repository's lead owns the
+  fix, made in this repository's copy of `repotools` after the tools switch (#156), as its own
+  ticket. The bug: `shell:apply` treats any stdout of `mise dot apply --dry-run` as something to
+  link. mise prints dry-run output even when everything is applied, so every run makes a new
+  `shell-backup/replaced-*` folder. The workaround in use runs it only when
   `mise dot status --missing` over the seven zsh targets fails. The fix decides from mise's exit status
   or `status --json`, not from stdout.
 - **`~/.claude/settings.json/allow`** (dotfiles #759) is an owner-applied permission entry. It owns the
@@ -381,4 +390,6 @@ byte in M1 so that the copy check holds. M2 templates them:
   needs the owner's word.
 - `unix/home/.config/mise/miserc.toml`: the ignored clone folder.
 - `unix/home/.config/agents/workflow/ship.md`: the `--author-email` example becomes a placeholder.
+  This file moves with the tools (D160) and is copied byte for byte, so the change is made on this
+  repository's copy after the tools switch (#156).
 - `unix/home/.claude/settings.automode.json`: the self-merge rule's text.
