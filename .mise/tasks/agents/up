@@ -75,6 +75,6 @@ fi
 docker exec "$name" git config --global user.name "$bot_name"
 docker exec "$name" git config --global user.email "$bot_email"
 docker ps --filter "name=^${name}$" --format '{{.Names}} {{.Status}} {{.Image}}'
-echo "agents:up: Claude Code, OpenCode, git and gh need no login. Once per project on this machine (the logins stay on its volumes), the owner types:"
-echo "  ssh -t pc docker exec -it $name bash -lc 'codex login --device-auth'"
-echo "  ssh -t pc docker exec -it $name bash -l   (then run agy and sign in with Google; no agent may run agy)"
+echo "agents:up: Claude Code, OpenCode, git and gh need no login. Once per project on this machine (the logins stay on its volumes):"
+echo "  codex: ssh -t pc docker exec -it $name bash -lc 'codex login --device-auth'   (the device code is approved in the owner's browser)"
+echo "  owner: mise run agents:agy-login $project   (agy's Google sign-in; agents:up never starts agy)"
