@@ -24,6 +24,9 @@ SUITES = ("repo", "workflow", "pctools")
 # pytest's --durations block: its header line, then one line per test until the next section rule.
 HEADER = re.compile(r"=+ slowest (?:\d+ )?durations =+")
 RULE = re.compile(r"[=-]{3,}")
+# One test line: "2.50s call     tests/x.py::test". Under -q the block has no closing rule, and pytest also prints
+# "(N durations < 0.005s hidden ...)" and the "N passed in ..." summary, so only these lines count.
+ENTRY = re.compile(r"\d+(?:\.\d+)?s\s+(?:call|setup|teardown)\s+\S.*")
 KEEP = 25
 
 
@@ -60,7 +63,7 @@ class Slowest:
             self.inside, self.lines = True, []
         elif self.inside and RULE.match(text):
             self.inside = False
-        elif self.inside and text and len(self.lines) < KEEP:
+        elif self.inside and ENTRY.fullmatch(text) and len(self.lines) < KEEP:
             self.lines.append(text)
 
 

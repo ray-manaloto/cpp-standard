@@ -19,8 +19,16 @@ print("[//python/repo:test] ======== slowest 25 durations ========")
 print("[//python/repo:test] 2.50s call     tests/test_a.py::test_slow")
 print("[//python/repo:test] ")
 print("[//python/repo:test] 0.10s setup    tests/test_a.py::test_fast")
+print("[//python/repo:test] (3 durations < 0.005s hidden.  Use -vv to show these durations.)")
 print("======== 2 passed in 2.70s ========")
 sys.exit(int(sys.argv[1]))
+"""
+# A stand-in `pytest -q`: a block with no closing rule, the hidden-durations note, then the bare summary line.
+QUIET = """
+print("======== slowest durations ========")
+print("1.25s call     tests/test_b.py::test_q")
+print("(1 durations < 0.005s hidden.  Use -vv to show these durations.)")
+print("2 passed in 1.30s")
 """
 
 
@@ -58,6 +66,13 @@ def cases(env: dict[str, str], folder: Path) -> list[tuple[str, Callable[[], boo
             and isinstance(saved["load_start"], float)
             and isinstance(saved["load_end"], float)
         )
+
+    def quiet() -> bool:
+        done = record(env, "run", "quiet", "--", sys.executable, "-c", QUIET)
+        saved = json.loads((folder / "quiet.json").read_text())
+        return done.returncode == 0 and saved["slowest"] == [
+            "1.25s call     tests/test_b.py::test_q"
+        ]
 
     def failing() -> bool:
         done = suite(env, "workflow", 3)
@@ -128,6 +143,10 @@ def cases(env: dict[str, str], folder: Path) -> list[tuple[str, Callable[[], boo
         (
             "a passing suite: output passes through, the record keeps time, load and slowest tests",
             kept,
+        ),
+        (
+            "pytest -q: only test lines are kept, not the hidden note or the summary",
+            quiet,
         ),
         ("a failing suite keeps its exit status, and the record says so", failing),
         (
