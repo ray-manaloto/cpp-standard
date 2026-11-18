@@ -325,11 +325,11 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             )[1],
         ),
         (
-            "check --host mac with DOCKER_HOST at the PC: the flag wins",
+            "check --host mac with DOCKER_HOST at the PC and the mac grant: refused, the PC is the target",
             lambda: refused(
                 me | {"DOCKER_HOST": "ssh://pc"},
-                "no mac slot grant",
-                lambda: granted(host="pc"),
+                "Docker here is aimed at the PC",
+                granted,
                 "--host",
                 "mac",
             ),

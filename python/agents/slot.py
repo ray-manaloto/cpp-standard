@@ -9,7 +9,8 @@ Standard library only.
   python -I slot.py check [--host mac|pc]                  exit 0 when this caller may start container work there now
   python -I slot.py hook                                   Claude Code PreToolUse hook: a Bash payload on stdin
 
---host defaults to mac. check without --host takes pc when DOCKER_HOST or DOCKER_CONTEXT aims at the PC.
+--host defaults to mac. check without --host takes pc when DOCKER_HOST or DOCKER_CONTEXT aims at the PC, and
+check --host mac refuses there: the tasks call check with no flag, so it follows where their Docker really goes.
 
 Each host has its own grant, so a job on the PC does not wait behind a job on the Mac. The records are in
 $XDG_STATE_HOME/slots (else ~/.local/state/slots): grant.json for the Mac and grant-pc.json for the PC, each
@@ -452,7 +453,11 @@ def main() -> None:
             out = clear_expired()
         else:
             # Without --host, a caller that exported DOCKER_HOST or DOCKER_CONTEXT at the PC is doing PC work.
-            aimed = pc_reason("docker", dict(os.environ)) is not None
+            aimed = pc_reason("docker", dict(os.environ))
+            if aimed and args.host == "mac":
+                # The mac grant must never cover Docker that this environment sends to the PC.
+                msg = f"--host mac, but Docker here is aimed at the PC ({aimed}): check --host pc"
+                raise RefusedError(msg)
             out = check(args.host or ("pc" if aimed else "mac"))
     except RefusedError as error:
         sys.stderr.write(f"slot: refused: {error}\n")
