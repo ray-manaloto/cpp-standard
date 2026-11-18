@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # agent-secrets (cpp-standard D155): the PC side of zero-touch logins for project agent containers.
 #
-#   agent-secrets register <container> <owner/repo>   start serving a container (agents:up runs this)
+#   agent-secrets register <container> <owner/repo>   start serving a container and print its folder (agents:up)
 #   agent-secrets unregister <container>              stop serving it and remove its files
 #   agent-secrets refresh [<container>]               write the files now (all containers, or one)
 #   agent-secrets serve                               the user service: refresh whatever is due, every 15 s
@@ -39,7 +39,7 @@ b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 # The secrets JSON of the token's Doppler config. mise puts the pinned doppler CLI on PATH (mise.pc.toml [tools]).
 secrets_json() {
   [[ -r "$conf/doppler-token" ]] || die "no Doppler token at $conf/doppler-token"
-  DOPPLER_TOKEN="$(<"$conf/doppler-token")" mise exec -- doppler secrets download --no-file --format json \
+  DOPPLER_TOKEN="$(<"$conf/doppler-token")" mise exec doppler -- doppler secrets download --no-file --format json \
     --no-check-version
 }
 
@@ -78,10 +78,13 @@ due() { # <dir>: whether its files need writing
 # Write the files of the given container folders, with one Doppler read for all of them.
 refresh_dirs() { # <dir>...
   (($#)) || return 0
-  local json pem client jwt d repo owner name inst body tok slug uid
+  local json pem client claude gemini jwt d repo owner name inst body tok slug uid
   json=$(secrets_json) || die "the Doppler read failed"
   pem=$(jq -er .AGENTS_APP_PRIVATE_KEY <<<"$json") || die "Doppler has no AGENTS_APP_PRIVATE_KEY"
   client=$(jq -er .AGENTS_APP_CLIENT_ID <<<"$json") || die "Doppler has no AGENTS_APP_CLIENT_ID"
+  # Every value is read and checked before any file is written: jq prints "null" for a missing name.
+  claude=$(jq -er .CLAUDE_CODE_OAUTH_TOKEN <<<"$json") || die "Doppler has no CLAUDE_CODE_OAUTH_TOKEN"
+  gemini=$(jq -er .GEMINI_API_KEY <<<"$json") || die "Doppler has no GEMINI_API_KEY"
   # shellcheck disable=SC2034 # gh_api reads it by name
   jwt=$(app_jwt "$client" pem)
   slug=$(gh_api jwt GET /app | jq -er .slug) || die "GET /app failed: is the App key current?"
@@ -94,13 +97,14 @@ refresh_dirs() { # <dir>...
       continue
     fi
     body=$(jq -nc --arg r "$name" '{repositories: [$r], permissions: {contents: "write", pull_requests: "write"}}')
-    if ! tok=$(STDIN_BODY=1 gh_api jwt POST "/app/installations/$inst/access_tokens" <<<"$body" | jq -er .token); then
+    if ! tok=$(STDIN_BODY=1 gh_api jwt POST "/app/installations/$inst/access_tokens" <<<"$body" | jq -er .token) ||
+      [[ "$tok" != ghs_* ]]; then
       log "$(basename "$d"): minting a token for $repo failed; skipped"
       continue
     fi
     printf '%s' "$tok" | put "$d" gh-token
-    jq -jer .CLAUDE_CODE_OAUTH_TOKEN <<<"$json" | put "$d" claude-oauth-token
-    jq -jer .GEMINI_API_KEY <<<"$json" | put "$d" gemini-api-key
+    printf '%s' "$claude" | put "$d" claude-oauth-token
+    printf '%s' "$gemini" | put "$d" gemini-api-key
     printf '%s[bot]\n%s+%s[bot]@users.noreply.github.com\n' "$slug" "$uid" "$slug" | put "$d" git-identity
     log "$(basename "$d"): wrote a token for $repo"
   done
@@ -118,6 +122,7 @@ case "${1:-}" in
     printf '%s\n' "$3" | put "$state/$2" repo
     refresh_dirs "$state/$2"
     [[ -s "$state/$2/gh-token" ]] || die "no token was written for $2"
+    printf '%s\n' "$state/$2" # the folder to mount, for agents:up
     ;;
   unregister)
     [[ $# -eq 2 ]] || die "usage: agent-secrets unregister <container>"

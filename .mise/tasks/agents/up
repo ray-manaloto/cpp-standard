@@ -34,9 +34,9 @@ if [[ -n "${usage_fresh:-}" ]]; then
   for v in "${volumes[@]}"; do docker volume rm "${name}-${v}" >/dev/null 2>&1 || true; done
 fi
 # Register first: it makes the folder as the PC user (so Docker never makes it as root) and writes the token now.
-on_pc ".local/bin/agent-secrets register '$name' '$slug'"
+# AGENT_SECRETS_CMD runs another copy of the service script, for tests before a change reaches the PC.
+keys="$(on_pc "${AGENT_SECRETS_CMD:-.local/bin/agent-secrets} register '$name' '$slug'")"
 home="$(on_pc 'echo ~')"
-keys="$home/.local/state/agent-secrets/$name"
 if docker container inspect "$name" >/dev/null 2>&1; then
   docker start "$name" >/dev/null
 else

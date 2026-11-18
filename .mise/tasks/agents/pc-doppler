@@ -45,7 +45,7 @@ cd "$scope"
 say "log in to Doppler in the browser (a temporary login, revoked at the end)"
 dp login --scope "$scope" --yes
 
-names_of() { dp secrets --only-names --json -p "$1" -c "$2" | jq -r 'keys[]'; }
+names_of() { dp secrets --only-names --json -p "$1" -c "$2" | jq -r '(. // {}) | keys[]'; }
 has() { names_of "$1" "$2" | grep -x "$3" >/dev/null; } # not -q: an early exit fails the pipe
 digest() { dp secrets get "$3" -p "$1" -c "$2" --plain | shasum -a 256; }
 
@@ -91,7 +91,7 @@ say "wrote the PC's ~/.config/agent-secrets/doppler-token (0600)"
 
 # 5. The PC reads the names with it (names only).
 got="$(ssh -o BatchMode=yes pc 'DOPPLER_TOKEN="$(cat ~/.config/agent-secrets/doppler-token)" \
-  mise exec doppler@3.77.1 -- doppler secrets --only-names --json --no-check-version' | jq -r 'keys[]')"
+  mise exec doppler@3.77.1 -- doppler secrets --only-names --json --no-check-version' | jq -r '(. // {}) | keys[]')"
 for n in "${names[@]}"; do
   grep -qx "$n" <<<"$got" || stop "the PC's token does not read $n"
 done
