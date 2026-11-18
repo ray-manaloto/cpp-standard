@@ -1,11 +1,13 @@
 # cpp-standard: the C++ environment and project standard (Level 1)
 
 - **Author:** ray-manaloto
-- **Status:** in the Goldfish review of D99-D135 (Stages 5-9 done,
-  2026-11-13). The M0-Linux exit review on 2026-11-17 settled D106 and D107
-  and dropped D108's M2 code-owner review (D149). D136-D149 have had no
-  Goldfish review yet, and the text that depends on D108 still describes it.
-- **Date:** 2026-11-17
+- **Status:** Goldfish-reviewed through D135 (the review of D99-D135,
+  Stages 5-9, 2026-11-13). D136 to D155 await one Goldfish review. The text
+  written for them on 2026-11-18 has not been reviewed either: the D149
+  rewrite of every passage that described D108's code-owner review (§6,
+  §7, §10, the risk table, the setup steps and the file plan), the D148
+  part of §7, §11, §12 and the closed open questions.
+- **Date:** 2026-11-18
 
 --------------------------------------------------------------------------------
 
@@ -28,6 +30,9 @@ GitHub organization; it was switched to public during setup (D95). It holds:
    images.
 5. **One gate.** `mise run ci` gives the same result, for the tier-1 checks the capability lock lists (G3), locally and in GitHub
    Actions.
+6. **The machines and the agent containers.** Since D139 and D150 it also
+   sets up the owner's machines (§11), and the containers that each project
+   and its agents run in (§12).
 
 Level 1 ends on 2026-11-27 (D21). The glaze FIX Orchestra project then starts
 on top of this standard, in its own repository. Level 2, a separate
@@ -37,7 +42,7 @@ is Linux-first (D44, D53, §10).
 **Inputs:**
 
 - [concepts_brief.md](level-1/concepts_brief.md);
-- [decisions-log.md](level-1/decisions-log.md), D1 to D135. "Dnn" in this
+- [decisions-log.md](level-1/decisions-log.md), D1 to D155. "Dnn" in this
   document means row Dnn of that log;
 - the reports in [level-1/research/](level-1/research/), and
   [goldfish_brainstorm_report.md](level-1/goldfish_brainstorm_report.md);
@@ -68,11 +73,11 @@ owner confirmed these three differences; the decisions log records the rest:
 | Term | Meaning |
 |---|---|
 | **EGM** | The Elephant-Goldfish Model, the design process used here. One drafting agent (the "Elephant") writes the design. Fresh-context reviewers (the "Goldfish") review it in stages. `/egm-drift-report` later compares a design with the code and lists where they differ. |
-| **Milestones** | **M0**: the spike, throwaway pass/fail experiments (a)-(j), split into M0-Linux, which blocks M1a and ends 2026-11-16, and M0-Mac, which runs in parallel and feeds M3 (§10, D84). The runner tests are not in M0; they form the [M2 entry gate](#m2-entry-gate) (D77). **M1a**: the critical path. **M1b**: work around it that can be cut. **M2**: amd64 and the PC runner; M2 entry turns on code-owner review for the trust roots, and packslip signing (D108, D111). **M3**: the Mac VM, runner and toolchains. **M4**: the canary. **M5**: tier-2 tools and the perf task (the digest moved to M1b, D84). |
+| **Milestones** | **M0**: the spike, throwaway pass/fail experiments (a)-(j), split into M0-Linux, which blocks M1a and ends 2026-11-16, and M0-Mac, which runs in parallel and feeds M3 (§10, D84). The runner tests are not in M0; they form the [M2 entry gate](#m2-entry-gate) (D77). **M1a**: the critical path. **M1b**: work around it that can be cut. **M2**: amd64 and the PC runner; M2 entry turns on packslip signing (D111). The code-owner review D108 planned for M2 entry was dropped (D149). **M3**: the Mac VM, runner and toolchains. **M4**: the canary. **M5**: tier-2 tools and the perf task (the digest moved to M1b, D84). |
 | **Level 1 / Level 2** | Level 1 is this environment standard, ending 2026-11-27. Level 2 is the glaze FIX project built on it. |
 | **The gate** | `mise run ci` and nothing else (§5). "The post-merge macOS run" is `mac-gate.yml`; the Linux run after merge is `post-merge.yml`. |
 | **Agent session** | One live Claude or Codex session working in this repository. The cap on them is in `review/cap.toml` and starts at 3 (§9). |
-| **the setup agent** | The owner's agent session that manages the dotfiles repository. It is the only session that installs or changes software and credentials on the owner's machines (Mac, PC), so every install step in this plan goes through it. |
+| **the setup agent** | The owner's agent session that manages the dotfiles repository. It is the only session that installs or changes software and credentials on the owner's machines (Mac, PC), so every install step in this plan goes through it. Since D139 and D150 cpp-standard owns the machines' setup and takes over dotfiles by a planned migration (§11); until a migration step moves a piece, dotfiles keeps running it. |
 | **Abbreviations** | **CUJ**: critical user journey. **CLT**: Apple's Command Line Tools. **SOH**: the FIX field separator, byte `0x01`. **GHCR**: GitHub Container Registry. **P2996** / **P3394**: the C++ proposals for static reflection and for annotations. |
 | **Two-VM rule** | Apple's licence lets a Mac run at most two macOS VMs at once. The dev VM and one runner or golden-build VM share that limit (D68). |
 
@@ -82,7 +87,7 @@ owner confirmed these three differences; the decisions log records the rest:
 |---|---|
 | **First-party code** | Everything under `src/` written for this repository. This is the code the 100% coverage rule measures. It does not include fixtures or third-party code. |
 | **Owned roots** | The §6 list of files the owner owns (D51, D76), such as workflows, most mise tasks, the build scripts and the gate policy. Not a review gate (D101). It includes the trust roots. |
-| **Trust roots** | The CODEOWNERS list whose change reaches the owner's hardware or signing identity, under code-owner review from M2 (§6 Trust roots, D108, D134). |
+| **Trust roots** | The short list of files whose change reaches the owner's hardware or signing identity (§6 Trust roots, D108, D134). CODEOWNERS names them as documentation; they merge on the required checks like every other file, before and after M2 (D149). |
 | **Pins** | Files that hold only versions, URLs, hashes or sizes. Renovate and agents may change them, and `pins:validate` checks their content (§3). |
 | **Capability lock** | `cmake/capabilities.lock.json`: what each compiler can do in each environment (D42). Never called just "the lock". `.mise/mise.lock` is always named in full. |
 | **Inputs hash** | The 16-hex value computed from an artifact's input files and `.mise/mise.lock` slices (§2). |
@@ -124,7 +129,7 @@ owner confirmed these three differences; the decisions log records the rest:
 | **Agent App** | A new GitHub App, `cpp-standard-agents`, that agents push and open PRs as (§6 Identities, D71, D134). |
 | **PC runner App** | An existing org App whose only permission is registering self-hosted runners; it registers the M2 runners instead of an Administration-write PAT (D82, D117). |
 | **Org-admin App** | An existing GitHub App with wide org-admin rights. It is not used here. |
-| **Commit review** | Each agent commit is made only with a separate agent session's approval: a convention, not a guard (D120). |
+| **Commit review** | Gone. It was a separate agent session's approval of each agent commit, a convention and never a guard (D120); D149 ended it, so `main` code is code merged after the required checks (D107). |
 
 ## The Problem
 
@@ -228,8 +233,10 @@ and then used, not grown.
   cmake_template, modern_cpp_project_template, cpp-playground and
   hftuniversity; pieces are copied in only when needed, with a link.
 - **The glaze worktrees and spikes**, which move to glaze FIX in Level 2.
-- **Cleaning up the host's agent setup, the owner's existing rulings, and
-  the rest of dotfiles** (D18); only dotfiles' C++ parts retire.
+- **Cleaning up the host's agent setup and the owner's existing rulings**
+  (D18). The rest of dotfiles is no longer a non-goal: cpp-standard takes
+  over the machines' setup and dotfiles itself by a planned migration
+  (D139, D150, §11).
 - **A project-template generator** (the mise "cookiecutter").
 - **Windows.**
 - **Performance results used as claims, and the tooling for them** (D46).
@@ -244,14 +251,15 @@ and then used, not grown.
 
 - **Q1. Clean-up for the public repository.** The repository is already
   public, so these are follow-ups:
-  - Scrub local paths, session ids, internal account names and internal
-    tool names from all of `docs/designs/`.
-  - rosetta lists no license, so it is built for testing and not
-    redistributed.
+  - *Closed:* scrub local paths, session ids, internal account names and
+    internal tool names from all of `docs/designs/`. Done before the first
+    push, in setup step 2 (D97).
+  - *Closed:* rosetta lists no license, so it is built for testing and not
+    redistributed (D20; the M4 `canary/pins.toml` row).
   - Check the FIX Orchestra license before glaze FIX goes public.
 - **Q2. The mise and Renovate upstream posts.** The three drafts are ready
   and verified on 26.10. When, if at all, to post them is the owner's call.
-- **Q3. License.** Settled: the owner chose MIT, committed as `LICENSE` in
+- **Q3. License.** Closed: the owner chose MIT, committed as `LICENSE` in
   setup step 3.
 - **Q4. When the post-merge macOS run becomes a required check** (D46).
   The owner decides by hand, or later by a rule such as "N consecutive
@@ -263,10 +271,11 @@ and then used, not grown.
 - **Q6. Renovate's identity** (D104, D124). Which identity runs the daily
   Renovate, and where its credential lives. Not a repository secret, which
   same-repo PR workflows could read; the Mend-hosted Renovate app is the
-  leading option. Due before M1b.
-- **Q7. Does M0 (j) close on the stand-in module?** Settled: yes (D106,
+  leading option. Due before M1b. D148's shared Renovate preset does not
+  name it either.
+- **Q7. Does M0 (j) close on the stand-in module?** Closed: yes (D106,
   confirmed at the M0-Linux exit review, D149).
-- **Q8. How the older owner-review rules read after D101.** Settled:
+- **Q8. How the older owner-review rules read after D101.** Closed:
   "reviewed" means merged after the required checks (D107, D149).
 
 Settled questions are at the end of the Technical Plan
@@ -352,7 +361,8 @@ Settled questions are at the end of the Technical Plan
 ## Technical Plan (Architecture)
 
 This section describes how the pieces fit together. Decisions D26 to D135 were
-made while drafting and reviewing it. The file-by-file list is in Detailed
+made while drafting and reviewing it; D136 to D155 came later and are
+described in §6, §7, §10, §11 and §12, without a Goldfish review yet. The file-by-file list is in Detailed
 Implementation. What is unproven, and the accepted risks, are in
 [Risks & Mitigations](#risks--mitigations).
 
@@ -365,7 +375,7 @@ yet packslip-signed (D111, D116).
 ```mermaid
 flowchart LR
   subgraph repo[cpp-standard repo]
-    TRUST[trust roots, code-owner review from M2<br/>rulesets and checker, publish.yml, builder.yml,<br/>self-hosted workflows, runner,<br/>gate-removals.toml]
+    TRUST[trust roots, merged on the required checks<br/>rulesets and checker, publish.yml, builder.yml,<br/>self-hosted workflows, runner,<br/>gate-removals.toml]
     OWN[owned roots, documentation<br/>mise.toml, other mise tasks, fixtures, Dockerfiles,<br/>capability lock, gate policy, hk.pkl and its settings, .jouet]
     PINS[pins, content-validated<br/>.mise/conf.d/apt.toml, apt-toolchain-host.toml,<br/>apt-sources.toml, tools.toml, lint.toml, .mise/mise.lock, image/base.inputs.toml,<br/>toolchains/*/pins.toml, vm/inputs.toml, canary/pins.toml]
     CODE[src, tests, presets, probes]
@@ -784,7 +794,7 @@ Which fixtures apply in an environment comes from the capability lock, never
 from live probes; a PR cannot drop a capability, and with it a fixture,
 without a `gate-removals.toml` entry (D115). The same file must name any
 removed fixture, `expected.toml` row, `required_flags` item or
-`forbidden_markers` item, and from M2 that file is a trust root (D108).
+`forbidden_markers` item, and that file is a trust root (§6, D115).
 A PR can still change the checker or the fixtures together with what they
 check; the post-merge run and the digest show it (accepted, D134). If any
 applicable fixture passes, the gate is red. The fixtures run on every PR and
@@ -836,10 +846,10 @@ flowchart TB
 #### The fence
 
 Self-hosted runners run only `main` code; code not yet on `main` never
-runs there. No human reviews ordinary `main` code: it has passed the
-required checks (D101, D120). From M2, the trust roots that decide what
-runs there, and with what identity, need the owner's code-owner review
-(D108). Before M2 agents work on the Mac host and can reach its credentials
+runs there. No human reviews `main` code before merge: it has passed the
+required checks (D101, D149). That includes the trust roots that decide
+what runs there, and with what identity: D149 dropped the code-owner
+review that D108 planned for them from M2, and accepted the risk. Before M2 agents work on the Mac host and can reach its credentials
 (accepted, D127); from M2 they run in the dev VM or as a separate macOS user
 that cannot (an M2 entry condition, D127).
 
@@ -959,15 +969,12 @@ job. A job that runs `toolchain:fetch` or `image:verify` also gets
 | `repo-verify.yml` | `schedule`, `workflow_dispatch` on `main` | `contents: read`, `actions: read` |
 | `digest.yml` | `schedule` | `contents: read`, `actions: read`, `issues: write`, `pull-requests: read` |
 
-#### Trust roots (D108, D134)
+#### Trust roots (D108, D134, D149)
 
-*D149 drops the code-owner review below: from M2 the trust roots, like every
-other file, merge on the required checks alone. The text in this section and
-the parts that cite D108 are rewritten in the Goldfish review of D136-D149.*
-
-These files are the only ones that need a GitHub review, from M2 entry,
-when self-hosted runners start; before M2 code-owner review is off (D101).
-CODEOWNERS lists exactly these:
+These files decide what runs on the owner's hardware and what `main`'s
+signing identity signs. `.github/CODEOWNERS` lists exactly these, as
+documentation: no ruleset requires code-owner review, before M2 or after
+(D101, D149).
 
 - the rulesets and their checker: `.github/CODEOWNERS`,
   `.github/rulesets/**`, `.mise/tasks/repo/rulesets` and
@@ -978,16 +985,21 @@ CODEOWNERS lists exactly these:
   `mac-gate.yml`, plus `runner/**`;
 - the ratchet, `gate-removals.toml` (D115).
 
-Everything else, including the build recipe, the gate tasks, `ci.yml` and
-the pins, merges on green under the §7 merge rule; the required checks, the
-fixtures and the ratchet are the guards, and the post-merge run catches
-what slips through. Wider trust roots are the M2 design's work
+The trust roots merge like everything else, including the build recipe,
+the gate tasks, `ci.yml` and the pins: on green under the §7 merge rule.
+The required checks, the fixtures and the ratchet are the guards, and the
+post-merge run and the owner's look after merge catch what slips through
+(D107, D149). **Accepted risk (D149):** an agent PR that changes a trust
+root, including a self-hosted workflow whose code runs on the owner's PC
+and Mac runners, merges with no human look before merge. Wider trust
+roots, and any stronger guard for them, are the M2 design's work
 ([m2-trust-backlog.md](level-1/m2-trust-backlog.md), D134).
 
-From M2, Renovate's weekly Action SHA batch waits for the owner (D118).
-GitHub does not let an author approve their own PR, so trust-root changes
-come from the agent App or Renovate, never the owner's login. The M2 entry
-gate turns code-owner review on with `repo:rulesets --phase m2` (D108).
+Renovate's weekly Action SHA batch touches trust-root workflows. Before
+M2 it merges on the checks like any PR (D107). From M2, D118 has it wait
+for the owner through the code-owner review that D149 dropped, and D149
+does not name D118; whether the owner still looks before merge is open for
+the Goldfish review of D136 to D155.
 
 From M1a PR 6, only `GITHUB_TOKEN` and the owner can dispatch workflows:
 the agent App has no `actions: write` (D134), and `builder.yml` takes no ref or SHA input.
@@ -1013,22 +1025,24 @@ D102), `.jouet/**`, `toolchains/*/build.sh`, `toolchains/*/macos/**`,
 
 PRs merge under the §7 merge rule. The guards are the required checks (the
 capability lock, the gate policy, the fixtures,
-`pins:validate`), the merge queue and, from M2, the trust roots. The agent
-rules' commit review (D120) and the owner's wait on major compiler bumps and
-capability lock changes (D128) are conventions, not guards.
+`pins:validate`) and the merge queue; the trust roots are a documented
+list, not a guard (D149). The owner's wait on major compiler bumps and
+capability lock changes (D128) is a convention, not a guard. The agent
+commit review (D120) ended with D149.
 
 #### The repository settings are checked daily (D53, D60, D63, D100, D108, D109)
 
 `mise run repo:rulesets --verify` checks that protections are present, and
 never fails because one was added. It fails if:
 
-- from phase `m2`, `main` does not require code-owner review (D108);
 - `main` stops dismissing stale approvals;
 - the merge queue is not required;
 - the required checks differ from the `ci.yml` job names listed in the
   [M1a file plan](#m1a-the-critical-path) (D93);
 - immutable releases or the toolchain tag ruleset are off (from M1b);
 - a required workflow is disabled.
+
+Phase `m2` checks no code-owner setting (D149).
 
 From M1a PR 6, the agent App has no `actions: write`, so it cannot disable
 these checks (D134).
@@ -1052,17 +1066,34 @@ fails if the queue stops being required.
     in that PR; nothing is written back (D75, D85). One PR bumps every OS;
     macOS builds after merge.
   - The daily tools PR touches `tools.toml`, `lint.toml` and
-    `.mise/mise.lock`, and the `minimum_release_age` cutoff in `mise.toml`
-    when a release is newer than the cutoff (D74).
+    `.mise/mise.lock` (D74). D148 changes the fixed `minimum_release_age`
+    cutoff in `mise.toml` to `0s` (not yet applied there), so an update PR opens as soon as a
+    release is out; whether the cutoff's lock-reproducibility reason (M0
+    (i)) still holds with exact pins was not checked (D148).
   - Action SHAs live in `.github/**` and are batched weekly. Before M2
-    the batch merges on the checks (D107); from M2 it touches trust roots and
-    waits for the owner (D118).
+    the batch merges on the checks (D107); whether it still waits for the
+    owner from M2 (D118) is open, since D149 dropped the review that wait
+    used (§6 Trust roots).
+- **Shared update configuration (D148, D152).** cpp-standard builds three
+  public repositories, trimmed copies of risu729's (MIT, credited):
+  `ray-manaloto/renovate-config` (one Renovate preset: GitHub's native
+  auto-merge for minor, patch, digest and pin updates, custom managers for
+  mise pins, the hk Pkl import, the hk-config tag and Actions pins, and lock
+  maintenance), `ray-manaloto/hk-config` (`presets.pkl` and `helpers.pkl`,
+  imported by a project's `hk.pkl` at a release tag) and
+  `ray-manaloto/skills` (a skills-only plugin marketplace whose agents follow
+  its latest commit). Each project keeps about 10 lines of glue
+  (`renovate.json5` extending the preset at a tag, and `hk.pkl`) and a
+  `CI Check` job that a ruleset requires, because auto-merge waits only for
+  required checks; that job runs on GitHub-hosted runners. Updates come
+  daily with no release cooldown (D152). Agent plugins stay outside
+  Renovate (§12). Renovate's identity is still Q6.
 - **Merge rule (D50, D56, D101, D128).** This is the one statement of it;
   other sections point here.
   - **Every PR merges through the merge queue once the required checks
-    pass.** Before M2 no PR needs a GitHub approval, since code-owner review
-    is off (D101). From M2, a PR that touches a trust root also needs the
-    owner's code-owner review (D108).
+    pass.** No PR needs a GitHub approval, before M2 or after, the trust
+    roots included: code-owner review is off (D101), and D149 dropped its
+    return at M2 (D108).
   - **A Renovate PR merges when** the gate is green in its own image, the
     capability lock is unchanged, and the fixtures pass.
     The owner confirmed this covers LLVM minor bumps, p2996 commits, GCC
@@ -1074,7 +1105,7 @@ fails if the queue stops being required.
     is a convention, not a guard: the agent App could queue such a PR
     (D128).
   - **The owner looks at owned-root changes after merge** (D101, D107,
-    proposed), in the merged diffs and, from M1b, `review:digest`. There
+    D149), in the merged diffs and, from M1b, `review:digest`. There
     are no Mac-only pins (D85): a macOS-only breakage shows as a red
     post-merge macOS build, which the owner fixes or reverts.
 - **Base upgrades (D36, D47).** In Level 1 this is a written process only:
@@ -1104,7 +1135,8 @@ This table is the standard. In Level 1 only the first row has a task:
   count as the agent App to a pinned `digest` issue.
 - **Agent tooling (D41)** is project skills, codebase-memory and Context7, fnox
   placeholders, and jouet's hooks and `gate-guard` rules (D64). Plugins are
-  added only with the owner's approval.
+  added only with the owner's approval. How the agents in a project
+  container get their plugins and skills is §12 (D143, D147, D152).
 - **Daily digest.** `mise run review:digest` runs in Actions and calls no
   model. This is the one list of what it reports:
   - the gate checklist (`gate-items.toml`), each item open or closed, from
@@ -1133,8 +1165,8 @@ The critical path to glaze FIX, targeted to be green by 2026-11-27:
 3. the owner's encoder module;
 4. tier-1 `mise run ci` for those presets, with the capability lock, the gate
    policy and the fixtures;
-5. the merge queue, the CODEOWNERS file listing the trust roots (enforced
-   from M2, D108), the repository settings check and
+5. the merge queue, the CODEOWNERS file listing the trust roots (as
+   documentation, D149), the repository settings check and
    `pins:validate`;
 6. the M1a trust work, and nothing more (D77, D111, D134): `main`-only
    publishing, attested toolchain releases with `toolchain:fetch`, image
@@ -1254,14 +1286,99 @@ the conditions for turning on self-hosted runners:
   Org-admin App key, the Docker context, or any fnox or Doppler profile that
   can fetch them (D127);
 - the owner reads `git log -p <setup commit>..HEAD` for the trust-root paths
-  once, since they were ungated until M2 (D131); then `repo:rulesets --phase
-  m2` turns code-owner review on and `repo-verify` passes at `m2` (D108).
+  once (D131), and `repo:rulesets --phase m2` is applied with `repo-verify`
+  passing at `m2` (D135). The `m2` phase turns no code-owner review on
+  (D149); whether the one-time read still earns its place is for the
+  Goldfish review of D136 to D155.
 
 #### M0-Linux exit review
 
 The M0-Linux exit review was held on 2026-11-17 (D149): it confirmed D106
 (Q7) and D107 (Q8) and dropped the M2 code-owner review of D108. M0-Mac results go into M3; a failed M0-Mac check triggers its
 cut-order item early.
+
+### 11. Machine configuration (D139, D141, D150)
+
+cpp-standard sets up the machines themselves, not only its project
+environments: macOS, Ubuntu amd64 and arm64, and the PC (D139). All of the
+PC moves, including the CI runner slots that serve other repositories, the
+job fence, ufw, CDI and the PC parts of `pc:doctor`; the PC's private
+values come from a PC-only Doppler config; `spotlight:check`,
+`herdr:doctor` and the nightly check stay in dotfiles (D141). D150 widens
+the move to all of dotfiles. The order, the check and the undo of each step
+are in [machine-bootstrap-migration.md](level-1/machine-bootstrap-migration.md),
+which the owner approved; until a step moves a piece, dotfiles keeps
+running it.
+
+- **Machine configs.** `mise.pc.toml` holds the PC's configuration, checked
+  by `mise run pc:doctor`, and `mise.mac.toml` the Mac's global config
+  (D150, migration step M1). Machine-to-machine access uses tailnet names,
+  never LAN addresses (D150).
+- **Certification playbooks.** What a host must have to be a valid C++
+  environment is a checklist with a probe and a PASS/FAIL rule per check:
+  [macos.md](../standard/macos.md) for the Mac host and the Tart VM
+  (`mise run certify:macos`, D136) and [ubuntu.md](../standard/ubuntu.md)
+  for Ubuntu 26.10 in a container on the PC (amd64) and on the Mac (arm64)
+  (`mise run certify:ubuntu`, D137). D136 also moved the Tart base to
+  `macos-golden-gate-xcode:27.2`; the design's vanilla references change in
+  the M3 PR that adds `vm/inputs.toml`.
+- **Containers on the PC** never run `--privileged`. The certification
+  container gets `--cap-add PERFMON` and the seccomp profile
+  `docs/standard/ubuntu-seccomp.json` instead (D140).
+- **apt cache.** `mise.ubuntu-cache.toml`, used only with
+  `-E ubuntu,ubuntu-cache`, sends the apt sources through an
+  apt-cacher-ultra proxy named by `CPP_STANDARD_APT_CACHE`; CI and the
+  image never use it (D138).
+- **Spack** runs only in throwaway containers on the PC's Docker. Below it
+  sit apt (the certified toolchain plus `gfortran-16`) or the macOS Command
+  Line Tools, then the tools mise pins (D142). clingo goes into the Python
+  environment that runs Spack (D144), which `SPACK_PYTHON` names (D145).
+  Open: D142's container probe, which decides which apt packages mise now
+  supplies, runs before the first Spack image.
+- **mise pin.** The image, CI and `min_version` pin mise 2026.11.9, the PC
+  host's release (D146).
+
+### 12. Project agent containers (D143, D147, D155)
+
+A project and its agents run together in one container, on the PC and on
+the Mac; the PC host stays minimal (D143). The image is
+`docs/standard/agents.Dockerfile`, built by `mise run agents:image`, and
+`mise run agents:up` starts or reuses a project's container (`--host mac`
+on the Mac, D155).
+
+- **Plugins and skills.** Each agent's own command line installs its
+  marketplaces and plugins; there is no sync code, seed volume or plugin
+  clone of our own (D147, which replaces the `agents:sync` volume of D143
+  and of its amendments D144 and D145). The one list, with its install and
+  refresh steps, is `docs/standard/agent-plugins`. The shared skills folder
+  is a real `~/.agents/skills`, which Codex and OpenCode read and Claude
+  Code reads through a link (D145). Open: how the Antigravity CLI's
+  plugins come back in a new container (D147).
+- **Updates.** The agent CLIs and their plugins have no pins: they come at
+  the latest release on every image build and every
+  `mise run agents:refresh`, and each build records the versions it got
+  (D152).
+- **Logins with no typing (D155).** The `agent-secrets` service (a user
+  service in `mise.pc.toml` on the PC, a container on the Mac) reads the
+  Doppler project `agent-containers` and writes, for each registered
+  container, a one-hour installation token of the `ray-manaloto-agents`
+  GitHub App narrowed to that container's repository, and Claude Code's
+  key, into a folder mounted read-only at `/run/agent-secrets`. GitHub,
+  git, Claude Code and OpenCode then need no login. `mise run
+  agents:app-create` made the App and `mise run agents:pc-doppler` the
+  Doppler token. This supersedes D151's Claude Code login and D153's
+  per-container `gh auth login`.
+- **Subscriptions, not API keys (D151, D155).** Codex keeps a device login
+  per project per machine on that project's volume, never a copied
+  `auth.json`. The Antigravity CLI keeps the owner's Google login, which
+  the owner makes in their own terminal with `mise run agents:agy-login`;
+  no agent runs `agy` (AGENTS.md).
+- **OpenCode** uses a free OpenCode model with no login, now
+  `opencode/deepseek-v4.1-flash-free` (D154).
+- **Accepted risks (D155).** Container agents can push and open pull
+  requests on every repository the App is installed on, as the owner's
+  login can on the Mac, and any process in a container can copy the
+  long-lived `CLAUDE_CODE_OAUTH_TOKEN`.
 
 ### Settled questions
 
@@ -1270,7 +1387,7 @@ cut-order item early.
 | Mac GCC | Built from source with the Darwin patch; GCC runs in all three environments. | D26, D33 |
 | Linux LLVM | apt.llvm.org in the base image; minor bumps merge without review when the capability lock is unchanged. | D27, D45, D50 |
 | Runner fence | Code not yet on `main` runs on hosted runners and in the dev VM; a job-start hook in each runner image refuses everything but `main`'s allowlisted workflows. | D28, D48, D51, D58 |
-| Agents in the VM | Provisional, not settled: planned (D17), closes at M0 (a), which is pending; they reach Linux only through hosted runs. | D29, D70 |
+| Agents in the VM | Provisional, not settled: planned (D17), closes at M0 (a), which is pending; they reach Linux only through hosted runs. Agents also run in project containers on the PC and the Mac (§12). | D29, D70, D143, D155 |
 | p2996 | Built by the hash-keyed builder on every platform, with daily checks. | D30, D32, D49 |
 | Renovate | Daily; merges under the §7 merge rule. | D31, D50, D61, D128 |
 | Performance | The metrics table is the standard; only instruction counts are in Level 1. | D35, D46 |
@@ -1450,10 +1567,12 @@ otherwise. Each names the section it relates to and the deciding decision.
   two least-proven items on the path to 2026-11-27.
 - **Publishing the Mac golden image to GHCR** (§3, D49). Its only consumer
   is the Mac, and pushing it needs a token there or a multi-GB transfer.
-- **Trust roots under code-owner review from M1a** (§6, D108). Before M2 no
-  self-hosted runner exists; the owner reads the trust-root history once at
-  M2 entry instead.
-- **A required check that the agent's commit review happened** (§6, D101,
+- **Trust roots under code-owner review, from M1a or from M2** (§6, D108,
+  D149). Before M2 no self-hosted runner exists; at the M0-Linux exit
+  review the owner dropped the M2 review as well, so that the owner is
+  never a bottleneck, and accepted the risk (D149).
+- **A required check that the agent's commit review happened** (moot
+  since D149 ended the commit review; §6, D101,
   D120). The agent that writes a commit could also write its review record.
 - **The inputs hash as the release's prerelease part** (`16.2.0-h.<hex>`)
   (§2, D89). Hash order is random, so a newer build could sort below an
@@ -1474,9 +1593,9 @@ otherwise. Each names the section it relates to and the deciding decision.
 | The fence depends on the runner hook and image being intact | accepted | M2 entry-gate negative tests; images rebuilt only from `main` | Read-only root-owned hook; worker killed on refusal; images built from attested tools tags | D58 |
 | The hook can't call the API (no token) | limit | actions/runner#2813 | It checks event, ref, workflow and repository only; each self-hosted workflow's SHA check covers a dispatch with a PR SHA | D58, D122 |
 | Agent-edited workflows run before merge | accepted | a same-repo PR changes `.github/**` | Before merge they can't reach the PC or Mac (D58) or produce anything `main` trusts (D59). They can still touch PR artifacts, caches and `pr-` images, fake a green PR result, overwrite a `main` GHCR tag (refused by `image:verify`) or delete a release (a `salt` bump recovers it) | D54, D60, D72, D134 |
-| An agent PR changes an allowlisted self-hosted workflow, and its code runs on the PC and Mac | mitigated | a PR changes `post-merge.yml`, `mac-gate.yml` or `runner/**` | Trust roots under code-owner review from M2 entry (D108); changes merged before M2 are read once at M2 entry (D131) | D48, D53, D101, D108 |
-| An agent PR weakens a probe and regenerates the capability lock to match | mitigated | a PR changes `cmake/probes.cmake` and `cmake/capabilities.lock.json` together | `gate:policy` fails on a removed capability without a `gate-removals.toml` entry, a trust root from M2 (D108, D115); a PR that also weakens the checker shows in the post-merge run and the digest | D42, D115, D134 |
-| Before M2, a merged agent PR can change what `publish.yml` publishes | accepted | a PR changes `publish.yml` or a build input | `toolchain:fetch` verifies the `publish.yml` attestation everywhere, so a hand-published release is refused (D116); `publish.yml` itself is gated from M2 (D108) | D108, D111, D116 |
+| An agent PR changes an allowlisted self-hosted workflow, and its code runs on the PC and Mac | accepted | a PR changes `post-merge.yml`, `mac-gate.yml` or `runner/**` | It merges on the required checks with no human look before merge (D149); the owner looks after merge, changes merged before M2 are read once at M2 entry (D131), and the one-VM-per-job fence contains what a job runs (D65) | D48, D53, D101, D149 |
+| An agent PR weakens a probe and regenerates the capability lock to match | mitigated | a PR changes `cmake/probes.cmake` and `cmake/capabilities.lock.json` together | `gate:policy` fails on a removed capability without a `gate-removals.toml` entry, a trust root (D115); a PR that also weakens the checker shows in the post-merge run and the digest | D42, D115, D134 |
+| A merged agent PR can change what `publish.yml` publishes | accepted | a PR changes `publish.yml` or a build input | `toolchain:fetch` verifies the `publish.yml` attestation everywhere, so a hand-published release is refused (D116); `publish.yml` itself merges on the required checks like every file, also from M2 (D149) | D111, D116, D149 |
 | A disabled required workflow goes unnoticed | mitigated | a workflow is disabled | From M1a PR 6, the agent App has no `actions: write` (D134); the daily settings check fails on a disabled workflow | D60, D71, D134 |
 | packslip's `--identity` doesn't pin the `publish.yml` ref | unproven | M2 entry gate (M0 (i) proved it for `builder.yml`) | Keep the M1a attestation verify (D116) as the toolchain trust check | D72, D114, D121 |
 | A PR job's toolchain cache is evicted | limit | `actions/cache` miss | The fetch rule (§2 step 5) falls back to a rebuild, which fails only past the 3-hour `artifact-check` timeout | D72, D83 |
@@ -1488,7 +1607,7 @@ otherwise. Each names the section it relates to and the deciding decision.
 | sccache does not reliably cache clang module compiles | limit | mozilla/sccache#2650 is open | Module compiles are treated as uncached, and the gate's clean build does not rely on sccache (§4) | D9, D124 |
 | The dev VM's CPU features differ from the Mac host's | accepted | `caps:update` in the VM gives a different capability lock than the post-merge run | The capability lock diff is in the PR, and the post-merge run on the Mac runner is the backstop (D101: no approval gate) | D78, D101 |
 | The PC runner and its stack cost more than they return before 2026-11-27 | scale | M2 entry gate slips | The PC runner is cut before Mac GCC; amd64 keeps running on hosted runners | D77 |
-| The packslip and attestation trust rests on GitHub's OIDC identity for `publish.yml` on `main` | accepted | a `main` compromise or a change to GitHub's OIDC claims | The ruleset, required checks and merge queue protect `main`; `publish.yml` runs no repository code and is a trust root from M2 | D59, D108, D114 |
+| The packslip and attestation trust rests on GitHub's OIDC identity for `publish.yml` on `main` | accepted | a `main` compromise or a change to GitHub's OIDC claims | The ruleset, required checks and merge queue protect `main`; `publish.yml` runs no repository code and is a trust root, merged on the required checks (D149) | D59, D114, D149 |
 | The PC runner App's key leaks from a host | accepted | a host is compromised | The App can only register runners, so it cannot change rulesets (D117); never in a VM; M2 does not start with the Administration-write PAT | D65, D117 |
 | gha-outrunner is young (v1.2.0, 7 stars on 2026-11-12), and its libvirt runner runs as root inside the VM | dependency | M2 entry gate | Vendor or fork it if it stalls; root inside a one-job VM is contained by the VM; incuse and runscaler are the fallbacks | D65 |
 | VM boot adds about 25-60 seconds per self-hosted job (estimate, unmeasured until M2) | limit | every self-hosted job | Only `main` jobs use self-hosted runners | D65 |
@@ -1513,7 +1632,7 @@ queue. This section lists files and their purpose, not their contents; a
 schema or pseudocode is shown only where it settles a decision. Where a
 row's file contents are not given (a data schema, a module API, a test
 runner), the PR that adds the file defines them in its description, and its
-tests and commit review check them (D134, D135). Owned roots are marked
+tests check them (D134, D135; the commit review ended with D149). Owned roots are marked
 **(O)**. Pins, which `pins:validate` checks, are marked **(P)** (D51).
 
 ### GitHub and host setup (steps 1-8 before M1a, steps 9-10 in M1a PR 6)
@@ -1567,7 +1686,7 @@ history. So nothing unscrubbed is ever pushed.
 6. **The agent App** (D40, D52, D71), through GitHub's App-manifest flow
    (`docs/runbooks/agent-app.md`).
    - **First, CODEOWNERS (D100),** by a PR from the owner's login, allowed
-     because code-owner review is off until M2 (§6 Trust roots). It is in
+     because code-owner review is off (D101, D149; §6 Trust roots). It is in
      place when `gh api repos/{repo}/codeowners/errors` reports no errors.
      M1a PR 6 replaces it with the trust roots (D108).
    - **Manifest:** contents, pull_requests, workflows and actions write,
@@ -1769,8 +1888,8 @@ is green, or cut at its §10 cut date.
 | `gate-items.toml` **(O)** | PR 4, new | The Level 1 gate checklist: each item, its environment and the preset or check that proves it. `post-merge.yml` ticks it, `review:digest` shows it (D119). |
 | `.github/owned-roots.txt` **(O)** | PR 6, new | The §6 owned-roots globs, one per line. Documentation only (D101, D134). |
 | `.github/workflows/post-merge.yml` **(O)** | PR 4, new | Runs `mise run ci` and the must-fail fixtures for each M1a preset and uploads the results JSON that ticks `gate-items.toml` (D119). Triggers: `push` to `main` (from M2 only for commits whose artifact tags, from `artifact:tag`, already exist), a schedule, and, from M2, `workflow_dispatch` from `publish.yml` (D112). Hosted runners until M2, then the PC for heavy Linux jobs. A trust root (D108). |
-| `.github/CODEOWNERS` **(O)** | PR 6, change | The owner on the §6 trust roots only (D108). First version in setup step 6 (D100); M1a PR 6 replaces it with the trust roots. `main` requires code-owner review for it from M2. |
-| `.github/rulesets/main.json` **(O)** + `.mise/tasks/repo/rulesets` **(O)** | PR 6, change | The rulesets as files. `repo:rulesets --phase bootstrap\|m1a\|m1b\|m2` applies them through `gh api`; today the task accepts only `bootstrap` and `m1a`, and PR 6 adds `m1b` and `m2`. `--verify --phase <p>` checks the §6 list for that phase: `bootstrap` skips the required-check list and the M1b and M2 settings, `m1a` adds the required checks, `m1b` adds immutable releases and the tag ruleset, `m2` adds code-owner review (D108). It checks that protections are present, never that one is absent. `--verify` runs on `GITHUB_TOKEN`, so PR 6 removes its two reads that need more: the bypass list and the org-admin count (`orgs/<org>/members?role=admin`). The owner-run `--apply` keeps the org-admin count check (D109, D135). First version in setup step 3 (D53, D60, D63, D97). |
+| `.github/CODEOWNERS` **(O)** | PR 6, change | The owner on the §6 trust roots only (D108). First version in setup step 6 (D100); M1a PR 6 replaces it with the trust roots. No ruleset requires code-owner review, from M2 either; the file is documentation (D149). |
+| `.github/rulesets/main.json` **(O)** + `.mise/tasks/repo/rulesets` **(O)** | PR 6, change | The rulesets as files. `repo:rulesets --phase bootstrap\|m1a\|m1b\|m2` applies them through `gh api`; today the task accepts only `bootstrap` and `m1a`, and PR 6 adds `m1b` and `m2`. `--verify --phase <p>` checks the §6 list for that phase: `bootstrap` skips the required-check list and the M1b and M2 settings, `m1a` adds the required checks, `m1b` adds immutable releases and the tag ruleset, `m2` adds no code-owner review (D149). It checks that protections are present, never that one is absent. `--verify` runs on `GITHUB_TOKEN`, so PR 6 removes its two reads that need more: the bypass list and the org-admin count (`orgs/<org>/members?role=admin`). The owner-run `--apply` keeps the org-admin count check (D109, D135). First version in setup step 3 (D53, D60, D63, D97). |
 | `.github/workflows/repo-verify.yml` **(O)** | PR 6, new | Runs `repo:rulesets --verify --phase <current>` daily and on `workflow_dispatch` with `GITHUB_TOKEN` (D109). The current phase is a literal in this file; the M1b and M2 PRs that apply those phases bump it (D135). A trust root (D108). |
 | `gate-removals.toml` **(O)** | PR 6, new | One entry per removal of a capability-lock capability, a must-fail fixture or `expected.toml` row, a `required_flags` item or a `forbidden_markers` item: what, environment, reason, link. `gate:policy` fails on a removal without one (D115). A trust root (D108). |
 | `docs/standard/compilers.md`, `build.md`, `checks.md` | PR 6, new | `compilers.md`: the §1 tables and roles. `build.md`: presets, probes, the capability lock, triplets, sccache, and the `// clang-format off` rule around splices (D103). `checks.md`: tiers, coverage, the gate policy and fixtures. |
@@ -1854,7 +1973,7 @@ salt = 0                        # bumped only to republish a deleted release (D7
 
 | File | What and why |
 |---|---|
-| `spikes/m2/README.md` | The M2 entry gate (§10, D77): the runner-hook negative tests, one positive test (a `main` `builder.yml` job is accepted), the gha-outrunner one-job VM test, the PC runner App registering runners in place of the PAT (D117), `packslip install --identity` for `publish.yml` and the merge-group `run-id` leg (D111, D114), `repo:rulesets --phase m2` applied with `repo-verify` green at `m2` (D108), the M2 trust design, written from `docs/designs/level-1/m2-trust-backlog.md`, reviewed (D134), and agents running in the dev VM or as a separate macOS user, with no read access to the host keys and profiles (D127). M2 starts only when all of these pass. |
+| `spikes/m2/README.md` | The M2 entry gate (§10, D77): the runner-hook negative tests, one positive test (a `main` `builder.yml` job is accepted), the gha-outrunner one-job VM test, the PC runner App registering runners in place of the PAT (D117), `packslip install --identity` for `publish.yml` and the merge-group `run-id` leg (D111, D114), `repo:rulesets --phase m2` applied with `repo-verify` green at `m2` (D135), the M2 trust design, written from `docs/designs/level-1/m2-trust-backlog.md`, reviewed (D134), and agents running in the dev VM or as a separate macOS user, with no read access to the host keys and profiles (D127). M2 starts only when all of these pass. |
 | `.github/workflows/builder.yml` **(O)** | Adds amd64 images and toolchains. |
 | `runner/hook/job-started.sh` **(O)** | The D58 job-start hook, baked read-only into every runner image. |
 | `runner/pc/outrunner.yaml` **(O)** | gha-outrunner configuration for the PC: libvirt provisioner, the golden qcow2 image under a stable alias, labels, `max_runners: 2`. It registers runners with the PC runner App's credential, not a PAT (D117). gha-outrunner reads only a PAT today (`main.go:115`), so the M2 gate proves App credentials work, through gha-outrunner or `actions/scaleset`; if neither accepts them, M2 waits and the owner decides (D117). The systemd unit passes the credential with `LoadCredentialEncrypted=github-token:<path>`, and gha-outrunner reads `$CREDENTIALS_DIRECTORY/github-token` itself, with no wrapper (`config.go:150-170`) (D65, D96). |
@@ -1899,7 +2018,10 @@ salt = 0                        # bumped only to republish a deleted release (D7
   reports. They were scrubbed in setup step 2 (Q1, D97).
 - dotfiles retires its C++ parts (D18), drops the runner PAT reference and
   host credentials (D65), and installs Tart. This is the owner's setup
-  agent's work, outside this plan.
+  agent's work, outside this plan. Since D139 and D150 the machines' setup
+  itself moves into cpp-standard, step by step, by
+  [machine-bootstrap-migration.md](level-1/machine-bootstrap-migration.md)
+  (§11).
 - Optional, owner's call: jouet's enforced rules in `/etc/jouet/rules`, which
   needs root (D64).
 

@@ -1,7 +1,10 @@
 # cpp-standard: the C++ environment and project standard (Level 1)
 
 *   **Author:** ray-manaloto
-*   **Status:** Draft
+*   **Status:** Superseded by [environment-standard.md](../environment-standard.md)
+    (2026-11-18). This is the 2026-11-13 working draft, kept as the record of
+    the egm-draft step; it is not maintained, and where it differs from the
+    design, the design wins.
 *   **Date:** 2026-11-13
 
 --------------------------------------------------------------------------------
