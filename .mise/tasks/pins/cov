@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#MISE description="Run pins:validate's three parts under coverage; fail below python/pins' floor (#185)"
+set -euo pipefail
+# A git hook exports GIT_DIR, GIT_INDEX_FILE and the rest; the checks' scratch `git init`, `commit` and `worktree add`
+# would then write into this repository (its config, index and branches) instead of their own folders.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+cd "$root"
+data="$(mktemp -d)"
+trap 'rm -rf "$data"' EXIT
+export COVERAGE_FILE="$data/.coverage"
+rc=python/pins/pyproject.toml
+cov=(uv run --no-project --quiet --with coverage==7.17.3 python -I -m coverage)
+# The same parts as .mise/tasks/pins/validate, which stays dependency-free for CI's bare python3.
+"${cov[@]}" run --rcfile="$rc" python/pins/pins.py validate --root "$root" >/dev/null
+"${cov[@]}" run --rcfile="$rc" python/pins/pins.py vectors pins tests/pins_validate/vectors.toml >/dev/null
+"${cov[@]}" run --rcfile="$rc" python/pins/pins.py vectors tags tests/artifact_tag/vectors.toml >/dev/null
+"${cov[@]}" combine --rcfile="$rc" --quiet "$data"
+exec "${cov[@]}" report --rcfile="$rc"
