@@ -10,7 +10,7 @@
 # App token for this repository only and keeps it fresh, beside CLAUDE_CODE_OAUTH_TOKEN, in
 # ~/.local/state/agent-secrets/<container>/ on the PC, mounted read-only at /run/agent-secrets. git and gh read the
 # token at each use; shells read Claude Code's key at each start. Commits are the App bot's. The Antigravity CLI and
-# Codex each keep the owner's own login on their volume, made once per container by the owner (D151); no agent ever
+# Codex each keep the owner's own login on their volumes, made once per project on this machine by the owner (D151); no agent ever
 # runs agy (AGENTS.md). Enter the container with:
 #   ssh -t pc docker exec -it <project>-agents bash -l
 set -euo pipefail
@@ -65,6 +65,6 @@ fi
 docker exec "$name" git config --global user.name "$bot_name"
 docker exec "$name" git config --global user.email "$bot_email"
 docker ps --filter "name=^${name}$" --format '{{.Names}} {{.Status}} {{.Image}}'
-echo "agents:up: Claude Code, OpenCode, git and gh need no login. Once per container, the owner types these themselves:"
+echo "agents:up: Claude Code, OpenCode, git and gh need no login. Once per project on this machine (the logins stay on its volumes), the owner types:"
 echo "  ssh -t pc docker exec -it $name bash -lc 'codex login --device-auth'"
 echo "  ssh -t pc docker exec -it $name bash -l   (then run agy and sign in with Google; no agent may run agy)"
