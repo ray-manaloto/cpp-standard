@@ -26,6 +26,10 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+# The repositories belong to this organization, and a private App installs only on its owner, so the App
+# is created under the organization, not the signed-in user.
+ORG = "ray-manaloto"
+
 NAME = os.environ.get("usage_name") or "ray-manaloto-agents"
 KEY_NAME, ID_NAME = "AGENTS_APP_PRIVATE_KEY", "AGENTS_APP_CLIENT_ID"
 HOME = os.path.expanduser("~")
@@ -110,8 +114,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 },
                 "default_events": [],
             }
-            action = "https://github.com/settings/apps/new?state=" + urllib.parse.quote(
-                state
+            action = (
+                f"https://github.com/organizations/{ORG}/settings/apps/new?state="
+                + urllib.parse.quote(state)
             )
             self.reply(
                 200,
@@ -192,11 +197,11 @@ print(
     f"agents:app-create: App {result['slug']} created, client ID {result['client_id']}"
 )
 
-# Wait for the owner's Install click; /user/installations lists the Apps installed on the owner's account.
+# Wait for the owner's Install click; /orgs/{ORG}/installations lists the Apps installed on the org.
 for _ in range(120):
     jq = f'.installations[] | select(.app_slug == "{result["slug"]}") | .repository_selection'
     out = subprocess.run(
-        ["gh", "api", "/user/installations", "--paginate", "--jq", jq],
+        ["gh", "api", f"/orgs/{ORG}/installations", "--paginate", "--jq", jq],
         capture_output=True,
         text=True,
         check=False,
