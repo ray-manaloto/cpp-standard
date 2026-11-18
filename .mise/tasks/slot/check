@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-#MISE description="Exit 0 when this caller holds a live slot grant, and the 5-minute load is under the start line: 9 here, 0.75 x cores on the PC when DOCKER_HOST or DOCKER_CONTEXT points there (#179)"
+#MISE description="Exit 0 when this caller holds the live slot grant of a host and its 5-minute load is under the start line: slot:check [--host mac|pc]; 9 on the Mac, 0.75 x cores on the PC; without --host, pc when DOCKER_HOST or DOCKER_CONTEXT points there (#179, #194)"
 #
 # python/agents/slot.py (standard library only) has the record format, the holder rule and the exit codes.
-# It is an accident guard, not a security boundary: any local process can write the grant file.
+# It is an accident guard, not a security boundary: any local process can write the grant files.
 set -euo pipefail
 root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 exec uv run --no-project --quiet python -I -u "$root/python/agents/slot.py" check "$@"

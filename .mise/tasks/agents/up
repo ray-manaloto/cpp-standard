@@ -22,10 +22,11 @@
 set -euo pipefail
 project="${usage_project:?}"
 host="${usage_host:-pc}"
-# #179: container work an agent starts needs the coordinator's slot grant, and never the PC until credential isolation.
+# #179, #194: container work an agent starts needs the coordinator's slot grant for the host it runs on.
 [[ -z "${CLAUDECODE:-}${CODEX_THREAD_ID:-}" ]] || {
+  if [[ "$host" == mac ]]; then slot_host=mac; else slot_host=pc; fi
   [[ "$host" == mac ]] || export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"
-  mise run -q slot:check
+  mise run -q slot:check --host "$slot_host"
 }
 name="${project}-agents"
 image="${usage_image:-cpp-standard-agents:dev}"

@@ -32,8 +32,8 @@ docker volume inspect "$vol" >/dev/null 2>&1 || {
   echo "ubuntu:arm64: no p2996 volume $vol: build it (playbook, Appendix: p2996 build)" >&2
   exit 2
 }
-# #179: container work an agent starts needs the coordinator's slot grant, and never the PC until credential isolation.
-[[ -z "${CLAUDECODE:-}${CODEX_THREAD_ID:-}" ]] || mise run -q slot:check
+# #179, #194: container work an agent starts needs the coordinator's slot grant; this job always runs on the Mac.
+[[ -z "${CLAUDECODE:-}${CODEX_THREAD_ID:-}" ]] || mise run -q slot:check --host mac
 run=(docker run --rm --privileged --platform linux/arm64 --label org.cpp-standard.cert=1
   -v "$vol:/opt/p2996:ro" -e P2996=/opt/p2996 -e MISE_AUTO_INSTALL=0 -v "${MISE_ORIGINAL_CWD:-$PWD}:/work" -w /work)
 

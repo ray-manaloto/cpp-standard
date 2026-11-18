@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-#MISE description="Clear the heavy-slot grant if it has expired; the coordinator's check-in runs it (#179)"
+#MISE description="Clear each host's heavy-slot grant that has expired; the coordinator's check-in runs it (#179, #194)"
 #
 # python/agents/slot.py (standard library only) has the record format, the holder rule and the exit codes.
-# It is an accident guard, not a security boundary: any local process can write the grant file.
+# It is an accident guard, not a security boundary: any local process can write the grant files.
 set -euo pipefail
 root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 exec uv run --no-project --quiet python -I -u "$root/python/agents/slot.py" clear-expired "$@"

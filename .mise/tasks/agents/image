@@ -18,8 +18,9 @@ git -C "$root" branch -r --contains "$ref" | grep -q . || {
   exit 2
 }
 if [[ "${usage_host:-pc}" == mac ]]; then unset DOCKER_HOST; else export DOCKER_HOST="${DOCKER_HOST:-ssh://pc}"; fi
-# #179: container work an agent starts needs the coordinator's slot grant, and never the PC until credential isolation.
-[[ -z "${CLAUDECODE:-}${CODEX_THREAD_ID:-}" ]] || mise run -q slot:check
+# #179, #194: container work an agent starts needs the coordinator's slot grant for the host it runs on.
+if [[ "${usage_host:-pc}" == mac ]]; then slot_host=mac; else slot_host=pc; fi
+[[ -z "${CLAUDECODE:-}${CODEX_THREAD_ID:-}" ]] || mise run -q slot:check --host "$slot_host"
 docker build --progress=plain --build-arg "CPP_STANDARD_REF=$ref" --build-arg "AGENTS_CACHE_BUST=$(date +%s)" -t "$tag" \
   -f "$root/docs/standard/agents.Dockerfile" "$root/docs/standard"
 docker run --rm "$tag" cat /home/dev/.agent-versions

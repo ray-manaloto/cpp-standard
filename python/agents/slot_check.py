@@ -63,33 +63,112 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
     # A folder with docker but no ssh (main makes it): the hook must block when it cannot resolve a host.
     no_ssh = str(Path(env["XDG_STATE_HOME"]).parent / "bin-no-ssh")
 
-    def granted(minutes: str = "30") -> None:
-        slot(env, "release", "--holder", "t1")
-        slot(env, "clear-expired")
-        slot(env, "grant", "cpp-standard", "t1", "--minutes", minutes)
+    records = Path(env["XDG_STATE_HOME"]) / "slots"
+    mac_record, pc_record = records / "grant.json", records / "grant-pc.json"
+
+    def clear() -> None:
+        """No grant on either host."""
+        mac_record.unlink(missing_ok=True)
+        pc_record.unlink(missing_ok=True)
+
+    def granted(minutes: str = "30", host: str = "mac", holder: str = "t1") -> None:
+        """Only this grant, on this host."""
+        clear()
+        also(host, holder, minutes)
+
+    def also(host: str, holder: str = "t1", minutes: str = "30") -> int:
+        """One more grant beside what is held."""
+        return slot(
+            env, "grant", "cpp-standard", holder, "--minutes", minutes, "--host", host
+        ).returncode
 
     def grant_cycle() -> bool:
+        clear()
         first = slot(env, "grant", "cpp-standard", "t1").returncode
         second = slot(env, "grant", "cpp-standard", "t2").returncode
         released = slot(me, "release").returncode
-        record = Path(env["XDG_STATE_HOME"]) / "slots" / "grant.json"
-        return (first, second, released) == (0, 1, 0) and not record.exists()
+        return (first, second, released) == (0, 1, 0) and not mac_record.exists()
 
     def refused(
-        run_env: dict[str, str], words: str, setup: Callable[[], None] | None = None
+        run_env: dict[str, str],
+        words: str,
+        setup: Callable[[], None] | None = None,
+        *args: str,
     ) -> bool:
-        slot(env, "release", "--holder", "t1")
+        clear()
         if setup:
             setup()
-        done = slot(run_env, "check")
+        done = slot(run_env, "check", *args)
         return done.returncode == 1 and words in done.stderr
+
+    def two_holders(first: str, second: str) -> bool:
+        """One holder on each host, each passing its own check and refused on the other's."""
+        clear()
+        made = (also(first, "t1"), also(second, "t2"))
+        passes = [
+            slot(run_env, "check", "--host", host).returncode
+            for run_env, host in ((me, first), (other, second), (me, second))
+        ]
+        return made == (0, 0) and passes == [0, 0, 1]
+
+    def blocked(run_env: dict[str, str], command: str, *words: str) -> bool:
+        code, err = hook(run_env, command)
+        return code == 2 and all(word in err for word in words)
+
+    def clears_both() -> bool:
+        clear()
+        also("mac", "t1", "0")
+        also("pc", "t2", "0")
+        out = slot(env, "clear-expired").stdout
+        return (
+            "t1's expired mac grant" in out
+            and "t2's expired pc grant" in out
+            and not mac_record.exists()
+            and not pc_record.exists()
+        )
+
+    def release_pc_only() -> bool:
+        clear()
+        also("mac")
+        also("pc")
+        done = slot(me, "release", "--host", "pc").returncode
+        return done == 0 and mac_record.exists() and not pc_record.exists()
+
+    def release_names_other() -> bool:
+        """A bare release by the PC's holder must not read as done while the pc grant stays held."""
+        granted(host="pc")
+        done = slot(me, "release")
+        return (
+            done.returncode == 1 and "--host pc" in done.stderr and pc_record.exists()
+        )
+
+    def old_record() -> bool:
+        """A record written before #194 has no host and sits in grant.json: it is the Mac's grant."""
+        clear()
+        records.mkdir(parents=True, exist_ok=True)
+        mac_record.write_text(
+            json.dumps(
+                {
+                    "lane": "cpp-standard",
+                    "holder": "t1",
+                    "granted_at": "2026-11-18T00:00:00Z",
+                    "expires_at": "2999-01-01T00:00:00Z",
+                }
+            )
+        )
+        mac = slot(me, "check").returncode
+        on_pc = slot(me, "check", "--host", "pc")
+        return (mac, on_pc.returncode) == (
+            0,
+            1,
+        ) and "holds only the mac grant" in on_pc.stderr
 
     # The Mac's line at 0: a PC case that passes was measured against the PC's load, not this machine's.
     mac_busy = me | {"SLOT_LOAD_LINE": "0"}
 
     def pc(command: str, extra: dict[str, str] | None = None, words: str = "") -> bool:
-        """The hook on PC work with a grant: allowed when words is empty, else blocked with words in the reason."""
-        granted()
+        """The hook on PC work with the pc grant: allowed when words is empty, else blocked with words in the reason."""
+        granted(host="pc")
         code, err = hook(mac_busy | (extra or {}), command)
         return (code, words in err) == (2, True) if words else code == 0
 
@@ -150,7 +229,7 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         (
             "hook: env DOCKER_HOST at the PC, no grant: blocked",
             lambda: (
-                slot(env, "release", "--holder", "t1"),
+                clear(),
                 "chief-of-staff"
                 in hook(me | {"DOCKER_HOST": "ssh://pc"}, "docker run x")[1],
             )[1],
@@ -171,7 +250,89 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         ),
         (
             "hook: local and PC work in one command: the Mac's load checked too",
-            lambda: pc("docker run a && ssh pc docker run b", words="5-minute load is"),
+            lambda: (
+                granted(host="pc"),
+                also("mac"),
+                blocked(
+                    mac_busy, "docker run a && ssh pc docker run b", "5-minute load is"
+                ),
+            )[2],
+        ),
+        (
+            "hook: local and PC work in one command with only the pc grant: blocked, naming the mac grant",
+            lambda: pc(
+                "docker run a && ssh pc docker run b", words="no mac slot grant"
+            ),
+        ),
+        (
+            "a mac grant and a pc grant, two holders: both held, each for its own host",
+            lambda: two_holders("mac", "pc"),
+        ),
+        (
+            "a pc grant and a mac grant, the holders swapped: both held",
+            lambda: two_holders("pc", "mac"),
+        ),
+        (
+            "hook: PC work with only the mac grant: blocked, naming the pc grant",
+            lambda: (
+                granted(),
+                blocked(
+                    me,
+                    "ssh pc 'docker run --rm x'",
+                    "no pc slot grant",
+                    "t1 holds only the mac grant",
+                ),
+            )[1],
+        ),
+        (
+            "hook: Mac work with only the pc grant: blocked, naming the mac grant",
+            lambda: (
+                granted(host="pc"),
+                blocked(
+                    me,
+                    "docker run --rm alpine true",
+                    "no mac slot grant",
+                    "t1 holds only the pc grant",
+                ),
+            )[1],
+        ),
+        (
+            "hook: PC work, the pc grant is another holder's: blocked, naming both",
+            lambda: (
+                granted(host="pc", holder="t2"),
+                also("mac"),
+                blocked(
+                    me,
+                    "DOCKER_HOST=ssh://pc docker run x",
+                    "the pc slot is granted to t2, not t1",
+                    "holds only the mac grant",
+                ),
+            )[2],
+        ),
+        ("clear-expired clears an expired grant on each host", clears_both),
+        ("release --host pc leaves the mac grant", release_pc_only),
+        (
+            "release without --host by the PC's holder: refused, naming --host pc",
+            release_names_other,
+        ),
+        ("a record from before the per-host grants: the mac grant", old_record),
+        (
+            "check --host pc with no DOCKER_HOST: the pc grant and the PC's load",
+            lambda: (
+                granted(host="pc"),
+                "the PC's (16 cores) load 1.0 < 12"
+                in slot(mac_busy, "check", "--host", "pc").stdout,
+            )[1],
+        ),
+        (
+            "check --host mac with DOCKER_HOST at the PC: the flag wins",
+            lambda: refused(
+                me | {"DOCKER_HOST": "ssh://pc"},
+                "no mac slot grant",
+                lambda: granted(host="pc"),
+                "--host",
+                "mac",
+            ),
         ),
         (
             "hook: ssh missing, so the target is unknown: blocked",
@@ -199,7 +360,7 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         (
             "task check with DOCKER_HOST at the PC: the PC's load",
             lambda: (
-                granted(),
+                granted(host="pc"),
                 "the PC's (16 cores) load 1.0 < 12"
                 in slot(mac_busy | {"DOCKER_HOST": "ssh://pc"}, "check").stdout,
             )[1],
@@ -207,7 +368,7 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         (
             "hook: docker run with no grant: blocked",
             lambda: (
-                slot(env, "release", "--holder", "t1"),
+                clear(),
                 hook(me, "docker run --rm alpine true")[0] == 2,
             )[1],
         ),
