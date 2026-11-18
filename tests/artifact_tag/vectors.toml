@@ -92,6 +92,32 @@ cmake -G Ninja ../llvm
 --- a/m
 +++ b/m
 '''
+"runner/pc/cloud-init.yaml" = '''
+#cloud-config
+runcmd: []
+'''
+"runner/pc/image.pkr.hcl" = '''
+source "qemu" "runner" {}
+'''
+"runner/hook/job-started.sh" = '''
+#!/usr/bin/env bash
+exit 0
+'''
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+".mise/tasks/vm/golden" = '''
+#!/usr/bin/env bash
+echo golden
+'''
 "vm/inputs.toml" = '''
 image = "ghcr.io/cirruslabs/macos-golden-gate-xcode:27.2"
 digest = "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
@@ -669,17 +695,290 @@ name = "a macOS toolchain for amd64"
 artifact = "p2996-macos-amd64"
 tag = "error: macOS toolchains are built for arm64 only"
 
-# --- kinds whose recipe the design leaves open (ticket #127 hand-back) ---
+# --- runner image (PC qcow2): the tools-amd64 tag, runner/pc/**, the job-started hook,
+# image/runner.inputs.toml and artifact/build (D164) ---
 
 [[vector]]
-name = "runner-pc waits for the design"
+name = "runner-pc"
 artifact = "runner-pc"
-tag = "error: runner-pc: the actions/runner version input has no defined file or form in the design (section 2)"
+tag = "runner-pc-d6334611332ac7cd"
 
 [[vector]]
-name = "the Mac golden image waits for the design"
+name = "runner-pc: the tools tag"
+artifact = "runner-pc"
+tag = "runner-pc-bc3603eebb1ea33a"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+"pypi:gcovr" = "8.9"
+'''
+
+[[vector]]
+name = "runner-pc: a runner/pc file"
+artifact = "runner-pc"
+tag = "runner-pc-593ccf950906c6a7"
+
+[vector.change]
+"runner/pc/cloud-init.yaml" = '''
+#cloud-config
+runcmd: [true]
+'''
+
+[[vector]]
+name = "runner-pc: a new runner/pc file"
+artifact = "runner-pc"
+tag = "runner-pc-7ad9d3be1b0607a5"
+
+[vector.change]
+"runner/pc/extra.sh" = '''
+#!/usr/bin/env bash
+'''
+
+[[vector]]
+name = "runner-pc: the job-started hook"
+artifact = "runner-pc"
+tag = "runner-pc-6cb4fb733990c786"
+
+[vector.change]
+"runner/hook/job-started.sh" = '''
+#!/usr/bin/env bash
+exit 1
+'''
+
+[[vector]]
+name = "runner-pc: runner.inputs.toml"
+artifact = "runner-pc"
+tag = "runner-pc-79b8c65f8f4b10ea"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner-pc: artifact/build"
+artifact = "runner-pc"
+tag = "runner-pc-70f393addb870e3d"
+
+[vector.change]
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build v2
+'''
+
+[[vector]]
+name = "runner-pc: Mac inputs are not inputs"
+artifact = "runner-pc"
+same = true
+tag = "runner-pc-d6334611332ac7cd"
+
+[vector.change]
+"vm/inputs.toml" = '''
+image = "other"
+'''
+".mise/tasks/vm/golden" = '''
+#!/usr/bin/env bash
+echo golden v2
+'''
+
+[[vector]]
+name = "runner-pc: an empty runner/pc"
+artifact = "runner-pc"
+remove = ["runner/pc/cloud-init.yaml", "runner/pc/image.pkr.hcl"]
+tag = "error: runner/pc/ has no files in the commit"
+
+[[vector]]
+name = "runner-pc: no runner.inputs.toml"
+artifact = "runner-pc"
+remove = ["image/runner.inputs.toml"]
+tag = "error: input image/runner.inputs.toml is not in commit HEAD"
+
+# --- Mac golden image: vm/inputs.toml, image/base.inputs.toml, tools.toml, the macos-arm64
+# lock slice, vm:golden, the job-started hook, image/runner.inputs.toml and artifact/build
+# (D164) ---
+
+[[vector]]
+name = "golden"
 artifact = "golden"
-tag = "error: golden: the actions/runner version input and the tag name are not defined in the design (section 2)"
+tag = "golden-macos-arm64-007bc13798bebb6b"
+
+[[vector]]
+name = "golden: vm/inputs.toml"
+artifact = "golden"
+tag = "golden-macos-arm64-6cc93282787dea73"
+
+[vector.change]
+"vm/inputs.toml" = '''
+image = "ghcr.io/cirruslabs/macos-golden-gate-xcode:27.2"
+digest = "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+cpu = 6
+memory = 16
+disk = 120
+'''
+
+[[vector]]
+name = "golden: base inputs (the mise pin)"
+artifact = "golden"
+tag = "golden-macos-arm64-8c468c85e8213884"
+
+[vector.change]
+"image/base.inputs.toml" = '''
+image = "ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7"
+mise = "2026.11.10"
+mise_signer = "ps1_0123abcd"
+packslip_image = "ghcr.io/jdx/packslip@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+'''
+
+[[vector]]
+name = "golden: tools.toml"
+artifact = "golden"
+tag = "golden-macos-arm64-310ed5092526d21f"
+
+[vector.change]
+".mise/conf.d/tools.toml" = '''
+[tools]
+cmake = "4.5.0"
+"pypi:gcovr" = "8.8"  # gcovr
+'''
+
+[[vector]]
+name = "golden: the macos-arm64 lock slice"
+artifact = "golden"
+tag = "golden-macos-arm64-4f418d21de01ba7e"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+
+[[vector]]
+name = "golden: vm:golden"
+artifact = "golden"
+tag = "golden-macos-arm64-2485d7839f8ddf0f"
+
+[vector.change]
+".mise/tasks/vm/golden" = '''
+#!/usr/bin/env bash
+echo golden v2
+'''
+
+[[vector]]
+name = "golden: the job-started hook"
+artifact = "golden"
+tag = "golden-macos-arm64-964e1e91b7002a6d"
+
+[vector.change]
+"runner/hook/job-started.sh" = '''
+#!/usr/bin/env bash
+exit 1
+'''
+
+[[vector]]
+name = "golden: runner.inputs.toml"
+artifact = "golden"
+tag = "golden-macos-arm64-d1b6becc981f0213"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "golden: artifact/build"
+artifact = "golden"
+tag = "golden-macos-arm64-3087dbcdea4e3f35"
+
+[vector.change]
+".mise/tasks/artifact/build" = '''
+#!/usr/bin/env bash
+echo build v2
+'''
+
+[[vector]]
+name = "golden: Linux and PC inputs are not inputs"
+artifact = "golden"
+same = true
+tag = "golden-macos-arm64-007bc13798bebb6b"
+
+[vector.change]
+".mise/mise.lock" = '''
+lockfile_version = 4
+
+[[tools.cmake]]
+version = "4.5.0"
+backend = "aqua:Kitware/CMake"
+
+[tools.cmake."platforms.linux-arm64"]
+checksum = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz"
+
+[tools.cmake."platforms.linux-x64"]
+checksum = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+
+[tools.cmake."platforms.macos-arm64"]
+checksum = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz"
+
+[[tools."pypi:gcovr"]]
+version = "8.8"
+backend = "pypi:gcovr"
+uv = { path = "locks/pypi-gcovr/8.8~abc", digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666" }
+'''
+"runner/pc/cloud-init.yaml" = '''
+#cloud-config
+runcmd: [true]
+'''
+"image/base.Dockerfile" = '''
+ARG UBUNTU
+FROM ubuntu@${UBUNTU}
+RUN true
+'''
+
+[[vector]]
+name = "golden: no runner.inputs.toml"
+artifact = "golden"
+remove = ["image/runner.inputs.toml"]
+tag = "error: input image/runner.inputs.toml is not in commit HEAD"
 
 [[vector]]
 name = "tools: a sidecar the lock names but the commit lacks"
@@ -726,4 +1025,50 @@ tag = "p2996-linux-arm64-b2f8eae5aa0987ee"
 '''
 "toolchains/p2996/README.md" = '''
 Not an input.
+'''
+
+# D164: image/runner.inputs.toml is an input of runner-pc and golden only.
+
+[[vector]]
+name = "base: runner.inputs.toml is not an input"
+artifact = "base"
+same = true
+tag = "base-arm64-909497c37754de11"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+'''
+
+[[vector]]
+name = "tools: runner.inputs.toml is not an input"
+artifact = "tools"
+same = true
+tag = "tools-arm64-ed28e447e439914d"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+'''
+
+[[vector]]
+name = "p2996-linux-arm64: runner.inputs.toml is not an input"
+artifact = "p2996-linux-arm64"
+same = true
+tag = "p2996-linux-arm64-b2f8eae5aa0987ee"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
+'''
+
+[[vector]]
+name = "p2996-macos-arm64: runner.inputs.toml is not an input"
+artifact = "p2996-macos-arm64"
+same = true
+tag = "p2996-macos-arm64-b23f8803620f6e20"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.331.0"
 '''

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-#MISE description="Print the artifact tag of base, tools or <toolchain>-<os>-<arch> from git (D90)"
-#USAGE arg "<name>" help="base, tools or <toolchain>-<os>-<arch>, e.g. p2996-linux-arm64 or gcc-macos-macos-arm64"
-#USAGE flag "--arch <arch>" help="Docker arch of base and tools" default="arm64" {
+#MISE description="Print the artifact tag of base, tools, runner-pc, golden or <toolchain>-<os>-<arch> from git (D90, D164)"
+#USAGE arg "<name>" help="base, tools, runner-pc, golden or <toolchain>-<os>-<arch>, e.g. p2996-linux-arm64"
+#USAGE flag "--arch <arch>" help="Docker arch of base and tools (runner-pc is amd64, golden arm64)" default="arm64" {
 #USAGE   choices "arm64" "amd64"
 #USAGE }
 #USAGE flag "--commit <commit>" help="Commit whose files are hashed" default="HEAD"
@@ -9,8 +9,7 @@
 # environment-standard.md section 2: the inputs hash of the files in the hash-input table at
 # the commit, plus the .mise/mise.lock slices; golden vectors in tests/artifact_tag/. It fails
 # while an input file is not in the commit (the Dockerfiles and artifact/build arrive in PR 2,
-# vm/inputs.toml in M3). runner-pc and golden fail: the design does not yet define their
-# actions/runner version input (and the golden tag name).
+# vm/inputs.toml in M3, runner/ and image/runner.inputs.toml in M2).
 set -euo pipefail
 
 # tomllib needs Python 3.11 or later.

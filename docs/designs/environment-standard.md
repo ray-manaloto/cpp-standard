@@ -377,7 +377,7 @@ flowchart LR
   subgraph repo[cpp-standard repo]
     TRUST[trust roots, merged on the required checks<br/>rulesets and checker, publish.yml, builder.yml,<br/>self-hosted workflows, runner,<br/>gate-removals.toml]
     OWN[owned roots, documentation<br/>mise.toml, other mise tasks, fixtures, Dockerfiles,<br/>capability lock, gate policy, hk.pkl and its settings, .jouet]
-    PINS[pins, content-validated<br/>.mise/conf.d/apt.toml, apt-toolchain-host.toml,<br/>apt-sources.toml, tools.toml, lint.toml, .mise/mise.lock, image/base.inputs.toml,<br/>toolchains/*/pins.toml, vm/inputs.toml, canary/pins.toml]
+    PINS[pins, content-validated<br/>.mise/conf.d/apt.toml, apt-toolchain-host.toml,<br/>apt-sources.toml, tools.toml, lint.toml, .mise/mise.lock, image/base.inputs.toml,<br/>image/runner.inputs.toml, toolchains/*/pins.toml, vm/inputs.toml, canary/pins.toml]
     CODE[src, tests, presets, probes]
   end
   subgraph out[published by publish.yml on main]
@@ -453,8 +453,8 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    |---|---|
    | base image | `image/base.Dockerfile`, `image/base.inputs.toml` (Ubuntu digest, exact mise version, packslip signer key id, packslip image digest), `.mise/conf.d/apt.toml`, `.mise/conf.d/apt-toolchain-host.toml` and `.mise/conf.d/apt-sources.toml` (D69, D73, D75, D86, D90) |
    | tools image | the base tag, `image/tools.Dockerfile`, `.mise/conf.d/tools.toml`, the linux-`<arch>` slice of `.mise/mise.lock`, and the `.mise/locks/**` sidecars the slice names (D68, D74, D90) |
-   | runner image (PC qcow2) | the tools tag, `runner/pc/**`, `runner/hook/job-started.sh` and the pinned actions/runner version (D90) |
-   | Mac golden image | `vm/inputs.toml` (Tart base digest and sizes), `image/base.inputs.toml` (the same mise pin), `.mise/conf.d/tools.toml`, the macos-arm64 slice of `.mise/mise.lock`, `.mise/tasks/vm/golden`, `runner/hook/job-started.sh` and the actions/runner version (D68, D74, D86, D90) |
+   | runner image (PC qcow2) | the `tools-amd64` tag, each tracked file under `runner/pc/` (at least one), `runner/hook/job-started.sh` and `image/runner.inputs.toml`, the pinned actions/runner version (D90, D164) |
+   | Mac golden image | `vm/inputs.toml` (Tart base digest and sizes), `image/base.inputs.toml` (the same mise pin), `.mise/conf.d/tools.toml`, the macos-arm64 slice of `.mise/mise.lock`, `.mise/tasks/vm/golden`, `runner/hook/job-started.sh` and `image/runner.inputs.toml`, the pinned actions/runner version (D68, D74, D86, D90, D164) |
    | toolchain, Linux | the shared `toolchains/<name>/pins.toml`, `toolchains/<name>/build.sh`, the Linux patches under `toolchains/<name>/linux/` (D105), `.mise/conf.d/apt-toolchain-host.toml`, `.mise/conf.d/apt-sources.toml`, and the slice `.mise/mise.lock#linux-<arch>:<host_tools>` (D75, D85, D90) |
    | toolchain, macOS | the shared `toolchains/<name>/pins.toml`, `toolchains/<name>/build.sh`, the Mac recipe patches under `toolchains/<name>/macos/`, `vm/inputs.toml`, and the slice `.mise/mise.lock#macos-arm64:<host_tools>` (D85) |
 
@@ -477,8 +477,9 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    slice is one more line: its key is `.mise/mise.lock#<platform>:<tools>` and its
    value is the sha256 of the canonical JSON (sorted keys, no spaces) of the
    lock entries for those tools on that platform (D85). The full tag is the
-   name plus the hash: `base-<arch>-<hash>`, `tools-<arch>-<hash>` and
-   `<toolchain>-<os>-<arch>-<hash>`. Every consumer computes the tag itself,
+   name plus the hash: `base-<arch>-<hash>`, `tools-<arch>-<hash>`,
+   `<toolchain>-<os>-<arch>-<hash>`, `runner-pc-<hash>` (no arch; the PC is
+   amd64) and `golden-macos-arm64-<hash>` (D164). Every consumer computes the tag itself,
    from git; no file records it. Each row lists the files the build reads or
    its Dockerfile COPYs. In addition to those files, every hash covers
    `.mise/tasks/artifact/build`, and a toolchain hash also covers
@@ -653,7 +654,7 @@ The schema in Detailed Implementation shows each fragment's contents.
   only `[bootstrap.packages]`;
 - every name is in `pins-allowlist.toml`;
 - every URL in `.mise/mise.lock`, `apt-sources.toml`, `image/base.inputs.toml`,
-  `vm/inputs.toml`, `toolchains/*/pins.toml` and `canary/pins.toml` comes from
+  `image/runner.inputs.toml`, `vm/inputs.toml`, `toolchains/*/pins.toml` and `canary/pins.toml` comes from
   an allowlisted host,
   and the apt key fingerprint is 40 hex characters;
 - each `toolchains/*/pins.toml` holds only `upstream`, `source` (URL, sha256,
@@ -664,6 +665,9 @@ The schema in Detailed Implementation shows each fragment's contents.
 - `image/base.inputs.toml` holds only `ubuntu:26.10@sha256:<64 hex>`, an
   exact mise version (`YYYY.M.P`), a `ps1_` signer key id and
   `ghcr.io/jdx/packslip@sha256:<64 hex>` (D69, D86);
+- `image/runner.inputs.toml` holds only the exact actions/runner version
+  (`N.N.N`) and, for `linux-x64` and `osx-arm64`, the github.com release URL
+  and its sha256 (D164);
 - `vm/inputs.toml` holds only the Tart image name and digest, and CPU,
   memory and disk sizes;
 - `canary/pins.toml` holds only repository URLs and commit SHAs.
@@ -1849,9 +1853,10 @@ is green, or cut at its §10 cut date.
 | `.mise/conf.d/apt.toml` **(P)** | PR 1, new | `[bootstrap.packages]` only, all `os = ["linux"]`: the rest of the apt packages (schema below). |
 | `.mise/mise.lock` **(P)** | PR 1, change | The lock mise writes for `conf.d` files (mise 2026.11.8 `src/lockfile.rs:2676-2683`), from `mise lock --platform macos-arm64,linux-x64,linux-arm64`, with `uv` on PATH. `artifact:tag` maps the Docker arch `amd64` to `x64`. Copied into images with `COPY --chmod=644` (mise writes it 600). Holds no toolchain (D72). Its PyPI sidecars under `.mise/locks/**` are pins too (D90). |
 | `image/base.inputs.toml` **(P)** | PR 1, new | The Ubuntu image and digest, the mise version, the `ghcr.io/jdx/packslip` digest, and mise's packslip signer key (`ps1_…`) for the mise install (D69, D73). |
+| `image/runner.inputs.toml` **(P)** | M2, new (with `runner/`) | The exact actions/runner version and, for `linux-x64` and `osx-arm64`, the github.com release URL and sha256. An input of the `runner-pc` and `golden` tags only (D164). |
 | `pins-allowlist.toml` **(O)** | PR 1, new | Allowed tool names, apt package names and URL hosts for `pins:validate`. |
 | `.mise/tasks/pins/validate` **(O)** | PR 1, new | The D51 content check, for every pins file listed in §3. |
-| `.mise/tasks/artifact/tag` **(O)** | PR 1, new | Prints the tag for `base`, `tools`, `runner-pc` or `<toolchain>-<os>-<arch>` from the inputs listed in §2. Golden-vector tests in `tests/artifact_tag/` (D90). |
+| `.mise/tasks/artifact/tag` **(O)** | PR 1, new | Prints the tag for `base`, `tools`, `runner-pc`, `golden` or `<toolchain>-<os>-<arch>` from the inputs listed in §2 (D164). Golden-vector tests in `tests/artifact_tag/` (D90). |
 | `.mise/tasks/artifact/check` **(O)** | PR 2, new | The required PR check. It passes when every Linux tag the PR needs exists, with the 3-hour timeout (D61, D62). |
 | `.mise/tasks/artifact/build` **(O)** | PR 2, new | Builds one missing tag: an image layer, or a toolchain's `build.sh`. It runs the smoke test, records the build-tool versions, and writes `dist/<tag>/`: for a toolchain, `<tag>.tar.zst` with `inputs-hash.txt` at its root; for an image, `image.tar` and `image.txt`. Workflow steps upload it as `toolchain-<tag>` or `image-<tag>` (§2); the PR status job pushes a PR's `image.tar` as its `pr-` tag, and `publish.yml` pushes `main`'s. It holds no token (D98). |
 | `.mise/tasks/artifact/names` **(O)** | PR 2, new | Prints the release tag, release title and image references for a tag (§2, D98), for tests and local use. `publish.yml` computes the same values inline and never runs it (D114); a test checks the two agree. |
@@ -1948,6 +1953,15 @@ image = "ubuntu:26.10@sha256:<64 hex>"
 mise = "<exact mise version>"   # the only mise pin, first value 2026.11.8 (D99), now 2026.11.9 (D146); the Mac golden image reads it too (D73, D86)
 mise_signer = "ps1_<key id>"    # packslip key for the mise install
 packslip_image = "ghcr.io/jdx/packslip@sha256:<64 hex>"
+
+# image/runner.inputs.toml (P), the actions/runner pin of runner-pc and golden only (D164)
+version = "<N.N.N>"
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v<N.N.N>/actions-runner-linux-x64-<N.N.N>.tar.gz"
+sha256 = "<64 hex>"
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v<N.N.N>/actions-runner-osx-arm64-<N.N.N>.tar.gz"
+sha256 = "<64 hex>"
 
 # toolchains/<name>/pins.toml (P), shared by every OS (D85), same fields everywhere:
 upstream = "<semver>"           # e.g. "16.2.0", or "21.0.0-p2996"; packslip versioning from it is M2 (D89, D134)

@@ -29,9 +29,10 @@ materialize() {
 lines=""
 add() { lines+="$1"$'\t'"$2"$'\n'; }
 add_file() {
+  # A missing input ends this tag's subshell with the error pins.py gives.
   [[ -f "$dir/$1" ]] || {
-    echo "missing $1" >&2
-    exit 1
+    echo "error: input $1 is not in commit HEAD"
+    exit 0
   }
   add "$1" "$(git hash-object --no-filters "$dir/$1")"
 }
@@ -124,6 +125,34 @@ toolchain() { # <name> <os> <arch>
   echo "$1-$2-$3-$(digest)"
 }
 
+runner_pc() {
+  local t
+  t="$(tools amd64)"
+  lines=""
+  add tools-tag "$t"
+  if [[ -z "$(find "$dir/runner/pc" -type f 2>/dev/null)" ]]; then
+    echo "error: runner/pc/ has no files in the commit"
+    return
+  fi
+  add_dir runner/pc
+  add_file runner/hook/job-started.sh
+  add_file image/runner.inputs.toml
+  add_file .mise/tasks/artifact/build
+  echo "runner-pc-$(digest)"
+}
+
+golden() {
+  local f names=()
+  lines=""
+  for f in vm/inputs.toml image/base.inputs.toml .mise/conf.d/tools.toml .mise/tasks/vm/golden \
+    runner/hook/job-started.sh image/runner.inputs.toml .mise/tasks/artifact/build; do
+    add_file "$f"
+  done
+  while IFS= read -r f; do names+=("$f"); done < <(yq -p toml -o json '.tools | keys | .[]' "$dir/.mise/conf.d/tools.toml" | jq -r .)
+  add_slice macos-arm64 "${names[@]}"
+  echo "golden-macos-arm64-$(digest)"
+}
+
 count="$(jq '.vector | length' <<<"$spec")"
 for ((i = 0; i < count; i++)); do
   name="$(jq -r --argjson i "$i" '.vector[$i].name' <<<"$spec")"
@@ -134,8 +163,8 @@ for ((i = 0; i < count; i++)); do
   case "$artifact" in
     base) tag="$(base "$arch")" ;;
     tools) tag="$(tools "$arch")" ;;
-    runner-pc) tag="error: runner-pc: the actions/runner version input has no defined file or form in the design (section 2)" ;;
-    golden) tag="error: golden: the actions/runner version input and the tag name are not defined in the design (section 2)" ;;
+    runner-pc) tag="$(runner_pc)" ;;
+    golden) tag="$(golden)" ;;
     *-linux-*) tag="$(toolchain "${artifact%-linux-*}" linux "${artifact##*-linux-}")" ;;
     *-macos-*) tag="$(toolchain "${artifact%-macos-*}" macos "${artifact##*-macos-}")" ;;
   esac

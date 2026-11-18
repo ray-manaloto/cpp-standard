@@ -36,6 +36,10 @@ PIN_FRAGMENTS = (*TOOLS_FRAGMENTS, *APT_FRAGMENTS, SOURCES_FRAGMENT)
 ALLOWLIST = "pins-allowlist.toml"
 LOCK = ".mise/mise.lock"
 BASE_INPUTS = "image/base.inputs.toml"
+# The pinned actions/runner version and its release archives (D164).
+RUNNER_INPUTS = "image/runner.inputs.toml"
+RUNNER_PLATFORMS = ("linux-x64", "osx-arm64")
+RUNNER_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 # Pins files whose schema arrives with a later milestone (vm: M3, canary: M1b).
 LATER_PINS = ("vm/inputs.toml", "canary/pins.toml")
 
@@ -146,6 +150,7 @@ class Validator:
         self.mise_toml()
         self.lock(configured)
         self.base_inputs()
+        self.runner_inputs()
         for path in sorted((self.root / "toolchains").glob("*/pins.toml")):
             self.toolchain_pins(path)
         for rel in LATER_PINS:
@@ -293,6 +298,35 @@ class Validator:
                 )
         self.urls(BASE_INPUTS, data)
 
+    def runner_inputs(self) -> None:
+        """D164: the exact actions/runner version, and per platform only the
+        release URL and its sha256. Checked when present (runner/ lands in M2)."""
+        if not (self.root / RUNNER_INPUTS).exists():
+            return
+        data = _load(self.root / RUNNER_INPUTS)
+        self.urls(RUNNER_INPUTS, data)
+        if set(data) != {"version", *RUNNER_PLATFORMS}:
+            self.fail(
+                "inputs",
+                RUNNER_INPUTS,
+                f"keys must be exactly version and {', '.join(RUNNER_PLATFORMS)}",
+            )
+        if not RUNNER_VERSION.fullmatch(str(data.get("version", ""))):
+            self.fail("inputs", RUNNER_INPUTS, "version is not an exact N.N.N")
+        for platform in RUNNER_PLATFORMS:
+            table = data.get(platform)
+            if not isinstance(table, dict) or set(table) != {"url", "sha256"}:
+                self.fail(
+                    "inputs", RUNNER_INPUTS, f"{platform} holds only url and sha256"
+                )
+                continue
+            if not STRICT_URL.fullmatch(str(table["url"])):
+                self.fail(
+                    "inputs", RUNNER_INPUTS, f"{platform}.url is not an https URL"
+                )
+            if not HEX64.fullmatch(str(table["sha256"])):
+                self.fail("inputs", RUNNER_INPUTS, f"{platform}.sha256 is not 64 hex")
+
     def toolchain_pins(self, path: Path) -> None:
         """D51, D85: versions, URLs and checksums only; flags live in build.sh."""
         rel = path.relative_to(self.root).as_posix()
@@ -375,6 +409,7 @@ BUILD_TASK = ".mise/tasks/artifact/build"
 # compiler; when true, its hash also covers apt.toml (section 2, D162).
 APT_COMPILER_KEY = "apt_compiler"
 APT_TOML = ".mise/conf.d/apt.toml"
+RUNNER_HOOK = "runner/hook/job-started.sh"
 LOCK_ARCH = {"arm64": "arm64", "amd64": "x64"}
 
 
@@ -557,29 +592,58 @@ def toolchain_tag(tree: GitTree, name: str, os_name: str, arch: str) -> str:
     return f"{name}-{os_name}-{arch}-{inputs_hash(lines)}"
 
 
-# The design names "the pinned actions/runner version" as an input of these two
-# images but no file or form for it, and gives no tag name for the Mac golden
-# image, so their tags wait for the design to say (ticket #127 hand-back).
-UNDEFINED_KINDS = {
-    "runner-pc": "the actions/runner version input has no defined file or form",
-    "golden": "the actions/runner version input and the tag name are not defined",
-}
+def runner_pc_tag(tree: GitTree) -> str:
+    """The PC runner image (qcow2): the tools-amd64 tag, runner/pc/**, the hook
+    and the pinned actions/runner version (section 2, D164). No arch: the PC is
+    amd64."""
+    lines: dict[str, str] = {"tools-tag": tools_tag(tree, "amd64")}
+    files = tree.files_under("runner/pc")
+    if not files:
+        raise TagError("runner/pc/ has no files in the commit")
+    _add_files(tree, lines, files)
+    _add_files(tree, lines, [RUNNER_HOOK, RUNNER_INPUTS, BUILD_TASK])
+    return f"runner-pc-{inputs_hash(lines)}"
+
+
+def golden_tag(tree: GitTree) -> str:
+    """The Mac golden image (section 2, D164): the Tart base, the mise pin, the
+    tools and their macos-arm64 lock slice, vm:golden, the hook and the pinned
+    actions/runner version."""
+    lines: dict[str, str] = {}
+    _add_files(
+        tree,
+        lines,
+        [
+            "vm/inputs.toml",
+            BASE_INPUTS,
+            ".mise/conf.d/tools.toml",
+            ".mise/tasks/vm/golden",
+            RUNNER_HOOK,
+            RUNNER_INPUTS,
+            BUILD_TASK,
+        ],
+    )
+    tools = sorted(_toml(tree, ".mise/conf.d/tools.toml").get("tools", {}))
+    _add_slice(tree, lines, "macos-arm64", tools)
+    return f"golden-macos-arm64-{inputs_hash(lines)}"
 
 
 def artifact_tag(tree: GitTree, name: str, arch: str = "arm64") -> str:
-    """The tag of `base`, `tools` or `<toolchain>-<os>-<arch>` (linux or macos)."""
+    """The tag of `base`, `tools`, `runner-pc`, `golden` or `<toolchain>-<os>-<arch>`."""
     if name == "base":
         return base_tag(tree, arch)
     if name == "tools":
         return tools_tag(tree, arch)
-    if name in UNDEFINED_KINDS:
-        raise TagError(f"{name}: {UNDEFINED_KINDS[name]} in the design (section 2)")
+    if name == "runner-pc":
+        return runner_pc_tag(tree)
+    if name == "golden":
+        return golden_tag(tree)
     match = re.fullmatch(
         r"(?P<name>[a-z0-9][a-z0-9-]*)-(?P<os>linux|macos)-(?P<arch>arm64|amd64)", name
     )
     if not match:
         raise TagError(
-            f"unknown artifact {name}: base, tools or <toolchain>-<os>-<arch>"
+            f"unknown artifact {name}: base, tools, runner-pc, golden or <toolchain>-<os>-<arch>"
         )
     return toolchain_tag(tree, match["name"], match["os"], match["arch"])
 

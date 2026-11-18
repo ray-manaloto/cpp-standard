@@ -595,3 +595,107 @@ apt_compiler = true
 host_tools = ["cmake"]
 source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
 '''
+
+# D164: image/runner.inputs.toml holds only the exact actions/runner version and, for
+# linux-x64 and osx-arm64, the release URL and sha256.
+
+[[vector]]
+name = "a valid runner.inputs.toml passes"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with an extra key"
+reject = "inputs"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+labels = "self-hosted"
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with a version that is not exact"
+reject = "inputs"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with a trailing newline in the version"
+reject = "inputs"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0\n"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with a URL from a host that is not allowlisted"
+reject = "host"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+
+[linux-x64]
+url = "https://example.com/actions-runner.tar.gz"
+sha256 = "ababababababababababababababababababababababababababababababab01"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+[[vector]]
+name = "runner.inputs.toml with a sha256 that is not 64 hex"
+reject = "inputs"
+
+[vector.change]
+"image/runner.inputs.toml" = '''
+version = "2.330.0"
+
+[linux-x64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-linux-x64-2.330.0.tar.gz"
+sha256 = "abcd"
+
+[osx-arm64]
+url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
+sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
