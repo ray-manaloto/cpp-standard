@@ -305,12 +305,71 @@ shell history to atuin). Checked on this Mac on 2026-11-17, by file names only.
 
 | Path | Holds | Decision |
 |---|---|---|
-| `~/.ssh` | `config`, `config.d/`, keys, `known_hosts`, `authorized_keys`, agent socket | Manage `config` and `config.d/` (the tailnet file is already a template from Doppler). Keys never leave the machine; mise's filter drops `id_*` from a tracked `~/.ssh` only while no `include` list selects them, so the entry lists `config` and `config.d/**` by name. `known_hosts` and `authorized_keys` describe the machine: `track-local`. |
-| `~/.gitconfig` | Identity, aliases, settings | Managed, moved to `~/.config/git/config` as risu729 does. The email is the GitHub noreply address, rendered from a Doppler value, so no address is written into the repository. Changes to git settings still need the owner's word. |
+| `~/.ssh` | `config`, `config.d/`, keys, `known_hosts`, `authorized_keys`, agent socket | Manage `config` and `config.d/` (the tailnet file is already a template from Doppler). Keys never leave the machine; mise's filter drops `id_*` from a tracked `~/.ssh` only while no `include` list selects them, so the entry lists `config` and `config.d/**` by name. `known_hosts` and `authorized_keys` describe the machine: `track-local`. **In M1** the copied `~/.ssh/config/include` line edit stays, so dotfiles' 78 entries are copied as they are, and `tailnet.conf` is already managed. A whole-file `~/.ssh/config` cannot sit beside that line edit (mise refuses an edit of a linked file), so it becomes its own step at the switch, with its own diff, together with removing the LAN-address block for the PC. `known_hosts` and `authorized_keys` are left out of M1: a `track-local` entry saves into mise's local history store, so it is not a change-free step. |
+| `~/.gitconfig` | Identity, aliases, settings | Managed, moved to `~/.config/git/config` as risu729 does. The email is the GitHub noreply address, rendered from a Doppler value, so no address is written into the repository. Changes to git settings still need the owner's word. **In M1** the identity stays in `~/.gitconfig`: a templated INI merge (`~/.gitconfig/identity`) sets `user.name` and `user.email` from Doppler `GIT_USER_NAME` and `GIT_USER_EMAIL`, to the values the file already holds. The move to `~/.config/git/config` waits for the owner's word. |
 | `~/.doppler` | The Doppler CLI's login and fallback files | Never managed: it is a credential store. A machine gets it from `doppler login`. |
 | `~/.continue` | An empty `skills/` folder | Nothing to manage. Continue's skills come from the agent skill sources, not a file here. |
 | `~/.tmux.conf`, `~/.tmux` | The config; `~/.tmux` holds tmux plugin checkouts (316 files) | Manage `~/.tmux.conf`. The plugins stay with the tmux plugin manager, which installs them from the config. |
 | `~/.vim`, `~/.viminfo` | `.vim` holds only netrw's browsing history; `.viminfo` is editor history | Neither is managed. A vimrc would be, if one is added. |
-| `~/.zprofile`, `~/.zprofile.d/`, `~/.profile` | Login-shell startup | Managed with the zsh files that dotfiles already deploys (`os` variants where the Mac and the PC differ). |
+| `~/.zprofile`, `~/.zprofile.d/`, `~/.profile` | Login-shell startup | Not managed. They hold only PATH lines that installers appended, `~/.zprofile.d/` is empty, and zsh never reads `~/.zprofile` while `ZDOTDIR` points at `~/.config/zsh`. A link would let those installers write into the checkout. |
 | `~/.zsh_history`, `~/.bash_history`, `~/.zsh_sessions/` | Shell history and Terminal session state | Never managed: typed commands can hold secrets, and mise leaves history and session state out. Shared history, if wanted, is atuin's job (end-to-end encrypted sync), as in risu729's setup. |
 | `~/.gnupg/` | `common.conf`, private keys, keyrings, agent sockets | Manage `common.conf` (and `gpg.conf` or `gpg-agent.conf` if added). Private keys, keyrings and `trustdb.gpg` never. |
+
+### M1, the copy (2026-11-17)
+
+`mise.mac.toml` is dotfiles' root `mise.toml` from its `[bootstrap.secrets]` table to its end, unchanged
+(dotfiles main `094d435b`, 78 `[dotfiles]` entries), plus a marked section for the files the table above
+marks Manage. The sources are dotfiles' files at that commit, byte for byte and at the same relative
+paths: `unix/home/**` (164 files) and `python/guards/src/guards/` (2 files; the `~/.config/agents/guards`
+entry links to it). So every `source` string is dotfiles' own. A relative `source` resolves against the
+checkout's root when `mise -E mac` loads the file from the checkout (mise 2026.11.9). Nothing is applied
+on the Mac in M1. dotfiles stays the one that applies until the switch.
+
+The marked section adds three entries:
+
+- `~/.tmux.conf`, a copy of the live file;
+- `~/.gnupg/common.conf`, a copy of the live file;
+- `~/.gitconfig/identity`, a templated INI merge. It renders from `GIT_USER_NAME` and
+  `GIT_USER_EMAIL`, which are new Doppler values read through the global fnox file, and it has two
+  new `[bootstrap.secrets]` names.
+
+That fnox file is the one copied file that changes: it gains the two `env = "exec"` lines. Without the
+values, the merge fails to render and writes nothing.
+
+- *Check:* `mise -E mac dot status --json --verbose` from the checkout lists the same targets, modes and
+  relative sources as `mise dot status --json --verbose` from dotfiles main. The only difference is
+  each symlink entry's state: it points at the dotfiles checkout, at the same relative source. The two
+  templates render only with their secrets, on either side.
+- *Check of the marked section:* with the live values in the environment, `~/.gitconfig/identity` is
+  `applied`, so it makes no change. The two copies match the live files byte for byte. They are regular
+  files today, so linking them needs `--force` at the switch.
+- *Undo:* revert the pull request; the Mac is untouched.
+
+**The Mac switch is not one link.** The PC selected a config file through one link, but dotfiles'
+`[dotfiles]` table is a project config in its own checkout. The switch is therefore
+`mise -E mac dot apply` from cpp-standard's main checkout, on `main`. It applies the 57 symlink
+entries, which then point at that checkout, and runs with the owner and chief-of-staff's slot. The
+plan diff above is rerun first, against dotfiles main at that time. The whole-file `~/.ssh/config`, with
+the LAN-address block removed, is a separate step with its own diff. *Undo:* run `mise dot apply` from
+the dotfiles checkout again, which points the links back.
+
+Hand-over notes from dotfiles-lead that the switch carries:
+
+- **The post-merge order** (owner OK). On hk post-merge in the main checkout on `main`, in this order:
+  1. `skills:apply`;
+  2. a no-force `mise dot apply` of every entry except the two templates, the git identity merge
+     (all three need Doppler values) and the four permission entries (`~/.claude/settings.json/mcp-deny`, `/allow`, `/prompt-suggestions`, `/automode`), which
+     the owner applies;
+  3. `mise bootstrap --only tools --yes`;
+  4. `skills:doctor`.
+
+  None of this is wired in M1: a post-merge hook here would switch the Mac on merge.
+- **`shell:apply`'s stdout bug, to fix when it moves.** It treats any stdout of `mise dot apply --dry-run`
+  as something to link. mise prints dry-run output even when everything is applied, so every run makes a
+  new `shell-backup/replaced-*` folder. The workaround in use runs it only when
+  `mise dot status --missing` over the seven zsh targets fails. The fix decides from mise's exit status
+  or `status --json`, not from stdout.
+- **`~/.claude/settings.json/allow`** (dotfiles #759) is an owner-applied permission entry. It owns the
+  whole allow list, the Artifact tools included, because jouet 0.0.5's setup denies them otherwise.
+  `skills:doctor` lists it among its permission entries.
+- **jouet-init is gone.** jouet 0.0.5 needs `--init-skill`, so nothing installs jouet-init any more.

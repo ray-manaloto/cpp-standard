@@ -1,0 +1,59 @@
+---
+name: work
+description: "Use when the owner says /work or asks what to work on next in a repository: set the repository up first when its AGENTS.md has no Workflow facts section, then name the next ready ticket."
+disable-model-invocation: false
+---
+
+`work` starts the agent workflow (`~/.config/agents/workflow/index.md`) in the current repository. The first time
+it runs there, it sets the repository up. After that it names the next ready ticket.
+
+## Before you start
+
+Work from the repository's top level (`git rev-parse --show-toplevel`). If that command fails, stop and tell the
+owner, writing nothing.
+
+If the root `AGENTS.md` already has a `## Workflow facts` section, skip to **Next ticket**.
+
+## Setup
+
+This step runs from your instructions, not from a script: look around, show the owner a draft, get the owner's OK,
+then write.
+
+1. **Prerequisite.** The tracker and labels come first. If neither `AGENTS.md` nor `CLAUDE.md` has an
+   `## Agent skills` section, ask the owner to run `/setup-matt-pocock-skills` and stop.
+2. **Explore.** Read what exists. Don't assume anything.
+   - The check command: mise tasks (`mise tasks`), `package.json` scripts, a Makefile, the CI workflows.
+   - How a change ships: `git remote -v`, the default branch (`git symbolic-ref refs/remotes/origin/HEAD`),
+     whether pull requests are used.
+   - Where research notes go: a `docs/research/` or similar folder. If there is none, propose `docs/research/`.
+   - Whether `repotools` is on `PATH`. If it is not, ask the owner to run
+     `mise run //repo:tools-install` from dotfiles, and stop.
+3. **Draft.** Show the owner the section below with every `<...>` filled in from what you found. Ask about each
+   item you could not settle, putting your recommended answer first. Let the owner edit the draft.
+4. **Write the section.** Write it in the root `AGENTS.md` and create the file if it is missing. If a `CLAUDE.md`
+   exists and does not import `@AGENTS.md`, ask the owner before changing it. Never replace other sections.
+
+   ```markdown
+   ## Workflow facts
+
+   - Check: `<command>` runs every check; it passes before each commit.
+   - Shipping: <how a change ships, e.g. a branch and a pull request into `<default branch>`, opened with
+     `repotools pr-create`; the owner merges>.
+   - Research: notes go in `<folder>`.
+   - Review: none required; a lead may ask Codex for one by choice (`~/.config/agents/workflow/cross-review.md`).
+   - Content guard: the author reads the exact bytes of public text for private content before publishing.
+     The home-path scan is not the content guard.
+   ```
+
+5. **Trust the repository.** Run `repotools trust`. It trusts the repository's main checkout, found from a linked
+   worktree as Codex finds it, in Codex (`~/.codex/config.toml`) and Claude Code (`~/.claude.json`), backing up
+   each file before it changes it, so new agent tabs here and in its worktrees open without a trust prompt. It
+   prints one line per harness: `added`, `unchanged`, or `untrusted` when Codex already has an explicit No for
+   this folder. It leaves that No as it is and exits 1; tell the owner and go on.
+6. **Done.** Tell the owner which files changed. They ship in a pull request like any other change, and its one
+   review covers them (`~/.config/agents/workflow/ship.md`). You do not commit.
+
+## Next ticket
+
+Run `workflowtools tickets --listing frontier`. Show the owner the tickets that are ready, and tell the owner to
+start `/implement <owner/repo>#<number>` for the one they pick. If the command fails, show its output and stop.

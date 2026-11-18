@@ -1,0 +1,254 @@
+# The Mac's own config: loaded only where the `mac` config environment is selected (mise -E mac, or env = ["mac"]
+# in an untracked miserc.local.toml). The PC and CI never select it, so their plans have none of this.
+#
+# A copy of dotfiles' root mise.toml from its [bootstrap.secrets] table to its end, unchanged (dotfiles main
+# 094d435b), by M1 of docs/designs/level-1/machine-bootstrap-migration.md (D150); dotfiles still applies on the Mac
+# until the switch. The sources under unix/home/ and python/guards/src/guards/ are dotfiles' files at that commit,
+# byte for byte, at the same relative paths, so every `source` below is dotfiles' own string. Every comment below
+# is dotfiles': issue numbers are dotfiles issues, "this repo" and "the main checkout" are dotfiles, and the tasks
+# the comments name (shell:apply, skills:doctor, herdr:doctor) are not here yet. The hand-over notes for the switch
+# are in the design's M1 section.
+#
+# Added in cpp-standard, each marked: the git_user_* lines in [bootstrap.secrets], the section at the end, its
+# sources (unix/home/.tmux.conf, unix/home/.gnupg/common.conf, unix/home/.gitconfig.identity.tera) and the two
+# GIT_USER_* lines in unix/home/.config/fnox/config.toml.
+
+# Names that must not be public (machine names, addresses) live in Doppler, never in this repo
+# (docs/research/private-names.md). The global fnox file reads each one with env = "exec", so
+# `fnox exec -- mise dot apply ...` puts it in the environment for the templates that call secret().
+[bootstrap.secrets]
+pc_host = "PC_HOST"
+pc_lan_host = "PC_LAN_HOST"
+cloudflare_account_id = "CF_ACCOUNT_ID"
+# Added in cpp-standard (D150, M1): the git identity the ~/.gitconfig/identity entry renders.
+git_user_name = "GIT_USER_NAME"
+git_user_email = "GIT_USER_EMAIL"
+
+# The ~/.gemini/config/skills entry's source is ~/.agents/skills, outside the repo, and one missing source stops
+# the whole apply (mise 2026.11.6 crates/mise-system/src/files.rs:5722-5806). This hook runs before every
+# `mise dot apply` and bootstrap's dotfiles step (src/cli/dotfiles/apply.rs:27), so a new Mac has the folder.
+[bootstrap.hooks.pre-dotfiles]
+run = "mkdir -p ~/.agents/skills"
+
+[dotfiles]
+"~/.config/mise/config.toml" = { source = "unix/home/.config/mise/config.toml", mode = "symlink" }
+"~/.config/mise/miserc.toml" = { source = "unix/home/.config/mise/miserc.toml", mode = "symlink" }
+"~/.config/mise/locks" = { source = "unix/home/.config/mise/locks", mode = "symlink" }
+"~/.config/mise/apple-bin" = { source = "unix/home/.config/mise/apple-bin", mode = "symlink" }
+"~/.config/mise/mise.lock" = { source = "unix/home/.config/mise/mise.lock", mode = "symlink" }
+"~/.config/mise/tasks" = { source = "unix/home/.config/mise/tasks", mode = "symlink" }
+"~/.config/fnox/config.toml" = { source = "unix/home/.config/fnox/config.toml", mode = "symlink" }
+"~/.config/starship.toml" = { source = "unix/home/.config/starship.toml", mode = "symlink" }
+# The OpenCode service binds loopback only (tailnet-only ruling, 2026-11-11): service.json also holds the
+# service password, so this owns only its hostname key and leaves the rest to opencode. Unset, opencode 2.2.7
+# binds 127.0.0.1 (packages/cli/src/server-process.ts:72); a 0.0.0.0 left by `opencode service set hostname`
+# opened it to the LAN. No routine task applies this entry (shell:apply names its own targets): on each Mac run
+# mise dot apply "~/.config/opencode/service.json/bind" from the main checkout, then
+# `opencode service set hostname 127.0.0.1`, which stops the running service (service-config.ts:273-276) so its
+# supervisor starts it again on loopback. The target assumes neither OPENCODE_CONFIG_DIR nor XDG_CONFIG_HOME
+# moves opencode's config folder.
+"~/.config/opencode/service.json/bind" = { source = "unix/home/.config/opencode/service.bind.json", merge = true, permissions = "0600" }
+# OpenCode's context7 and exa servers send the key as a Bearer header from its own {env:VAR} syntax
+# (packages/core/src/config/variable.ts:25-28 at v2.2.7), so `fnox proxy run` can swap the placeholder for the real
+# key. This owns only those headers; the old literal "${CONTEXT7_API_KEY}" header is not removed by a merge.
+"~/.config/opencode/opencode.json/mcp-keys" = { source = "unix/home/.config/opencode/mcp-keys.json", merge = true }
+# Claude's apify MCP server gets its key from `fnox get` at each connect (headersHelper,
+# https://code.claude.com/docs/en/mcp; 10 s limit), with an explicit PATH as 1natsu172/dotfiles
+# bin/claude-utils/mcp-auth-header.sh:22,35 and fapont/dotfiles modules/agents/claude/mcp.json:6 do. A missing key
+# (if_missing = "warn" makes `fnox get` print nothing and exit 0) or a failed get exits non-zero instead of sending an
+# empty header. Claude Code rewrites ~/.claude.json while it runs, so write this entry with Claude's own CLI
+# (`claude mcp add-json apify '<this JSON>' -s user`) rather than a whole-root apply.
+"~/.claude.json/mcp-apify" = { source = "unix/home/.claude.mcp-apify.json", merge = true, permissions = "0600" }
+# jdx MCP servers (owner, 2026-11-13) for Claude and Codex: mise (tools, tasks, env, config; run_task needs a
+# trusted project), hk (plan, checks, safe fixes), pitchfork --local (this project's daemons only), and usage
+# serving mise's own CLI spec (list_commands, describe_command) from ~/.cache/mise/usage-mise.kdl, written at each start
+# (stdin is the MCP transport, and Linux caps one argument at 128 KiB, so not inline).
+# No fnox server: its exec tool would bypass the guard on `fnox exec`; agents use `fnox proxy run` for keys.
+# Each launches through ~/.local/bin/mise, as risu729/dotfiles unix/claude/mcp.json and unix/codex/mcp.toml do.
+# Claude's entry is written as apify's is (`claude mcp add-json <name> '<its JSON>' -s user`).
+"~/.claude.json/mcp-jdx" = { source = "unix/home/.claude.mcp-jdx.json", merge = true, permissions = "0600" }
+"~/.codex/config.toml/mcp-jdx" = { source = "unix/home/.codex/mcp-jdx.toml", merge = true, permissions = "0600" }
+# The apify plugin stays enabled for its skills and agent, but its own MCP server (plugin:apify:apify, OAuth) is
+# denied: the user-scope `apify` server above is the one with the key. deniedMcpServers merges from every settings
+# source, so a user can deny servers for themselves (Claude Code 2.1.322 settings schema, allowManagedMcpServersOnly).
+"~/.claude/settings.json/mcp-deny" = { source = "unix/home/.claude/settings.mcp-deny.json", merge = true }
+# Keep the Artifact tools (owner, 2026-11-17). jouet 0.0.5's `jouet setup claude` denies Artifact, ArtifactComments
+# and ArtifactData unless permissions.allow or permissions.ask already names them (jouet v0.0.5 docs/setup.md "the
+# Artifact tools are denied", src/setup.rs:60). mise's merge replaces a whole array (mise v2026.11.9
+# docs/dotfiles/edits.md:121-122), so this entry owns the whole allow list: an "always allow" added later shows up
+# as drift in skills:doctor, to be copied here or dropped. A permission entry: the owner applies it.
+"~/.claude/settings.json/allow" = { source = "unix/home/.claude/settings.allow.json", merge = true }
+# No grayed-out prompt suggestions in the input box: a suggestion looks like a typed draft, so an agent sending to a
+# tab can't tell it from the owner's text (owner ruling 2026-11-11). Claude Code 2.1.322 reads promptSuggestionEnabled
+# from settings unless CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION is set (https://code.claude.com/docs/en/settings-reference).
+"~/.claude/settings.json/prompt-suggestions" = { source = "unix/home/.claude/settings.prompt-suggestions.json", merge = true }
+# Leads merge their own PRs once hk check --all passes (owner rulings 2026-11-15 and 2026-11-17: no review is
+# required). The auto-mode soft-deny "Merge Without Review" wants a human approval, so the classifier blocked those
+# merges. Auto mode reads prose
+# exceptions from autoMode.allow in user settings only (https://code.claude.com/docs/en/auto-mode-config.md);
+# "$defaults" keeps the shipped list. Undo: remove this entry, then `claude auto-mode reset`.
+"~/.claude/settings.json/automode" = { source = "unix/home/.claude/settings.automode.json", merge = true }
+# ssh: the PC over the tailnet. The line goes first in ~/.ssh/config, so the folder's hosts win over older
+# entries below it; the rest of ~/.ssh/config stays the owner's. tailnet.conf is a template: the PC's private
+# name and its break-glass LAN address (`ssh pc-lan`) come from Doppler (PC_HOST and PC_LAN_HOST, see
+# [bootstrap.secrets]), so apply it with the real values in the
+# environment: fnox exec -- mise dot apply "~/.ssh/config/include" "~/.ssh/config.d/tailnet.conf".
+# Check: ssh -G pc | grep -i "^hostname" prints the PC's name.
+"~/.ssh/config/include" = { line = "Include ~/.ssh/config.d/*", position = "prepend" }
+"~/.ssh/config.d/tailnet.conf" = { source = "unix/home/.ssh/config.d/tailnet.conf.tera", mode = "template" }
+# OpenCode's Workers AI base URL has the account ID in its path, which the fnox proxy can't add, so the ID is a
+# plain mise env var (unix/home/.config/fnox/config.toml, CF_ACCOUNT_ID). Apply with the real value in the
+# environment: fnox exec -- mise dot apply "~/.config/mise/conf.d/cloudflare.toml".
+"~/.config/mise/conf.d/cloudflare.toml" = { source = "unix/home/.config/mise/conf.d/cloudflare.toml.tera", mode = "template", permissions = "0600" }
+# The dependency-map registry (#510): which deps `//depmaps:sync` maps, never their versions.
+"~/.config/dep-maps/deps.json" = { source = "unix/home/.config/dep-maps/deps.json", mode = "symlink" }
+# jouet loads user rules from ~/.config/jouet/rules; Claude Code is native-install only (claude:doctor checks it).
+"~/.config/jouet/rules/npm-claude-code.toml" = { source = "unix/home/.config/jouet/rules/npm-claude-code.toml", mode = "symlink" }
+# zsh reads everything but ~/.zshenv from $ZDOTDIR=~/.config/zsh (set in ~/.zshenv), so ~/.zprofile and ~/.zshrc are
+# unused: an installer that appends to them edits nothing tracked. Separate entries, so ~/.config/zsh/.zshrc.d stays
+# a real folder. Applied by shell:apply, which backs up first.
+"~/.config/zsh/.zshrc.d/60-agent-tools.zsh" = { source = "unix/home/.config/zsh/.zshrc.d/60-agent-tools.zsh", mode = "symlink" }
+"~/.zshenv" = { source = "unix/home/.zshenv", mode = "symlink" }
+# The same file again: ZDOTDIR is exported, so a zsh started inside another one reads $ZDOTDIR/.zshenv, not ~/.zshenv.
+"~/.config/zsh/.zshenv" = { source = "unix/home/.zshenv", mode = "symlink" }
+"~/.config/zsh/.zprofile" = { source = "unix/home/.config/zsh/.zprofile", mode = "symlink" }
+"~/.config/zsh/.zshrc" = { source = "unix/home/.config/zsh/.zshrc", mode = "symlink" }
+"~/.config/zsh/.zshrc.d/10-zsh.zsh" = { source = "unix/home/.config/zsh/.zshrc.d/10-zsh.zsh", mode = "symlink" }
+"~/.config/zsh/.zshrc.d/90-mise.zsh" = { source = "unix/home/.config/zsh/.zshrc.d/90-mise.zsh", mode = "symlink" }
+"~/.config/zsh/path.zsh" = { source = "unix/home/.config/zsh/path.zsh", mode = "symlink" }
+# git's XDG config, read before ~/.gitconfig: no global credential helper, gh for GitHub. ~/.gitconfig stays
+# untracked for machine-local settings (other hosts' helpers, safe.directory) and mise's hook blocks.
+"~/.config/git/config" = { source = "unix/home/.config/git/config", mode = "symlink" }
+"~/.config/herdr-app/programs.json" = { source = "unix/home/.config/herdr-app/programs.json", mode = "symlink" }
+"~/.local/bin/codex-hc" = { source = "unix/home/.local/bin/codex-hc", mode = "symlink" }
+# hc calls that can't start a second core (docs/agents/herdr-core.md): the herdr cutover's coordinator and /verify.
+"~/.local/bin/hc-safe" = { source = "unix/home/.local/bin/hc-safe", mode = "symlink" }
+# Claude Code mods that CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json loads. Tests: `claude plugin test <folder>`.
+"~/.local/share/claude-mods/side-notes" = { source = "unix/home/.local/share/claude-mods/side-notes", mode = "symlink" }
+"~/.local/share/claude-mods/you-should-know-forward" = { source = "unix/home/.local/share/claude-mods/you-should-know-forward", mode = "symlink" }
+# The Codex profile for isolated, read-only adversarial reviews (codex exec --profile adversarial-review).
+"~/.codex/adversarial-review.config.toml" = { source = "unix/home/.codex/adversarial-review.config.toml", mode = "symlink" }
+# A skill written here: Codex reads ~/.agents/skills and Claude ~/.claude/skills, so both link to it.
+"~/.agents/skills/macos-agent-permissions" = { source = "unix/home/.agents/skills/macos-agent-permissions", mode = "symlink" }
+"~/.claude/skills/macos-agent-permissions" = { source = "unix/home/.agents/skills/macos-agent-permissions", mode = "symlink" }
+"~/.agents/skills/visual-plan" = { source = "unix/home/.agents/skills/visual-plan", mode = "symlink" }
+"~/.claude/skills/visual-plan" = { source = "unix/home/.agents/skills/visual-plan", mode = "symlink" }
+# TokenEconomizer's global policy, copied (TE rewrites the file, which would break a symlink). Change it
+# with `te --host claude config set --global ...`, then capture it from the main checkout with
+# `mise dot add ~/.tokeneconomizer/config.json` before any `mise dot apply`: an apply overwrites an
+# uncaptured live change without asking. The second entry only sets the folder's mode.
+"~/.tokeneconomizer/config.json" = { source = "unix/home/.tokeneconomizer/config.json", mode = "copy", permissions = "0600" }
+"~/.tokeneconomizer" = { permissions = "0700" }
+# The shared agent rules (#449): one tracked file, linked where an agent reads a plain file, imported by
+# Claude Code. codebase-memory-mcp's block in it is verbatim, so its installer rewrites nothing; ctx7 setup
+# never runs against it (decision 40).
+"~/.config/agents/AGENTS.md" = { source = "unix/home/.config/agents/AGENTS.md", mode = "symlink" }
+"~/.codex/AGENTS.md" = { source = "unix/home/.config/agents/AGENTS.md", mode = "symlink" }
+"~/.gemini/GEMINI.md" = { source = "unix/home/.config/agents/AGENTS.md", mode = "symlink" }
+"~/.claude/CLAUDE.md/agents" = { block = '''
+@~/.config/agents/AGENTS.md
+''' }
+# The paths the shared file and the skills point at (#449, #453). Folder links: ~/.config/agents holds only
+# what dotfiles delivers, so its subfolders need not stay real folders.
+"~/.config/agents/workflow" = { source = "unix/home/.config/agents/workflow", mode = "symlink" }
+"~/.config/agents/skills" = { source = "unix/home/.config/agents/skills", mode = "symlink" }
+# ticket-retro (#453): the user-scope skill, one folder for both agents; the LICENSE sits beside it in the source.
+"~/.claude/skills/ticket-retro" = { source = "unix/home/.config/agents/skills/ticket-retro", mode = "symlink" }
+"~/.agents/skills/ticket-retro" = { source = "unix/home/.config/agents/skills/ticket-retro", mode = "symlink" }
+# work (#455): sets a repository up on first use; user scope only, like ticket-retro.
+"~/.claude/skills/work" = { source = "unix/home/.config/agents/skills/work", mode = "symlink" }
+"~/.agents/skills/work" = { source = "unix/home/.config/agents/skills/work", mode = "symlink" }
+# to-spec and to-tickets (#451): the publishing skills; user scope only, like ticket-retro.
+"~/.claude/skills/to-spec" = { source = "unix/home/.config/agents/skills/to-spec", mode = "symlink" }
+"~/.agents/skills/to-spec" = { source = "unix/home/.config/agents/skills/to-spec", mode = "symlink" }
+"~/.claude/skills/to-tickets" = { source = "unix/home/.config/agents/skills/to-tickets", mode = "symlink" }
+"~/.agents/skills/to-tickets" = { source = "unix/home/.config/agents/skills/to-tickets", mode = "symlink" }
+# implement, implement-spec (#452): worker skills pinned by PLAN_ID; user scope only, like ticket-retro.
+"~/.claude/skills/implement" = { source = "unix/home/.config/agents/skills/implement", mode = "symlink" }
+"~/.agents/skills/implement" = { source = "unix/home/.config/agents/skills/implement", mode = "symlink" }
+"~/.claude/skills/implement-spec" = { source = "unix/home/.config/agents/skills/implement-spec", mode = "symlink" }
+"~/.agents/skills/implement-spec" = { source = "unix/home/.config/agents/skills/implement-spec", mode = "symlink" }
+# chief-of-staff: the coordinator's role contract; user scope only, like ticket-retro.
+"~/.claude/skills/chief-of-staff" = { source = "unix/home/.config/agents/skills/chief-of-staff", mode = "symlink" }
+"~/.agents/skills/chief-of-staff" = { source = "unix/home/.config/agents/skills/chief-of-staff", mode = "symlink" }
+# lsp-server: runs `mise run lsp` with its arguments (python/lsp); user scope only, like ticket-retro.
+"~/.claude/skills/lsp-server" = { source = "unix/home/.config/agents/skills/lsp-server", mode = "symlink" }
+"~/.agents/skills/lsp-server" = { source = "unix/home/.config/agents/skills/lsp-server", mode = "symlink" }
+# secrets: the global secret:* tasks (the doppler CLI); user scope only, like lsp-server.
+"~/.claude/skills/secrets" = { source = "unix/home/.config/agents/skills/secrets", mode = "symlink" }
+"~/.agents/skills/secrets" = { source = "unix/home/.config/agents/skills/secrets", mode = "symlink" }
+# herdr-startup and herdr-shutdown: reopen and close the herdr sessions around a reboot. Their steps are the global
+# roll:* tasks (hometools roll, python/home/src/hometools/roll/).
+"~/.claude/skills/herdr-startup" = { source = "unix/home/.config/agents/skills/herdr-startup", mode = "symlink" }
+"~/.agents/skills/herdr-startup" = { source = "unix/home/.config/agents/skills/herdr-startup", mode = "symlink" }
+"~/.claude/skills/herdr-shutdown" = { source = "unix/home/.config/agents/skills/herdr-shutdown", mode = "symlink" }
+"~/.agents/skills/herdr-shutdown" = { source = "unix/home/.config/agents/skills/herdr-shutdown", mode = "symlink" }
+# One skill set: ~/.agents/skills. Codex 0.167.1 reads it (codex-rs/ext/skills/src/host_roots.rs:134-147) and
+# OpenCode 2.2.7 reads it beside its own folder (packages/core/src/config/discovery.ts:69-73,157,163), so neither
+# needs a link. Antigravity CLI 1.5.6 reads only ~/.gemini/config/skills: the whole folder links to the shared one.
+# skills 1.8.1 `skills add -g` writes through the link once (createSymlink returns when both paths resolve to the
+# same folder, dist/_chunks/remove.mjs:2767-2773), but `skills remove -a <one agent>` through it deletes the shared
+# copy, for every harness: remove a skill for all agents or none. herdr:doctor names the Claude link that leaves
+# dangling, and `mise dot apply` restores a skill this repo owns. Claude Code stays per-skill (the entries above),
+# since agentsview and openwiki install a different copy into ~/.claude/skills. `mise run skills:doctor` checks
+# these entries, herdr:doctor that ~/.claude/skills lists every skill of ~/.agents/skills.
+"~/.gemini/config/skills" = { source = "~/.agents/skills", mode = "symlink", relative = true }
+# Every repository: hk's global hooks. `hk install --global --mise` writes the mise that `which mise` finds,
+# which was a shim of a project-pinned aqua:jdx/mise until it was pruned; these name the native installer's
+# ~/.local/bin/mise instead, in hk's own escaping. HK=0 skips them.
+"~/.gitconfig/hk" = { block = '''
+[hook "hk-pre-commit"]
+	command = test \"${HK:-1}\" = \"0\" || ~/.local/bin/mise x hk -- hk run pre-commit --from-hook --staged
+	event = pre-commit
+[hook "hk-post-commit"]
+	command = test \"${HK:-1}\" = \"0\" || ~/.local/bin/mise x hk -- hk run post-commit --from-hook
+	event = post-commit
+[hook "hk-post-merge"]
+	command = test \"${HK:-1}\" = \"0\" || ~/.local/bin/mise x hk -- hk run post-merge --from-hook
+	event = post-merge
+[hook "hk-post-rewrite"]
+	command = test \"${HK:-1}\" = \"0\" || ~/.local/bin/mise x hk -- hk run post-rewrite --from-hook
+	event = post-rewrite
+[hook "hk-pre-merge-commit"]
+	command = test \"${HK:-1}\" = \"0\" || ~/.local/bin/mise x hk -- hk run pre-merge-commit --from-hook
+	event = pre-merge-commit
+# From a linked worktree git gives pre-push GIT_DIR, which would point the suites' scratch git at this checkout.
+[hook "hk-pre-push"]
+	command = test \"${HK:-1}\" = \"0\" || env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE ~/.local/bin/mise x hk -- hk run pre-push --from-hook
+	event = pre-push
+[hook "hk-commit-msg"]
+	command = test \"${HK:-1}\" = \"0\" || ~/.local/bin/mise x hk -- hk run commit-msg --from-hook
+	event = commit-msg
+[hook "hk-prepare-commit-msg"]
+	command = test \"${HK:-1}\" = \"0\" || ~/.local/bin/mise x hk -- hk run prepare-commit-msg --from-hook
+	event = prepare-commit-msg
+''' }
+# Every repository: pushes run the gh checks in the global config. HK=0 skips, like the hk hooks.
+"~/.gitconfig/gh-doctor" = { block = '''
+[hook "gh-doctor-pre-push"]
+	command = test "${HK:-1}" = "0" || sh -c '~/.local/bin/mise doctor project'
+	event = pre-push
+''' }
+# agentsview's server reads its two keys from the global fnox file now (`fnox exec --only ... --replace`), so its
+# own file goes; absent removes the old link on the next apply.
+"~/.config/mise/agentsview-native/fnox.toml" = { mode = "absent" }
+# Rule guards: the hook every agent runs as `python3 -I ~/.config/agents/guards/hook.py` (registration is the
+# owner's, one settings file at a time), and each agent's own policy file. The policy files are copies: Codex
+# 0.167 and Gemini CLI 0.67 both skip a .rules or .toml entry that is a symlink.
+"~/.config/agents/guards" = { source = "python/guards/src/guards", mode = "symlink" }
+"~/.codex/rules/guards.rules" = { source = "unix/home/.codex/rules/guards.rules", mode = "copy" }
+"~/.gemini/policies/guards.toml" = { source = "unix/home/.gemini/policies/guards.toml", mode = "copy" }
+
+# No [tools]: every tool is in the global config (DL-757).
+
+# ---- Added in cpp-standard (D150, M1): the further home files the design's "Which other home files
+# `mise.mac.toml` manages" table marks Manage. Not part of dotfiles' copy above. ----
+# tmux's config; its plugins stay with the tmux plugin manager, which installs them from this file.
+"~/.tmux.conf" = { source = "unix/home/.tmux.conf", mode = "symlink" }
+# GnuPG's options only; private keys, keyrings and trustdb.gpg never leave the machine.
+"~/.gnupg/common.conf" = { source = "unix/home/.gnupg/common.conf", mode = "symlink" }
+# The git identity: the same keys ~/.gitconfig holds today, rendered from Doppler (GIT_USER_NAME, GIT_USER_EMAIL, a
+# GitHub noreply address), so no name or address is written into this repository. Apply with the values in the
+# environment: fnox exec -- mise -E mac dot apply "~/.gitconfig/identity". Moving them to ~/.config/git/config
+# waits for the owner's word on git settings.
+"~/.gitconfig/identity" = { source = "unix/home/.gitconfig.identity.tera", merge = true, format = "ini", template = "tera" }
