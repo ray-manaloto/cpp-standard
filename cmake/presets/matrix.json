@@ -1,0 +1,33 @@
+{
+  "buildPresets": [
+    {
+      "configurePreset": "gcc16-coverage",
+      "name": "gcc16-coverage"
+    }
+  ],
+  "configurePresets": [
+    {
+      "inherits": [
+        "base",
+        "gcc16",
+        "coverage"
+      ],
+      "name": "gcc16-coverage"
+    }
+  ],
+  "include": [
+    "base.json",
+    "checks.json",
+    "compilers.json"
+  ],
+  "testPresets": [
+    {
+      "configurePreset": "gcc16-coverage",
+      "name": "gcc16-coverage",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "version": 10
+}

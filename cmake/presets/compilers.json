@@ -1,0 +1,13 @@
+{
+  "configurePresets": [
+    {
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++-16",
+        "CPPSTD_GCOV": "gcov-16"
+      },
+      "hidden": true,
+      "name": "gcc16"
+    }
+  ],
+  "version": 10
+}

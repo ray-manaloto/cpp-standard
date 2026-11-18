@@ -67,12 +67,38 @@ jobs:
     steps:
       - run: echo "stub until M1a"
 
+  # The tracer bullet (#125): `mise run ci` on the gcc16-coverage preset. No
+  # project image exists yet, so it runs in the digest-pinned Ubuntu container
+  # of the M0 coverage spike, with GCC 16, CMake, Ninja and gcovr from apt.
+  # M1a PR 2 replaces the container and the apt step with the tools image
+  # that `resolve` picks; PR 4 adds the other presets.
   gate-linux-arm64:
     name: gate-linux-arm64
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    container:
+      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      # `mise run` would otherwise install every pinned tool (the hk lint
+      # tools) first; the gate needs only the apt tools below.
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
     steps:
-      - run: echo "stub until M1a; the real job runs on arm64"
+      - name: Install GCC 16, CMake, Ninja and gcovr
+        run: |
+          apt-get update -q
+          apt-get install -qy --no-install-recommends ca-certificates git g++-16 cmake ninja-build gcovr
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.9
+          install: false
+      - name: Run the gate
+        run: mise run ci
 
   must-fail:
     name: must-fail

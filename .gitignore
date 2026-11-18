@@ -14,3 +14,6 @@ dist/
 # The ticket roadmap that /to-spec and /to-tickets keep in the main checkout. It is rebuilt from GitHub
 # (workflowtools tickets --rebuild), so it is local state, not a source file.
 /task_plan.md
+
+# CMake build trees, one per preset (build/<preset>).
+/build/

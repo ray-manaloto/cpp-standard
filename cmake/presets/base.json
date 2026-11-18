@@ -1,0 +1,11 @@
+{
+  "configurePresets": [
+    {
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "generator": "Ninja",
+      "hidden": true,
+      "name": "base"
+    }
+  ],
+  "version": 10
+}
