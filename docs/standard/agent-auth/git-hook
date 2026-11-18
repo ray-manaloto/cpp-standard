@@ -1,0 +1,49 @@
+#!/bin/sh
+# Every git hook in a project container (D155), linked into /etc/git-hooks under each hook name; /etc/gitconfig sets
+# core.hooksPath there. It runs the repository's own hook from .git/hooks, so project hooks keep working, and for
+# pre-push it first refuses what a container agent must never do, on every repository:
+#   - a push to the remote's default branch (refs/remotes/<remote>/HEAD, or main and master if that is unknown);
+#   - a ref deletion, or an update that is not a fast-forward.
+# It stops mistakes, not a hostile process: `--no-verify`, `-c core.hooksPath=` or a direct API call with the token
+# skip it. Where the repository has rules (guard-mode "protected"), GitHub refuses these pushes as well.
+hook=$(basename "$0")
+own="$(git rev-parse --git-common-dir)/hooks/$hook"
+if [ "$hook" = pre-push ]; then
+  remote="$1"
+  input=$(cat)
+  head=$(git symbolic-ref --quiet --short "refs/remotes/$remote/HEAD" 2>/dev/null)
+  defaults=${head#"$remote"/}
+  [ -n "$defaults" ] || defaults="main master"
+  zero=0000000000000000000000000000000000000000
+  bad=""
+  while read -r _lref lsha rref rsha; do
+    [ -n "$rref" ] || continue
+    for b in $defaults; do
+      [ "$rref" = "refs/heads/$b" ] && bad="$bad
+  $rref: the default branch takes changes only through a pull request"
+    done
+    case "$lsha" in
+      "$zero" | 0000000000000000000000000000000000000000000000000000000000000000)
+        bad="$bad
+  $rref: deleting a branch is not allowed from here"
+        continue
+        ;;
+    esac
+    case "$rsha" in "$zero" | 0000000000000000000000000000000000000000000000000000000000000000) continue ;; esac
+    git merge-base --is-ancestor "$rsha" "$lsha" 2>/dev/null || bad="$bad
+  $rref: not a fast-forward (force pushes are not allowed from here)"
+  done <<END
+$input
+END
+  if [ -n "$bad" ]; then
+    echo "pre-push (agent container guard, D155): refused:$bad" >&2
+    exit 1
+  fi
+  if [ -x "$own" ]; then
+    printf '%s\n' "$input" | "$own" "$@"
+    exit
+  fi
+  exit 0
+fi
+[ -x "$own" ] || exit 0
+exec "$own" "$@"

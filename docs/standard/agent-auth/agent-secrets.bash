@@ -4,8 +4,8 @@
 #   agent-secrets register <container> <owner/repo>   start serving a container and print its folder (agents:up)
 #   agent-secrets unregister <container>              stop serving it and remove its files
 #   agent-secrets refresh [<container>]               write the files now (all containers, or one)
-#   agent-secrets guard <container>                   exit 0 if its repository's default branch blocks direct pushes,
-#                                                     3 if not (agents:up refuses then); uses the container's token
+#   agent-secrets guard <container> [--allow-unprotected]   decide and write its guard-mode (protected or client),
+#                                                     or exit 3 for a public repository without rules (see guard)
 #   agent-secrets serve                               the user service: refresh whatever is due, every 15 s
 #
 # Each container gets ~/.local/state/agent-secrets/<container>/ (0700), mounted read-only at /run/agent-secrets:
@@ -13,6 +13,7 @@
 #                         write; GitHub makes it expire after one hour, and it is replaced after 30 minutes
 #   claude-oauth-token    CLAUDE_CODE_OAUTH_TOKEN (the Antigravity CLI and Codex log in per container instead)
 #   git-identity          the App bot's commit name and noreply email (not secret)
+#   guard-mode            protected or client, written by `guard` (read by the image's gh wrapper)
 # Every file is written to a temporary name in the same folder and renamed over the old one, so a reader in the
 # container sees the old file or the new one, never half of one. The folder is on disk, not in /run/user: Docker
 # restarts containers at boot, before the user manager could recreate a /run/user folder, and a missing bind-mount
@@ -150,26 +151,50 @@ case "${1:-}" in
     rm -rf -- "${state:?}/$2"
     ;;
   guard)
-    # The App may write contents on every repository, so a container is only safe where the default branch
-    # itself refuses direct pushes: a ruleset with a pull_request, merge_queue or update rule, or classic
-    # protection. Both reads need only the App's metadata read permission.
-    [[ $# -eq 2 ]] || die "usage: agent-secrets guard <container>"
+    # The App may write contents on every repository, so a container gets a token only where pushes to the default
+    # branch are refused. Writes the container's guard-mode file and prints one line:
+    #   protected  a ruleset with a pull_request, merge_queue or update rule, or classic protection;
+    #   client     a private repository that GitHub refuses rules on (403 "Upgrade to GitHub Pro": free plan), or
+    #              a public one without rules when --allow-unprotected is given: the image's pre-push hook and gh
+    #              wrapper refuse pushes to the default branch, force pushes and merges (D155, accepted risk).
+    # Exit 3: a public repository without rules (agents:up offers --allow-unprotected). Any other failed read:
+    # exit 1, fail closed. Every read needs only the App's metadata read permission.
+    [[ $# -eq 2 || ($# -eq 3 && "$3" == --allow-unprotected) ]] ||
+      die "usage: agent-secrets guard <container> [--allow-unprotected]"
     valid_name "$2"
-    repo=$(<"$state/$2/repo")
+    lock
+    d="$state/$2"
+    repo=$(<"$d/repo")
     # shellcheck disable=SC2034 # gh_api reads it by name
-    tok=$(<"$state/$2/gh-token")
-    branch=$(gh_api tok GET "/repos/$repo" | jq -er .default_branch) || die "cannot read $repo"
-    # GitHub refuses this read (403, "Upgrade to GitHub Pro") on a private repository of a free plan, which can
-    # have no rulesets; any failed read counts as no rules, so the guard fails closed.
-    types=$(gh_api tok GET "/repos/$repo/rules/branches/$branch" 2>/dev/null | jq -r '.[].type' 2>/dev/null) || types=""
-    classic=$(gh_api tok GET "/repos/$repo/branches/$branch" | jq -r .protected) ||
-      die "cannot read $repo $branch"
-    if grep -qxE 'pull_request|merge_queue|update' <<<"$types" || [[ "$classic" == true ]]; then
-      echo "agent-secrets: $repo $branch blocks direct pushes (rules: $(tr '\n' ' ' <<<"$types")classic protection: $classic)"
-    else
-      log "$repo $branch does not block direct pushes (no pull_request, merge_queue or update rule and no classic protection, or a private repository on a free plan, which can have neither)"
-      exit 3
+    tok=$(<"$d/gh-token")
+    info=$(gh_api tok GET "/repos/$repo") || die "cannot read $repo"
+    branch=$(jq -er .default_branch <<<"$info") || die "no default branch for $repo"
+    private=$(jq -r .private <<<"$info")
+    classic=$(gh_api tok GET "/repos/$repo/branches/$branch" | jq -er .protected) || die "cannot read $repo $branch"
+    # Not gh_api: the body of a refusal says why.
+    resp=$(curl -sS --max-time 20 -H @<(printf 'Authorization: Bearer %s\n' "$tok") \
+      -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+      -w '\n%{http_code}' "$api/repos/$repo/rules/branches/$branch") || die "cannot reach GitHub for $repo's rules"
+    code=${resp##*$'\n'} body=${resp%$'\n'*}
+    mode=""
+    if [[ "$code" == 200 ]]; then
+      types=$(jq -r '.[].type' <<<"$body") || die "unreadable rules for $repo $branch"
+      if grep -qxE 'pull_request|merge_queue|update' <<<"$types" || [[ "$classic" == true ]]; then
+        mode=protected
+        why="rules: $(tr '\n' ' ' <<<"$types")classic protection: $classic"
+      elif [[ "$private" == false && $# -eq 3 ]]; then
+        mode=client why="public, no rules, --allow-unprotected"
+      elif [[ "$private" == false ]]; then
+        log "$repo $branch is public and takes direct pushes (no pull_request, merge_queue or update rule)"
+        exit 3
+      fi
+    elif [[ "$code" == 403 && "$private" == true ]] &&
+      jq -e '.message | startswith("Upgrade to GitHub Pro")' <<<"$body" >/dev/null 2>&1; then
+      mode=client why="private on a free plan: GitHub keeps rulesets for paid plans"
     fi
+    [[ -n "$mode" ]] || die "cannot tell whether $repo $branch takes direct pushes (rules read: HTTP $code)"
+    printf '%s\n' "$mode" | put "$d" guard-mode
+    echo "agent-secrets: $repo $branch: $mode ($why)"
     ;;
   refresh)
     lock

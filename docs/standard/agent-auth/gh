@@ -1,9 +1,30 @@
 #!/bin/sh
 # gh in a project container (D155): GH_TOKEN is read from the mounted token file at each call, so a refreshed
 # token works without restarting anything. A GH_TOKEN already set wins. The real gh is mise's (agents.Dockerfile).
-f=/run/agent-secrets/gh-token
-if [ -z "${GH_TOKEN:-}" ] && [ -s "$f" ]; then
-  GH_TOKEN=$(cat "$f")
+#
+# In guard-mode "client" (no GitHub rules can stop it: a private repository on the free plan), merging is refused
+# here: `gh pr merge`, and `gh api` calls to a .../merge or .../merges path or a merge mutation. On a "protected"
+# repository the merge queue decides, so nothing is refused. This stops mistakes, not a hostile process (D155).
+d=/run/agent-secrets
+if [ "$(cat "$d/guard-mode" 2>/dev/null)" = client ]; then
+  refuse() {
+    echo "gh (agent container guard, D155): refused: $1; this repository has no GitHub rules, so the owner merges" >&2
+    exit 1
+  }
+  case "$1 ${2:-}" in "pr merge") refuse "gh pr merge" ;; esac
+  if [ "$1" = api ]; then
+    for a in "$@"; do
+      case "$a" in
+        */merge | */merges | */merge\?* | */merges\?*) refuse "gh api $a" ;;
+        *mergePullRequest* | *enqueuePullRequest* | *enablePullRequestAutoMerge* | *mergeBranch*)
+          refuse "a merge mutation"
+          ;;
+      esac
+    done
+  fi
+fi
+if [ -z "${GH_TOKEN:-}" ] && [ -s "$d/gh-token" ]; then
+  GH_TOKEN=$(cat "$d/gh-token")
   export GH_TOKEN
 fi
 exec /opt/mise/shims/gh "$@"

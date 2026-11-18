@@ -82,11 +82,22 @@ RUN mise use -g "gh@${GH_VER}"
 # D155: git and gh read the App token from /run/agent-secrets at each use, so a refreshed token needs no restart;
 # the shells read Claude Code's key from it at each start. ~/.local/bin is first on PATH, so the gh
 # wrapper runs ahead of mise's shim, which it calls.
+# The client guard (D155), for every repository and the only one on a private repository of the free plan: a
+# pre-push hook refuses pushes to the default branch, deletions and force pushes; a git wrapper refuses
+# `push --no-verify` and hooksPath overrides; the gh wrapper refuses merges in guard-mode "client". Every git hook
+# name links to one dispatcher that also runs the repository's own .git/hooks hook.
 COPY --chmod=755 agent-auth/git-credential-agent /usr/local/bin/git-credential-agent
 COPY --chmod=755 agent-auth/gh /home/dev/.local/bin/gh
+COPY --chmod=755 agent-auth/git /home/dev/.local/bin/git
+COPY --chmod=755 agent-auth/git-hook /etc/git-hooks/dispatch
 COPY --chmod=644 agent-auth/profile.sh /etc/profile.d/agent-secrets.sh
 USER root
 RUN git config --system credential.https://github.com.helper /usr/local/bin/git-credential-agent \
+    && git config --system core.hooksPath /etc/git-hooks \
+    && for h in applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg \
+         commit-msg post-commit pre-rebase post-checkout post-merge pre-push post-rewrite post-index-change \
+         reference-transaction push-to-checkout pre-auto-gc sendemail-validate; do \
+         ln -s dispatch "/etc/git-hooks/$h"; done \
     && printf '\n. /etc/profile.d/agent-secrets.sh\n' >> /etc/bash.bashrc
 USER dev
 COPY --chmod=755 agent-plugins /usr/local/bin/agent-plugins

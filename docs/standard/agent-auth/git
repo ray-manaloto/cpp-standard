@@ -1,0 +1,26 @@
+#!/bin/sh
+# git in a project container (D155): refuses the two everyday ways around the pre-push guard (/etc/git-hooks),
+# `git push --no-verify` and a `-c core.hooksPath=...` override, then runs the real git. A deliberate bypass
+# (the real /usr/bin/git, an env override, a direct API call) is still possible: D155 accepts that risk.
+refuse() {
+  echo "git (agent container guard, D155): refused: $1" >&2
+  exit 1
+}
+sub=""
+skip="" # the option whose value comes next: c (checked) or o (another global option's value)
+for a in "$@"; do
+  if [ -n "$skip" ]; then
+    [ "$skip" = c ] && case "$a" in core.hooksPath=* | core.hookspath=*) refuse "-c $a" ;; esac
+    skip=""
+    continue
+  fi
+  case "$a" in
+    -c) [ -n "$sub" ] || skip=c ;;
+    -C | --git-dir | --work-tree | --namespace) [ -n "$sub" ] || skip=o ;;
+    --config-env=core.hooksPath* | --config-env=core.hookspath*) refuse "$a" ;;
+    -*) ;;
+    *) [ -n "$sub" ] || sub="$a" ;;
+  esac
+  [ "$sub" = push ] && [ "$a" = --no-verify ] && refuse "git push --no-verify"
+done
+exec /usr/bin/git "$@"
