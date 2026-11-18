@@ -179,9 +179,8 @@ Working record for `/egm:egm-brainstorm` level 1. It feeds `concepts_brief.md`. 
   - Risks: #2650 (response files), #2863 (`SCCACHE_BASEDIRS` together with the preprocessor cache), #2593 (GHA backend goes read-only when rate-limited).
   - Use `SCCACHE_GHA_ENABLED`, and run read-only on PR jobs.
 - **The fnox proxy TLS problem:**
-  - Python 3.13+ turns on `VERIFY_X509_STRICT`, and the fnox proxy's CA certificate has no Authority Key Identifier, so verification fails. curl works.
-  - Per-command workaround: use curl, or clear `VERIFY_X509_STRICT` in your own Python SSL context (verification stays on).
-  - Durable fix: fnox should add an AKI to its CA (upstream; not done).
+  - Python 3.13+ turns on `VERIFY_X509_STRICT`, and before fnox 1.49.0 the fnox proxy's CA certificate had no Authority Key Identifier, so verification failed. curl worked.
+  - Fixed upstream in fnox 1.49.0 (jdx/fnox#1162, merged 2026-11-12): the CA now carries an AKI. No workaround is needed on fnox 1.49.0 or later; dotfiles pins 1.50.0 (2026-11-18).
 - **conda-forge GCC on osx-arm64** is built by `conda-forge/ctng-compilers-feedstock`: Darwin support came in PR #189 (2025-11-06), and 16.2.0 in PR #223 (2026-08-25).
   - It uses Iain Sandoe's Darwin patches, plus conda patch `0002-Make-stdlib-libc-the-default-for-macos-platforms`.
   - The recipe skips the `libstdcxx` and `libsanitizer` outputs on osx.

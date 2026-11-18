@@ -116,7 +116,7 @@ Dependabot:
 
 Ran: Bash (git clone, curl, gh, grep), Skill last30days, fnox proxy for the last30days run, Python 3.13.7.
 Failed or partial:
-- last30days: minimal run only (`--auto-resolve`, no host planning, runbook steps 0.45-0.75 skipped). Only GitHub returned results; Reddit, X, HN, YouTube, TikTok, Instagram, Bluesky, Web returned nothing or errored. LLM scoring failed with SSL "Missing Authority Key Identifier" (the known Python 3.13 via fnox proxy issue); I did not disable TLS.
+- last30days: minimal run only (`--auto-resolve`, no host planning, runbook steps 0.45-0.75 skipped). Only GitHub returned results; Reddit, X, HN, YouTube, TikTok, Instagram, Bluesky, Web returned nothing or errored. LLM scoring failed with SSL "Missing Authority Key Identifier" (fixed in fnox 1.49.0, jdx/fnox#1162) (the known Python 3.13 via fnox proxy issue); I did not disable TLS.
 - `gh` contents call for mise `renovate.json`: 404.
 - Renovate `regex/index.md`: 404.
 - Not run: codebase-memory indexing, Context7, Exa, Firecrawl (reading source and docs directly was sufficient).

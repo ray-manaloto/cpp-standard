@@ -139,7 +139,7 @@ davydehaas98/homelab#1477, so Renovate already tracks the official image in the 
 ## 6. last30days run (query "mise bootstrap devcontainer docker jdx")
 
 Ran with `--auto-resolve` (no host plan), Python 3.13 through a local TLS proxy. Many sources failed with the known
-`Missing Authority Key Identifier` TLS error (Reddit, ScrapeCreators TikTok/Instagram/YouTube, LLM rerank); Reddit also
+`Missing Authority Key Identifier` TLS error (fixed in fnox 1.49.0, jdx/fnox#1162) (Reddit, ScrapeCreators TikTok/Instagram/YouTube, LLM rerank); Reddit also
 403. Usable sources: X (8 posts) and GitHub (7 items). Findings, low volume:
 - X, 2026-11-08, @Dennis_Rye: tool that inspects a system and builds "a mise bootstrap of your system and a single
   command to run it" ([post](https://x.com/Dennis_Rye/status/2119540969942974551)).
@@ -185,7 +185,7 @@ Used: `gh api` (REST and GraphQL for jdx/mise discussions, issues, releases, fil
 (worked but rate-limited, so spaced with sleeps; the first multi-word `gh search issues` calls returned empty, so a
 GraphQL search helper replaced them), `curl` on mise and Renovate docs and the Renovate repo readme, local read of a
 dotfiles-legacy snapshot under `<research-cache>/repos/dotfiles`, and the last30days v3.38.1 engine.
-Failed or partial: last30days Reddit/TikTok/Instagram/YouTube/rerank (TLS "Missing Authority Key Identifier" through the local
+Failed or partial: last30days Reddit/TikTok/Instagram/YouTube/rerank (TLS "Missing Authority Key Identifier", fixed in fnox 1.49.0, through the local
 proxy on Python 3.13; Reddit 403; Digg CLI unknown flag); Exa and Firecrawl were not used (gh code search and
 direct file reads covered item 2); several docs URLs 404 until corrected from
 the repo tree.
