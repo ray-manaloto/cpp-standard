@@ -2,10 +2,10 @@
 # gha-slot: one-job GitHub Actions runner slots in fresh containers on the PC.
 # Installed at /usr/local/sbin/gha-slot; source of truth cpp-standard docs/standard/gha-runner/gha-slot.
 #
-#   gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]...
+#   gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]... [--group-verified]
 #                                  add a slot to the config (backup first, atomic replace), then dry-run it;
-#                                  enabling it stays separate: systemctl enable --now gha-slot@<name>
-#   gha-slot slot remove <name>    remove a stopped, disabled slot from the config (same backup and checks)
+#                                  enabling it stays separate: systemctl enable --now gha-slot@<name>.service;
+#                                  removing a slot is a manual step (README: "Retire a slot")
 #   gha-slot build                 build the runner image (Dockerfile next to the config)
 #   gha-slot smoke <slot>          start a job container with the slot's limits and run local checks (no GitHub)
 #   gha-slot exec <slot> <cmd...>  run a command in a fresh job container with the slot's limits (no GitHub)
@@ -262,14 +262,14 @@ dry_run() {
   echo "labels: $LABELS   repo: $OWNER/$REPO   scope: $SCOPE   app: $APP   max ${MAXMIN} min"
 }
 
-# Config edits (slot add / slot remove) follow one rule: take the lock first, run every check under it, then the
+# Config edits (slot add) follow one rule: take the lock first, run every check under it, then the
 # fresh-process dry-run of the candidate, the backup and the swap, all while the same lock is held. A failure before
 # the final rename leaves runner.json untouched. (2026-11-18: a `jq … | tee` edit without pipefail wrote an empty
-# runner.json.) The lock covers gha-slot's own config edits only: disable a slot before removing it, and do not start
-# a slot while it is being removed.
+# runner.json.) The lock covers gha-slot's own config edits only.
 lock_conf() {
   [ -r "$CONF" ] && [ -w "$CONF" ] && [ -w "$DIR" ] || die "need read/write access to $CONF and $DIR (run as root)"
-  exec 9>"$DIR/.runner.json.lock"
+  # Lock the config directory itself through a read-only descriptor: no lock file to create, follow or truncate.
+  exec 9<"$DIR" || die "cannot open $DIR"
   flock -n 9 || die "another gha-slot is editing $CONF"
   jq -e . "$CONF" >/dev/null 2>&1 || die "$CONF does not parse; fix it or restore a runner.json.bak-* first"
 }
@@ -308,7 +308,8 @@ commit_conf() {
   echo "gha-slot: $CONF updated (backup $bak)"
 }
 
-valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || die "bad slot name '$1' (lowercase letters, digits, . _ -)"; }
+# No dots, so a slot name can never end in ".service" and name a different systemd instance.
+valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] || die "bad slot name '$1' (lowercase letters, digits, _ -)"; }
 
 check_no_volumes() { # a new slot must not inherit an old slot's tools or writable compiler cache by name
   local vols v
@@ -319,38 +320,47 @@ check_no_volumes() { # a new slot must not inherit an old slot's tools or writab
 }
 
 # Org-scope runners register in the org's Default runner group (id 1). Owner decision 2026-11-18: that group allows
-# only selected repositories. Check both with the App token when the App key is readable: refuse when the group is
-# open to all repositories or does not list the repo. If the check cannot run (no key, the App lacks the org
-# permission "Self-hosted runners: read", or a request or response fails), print the manual step instead.
+# only selected repositories. Check with the App token, read-only: the group must be set to selected repositories,
+# must list the repo, and must allow public repositories if the repo is public. Fail closed: any token, request or
+# response failure refuses. An operator who has checked all of that by hand reruns with --group-verified.
 check_runner_group() {
-  local repo="$1" manual resp vis page n
-  manual="check by hand: GitHub > $OWNER settings > Actions > Runner groups > Default must be set to selected repositories, and $repo must be one of them"
+  local repo="$1" manual group vis pub resp page n hit
+  manual="check by hand: GitHub > $OWNER settings > Actions > Runner groups > Default must be set to selected repositories, list $repo, and allow public repositories if $repo is public; then rerun with --group-verified"
   APP=$(jq -r '.defaults.app // "main"' "$CONF")
-  if ! TOKEN=$(app_token 2>/dev/null); then echo "gha-slot: cannot get an App token; $manual"; return 0; fi
-  if ! vis=$(api GET "/orgs/$OWNER/actions/runner-groups/1" 2>/dev/null | jq -er '.visibility | strings'); then
-    echo "gha-slot: cannot read the Default runner group; $manual"; TOKEN=""; return 0
-  fi
+  TOKEN=$(app_token 2>/dev/null) || die "cannot get an App token to check the Default runner group; $manual"
+  group=$(api GET "/orgs/$OWNER/actions/runner-groups/1" 2>/dev/null) \
+    && vis=$(jq -er '.visibility | strings' <<<"$group") \
+    && pub=$(jq -r '.allows_public_repositories | if type == "boolean" then tostring else error("missing") end' <<<"$group" 2>/dev/null) \
+    || { TOKEN=""; die "cannot read the Default runner group; $manual"; }
   [ "$vis" = selected ] || { TOKEN=""; die "the $OWNER Default runner group allows '$vis' repositories, not selected ones; set it to selected repositories and add $repo, then retry"; }
+  hit=""
   for page in $(seq 1 50); do
-    if ! resp=$(api GET "/orgs/$OWNER/actions/runner-groups/1/repositories?per_page=100&page=$page" 2>/dev/null) \
-      || ! jq -e '.repositories | type == "array"' <<<"$resp" >/dev/null 2>&1; then
-      echo "gha-slot: cannot list the Default runner group; $manual"; TOKEN=""; return 0
-    fi
-    if jq -e --arg r "$repo" 'any(.repositories[]; .name == $r)' <<<"$resp" >/dev/null; then
-      echo "gha-slot: $repo is in the Default runner group (selected repositories)"; TOKEN=""; return 0
-    fi
+    resp=$(api GET "/orgs/$OWNER/actions/runner-groups/1/repositories?per_page=100&page=$page" 2>/dev/null) \
+      && jq -e '.repositories | type == "array"' <<<"$resp" >/dev/null 2>&1 \
+      || { TOKEN=""; die "cannot list the Default runner group; $manual"; }
+    hit=$(jq -c --arg r "$repo" 'first(.repositories[] | select(.name == $r)) // empty' <<<"$resp")
+    [ -n "$hit" ] && break
     n=$(jq '.repositories | length' <<<"$resp")
     [ "$n" -lt 100 ] && break
   done
   TOKEN=""
-  die "$repo is not in the $OWNER Default runner group's selected repositories; add it there first, then retry"
+  [ -n "$hit" ] || die "$repo is not in the $OWNER Default runner group's selected repositories; add it there first, then retry"
+  case "$(jq -r '.private | if type == "boolean" then tostring else "unknown" end' <<<"$hit")" in
+    true) ;;
+    false) [ "$pub" = true ] || die "$repo is public but the $OWNER Default runner group does not allow public repositories; allow them there first, then retry" ;;
+    *) die "cannot tell whether $repo is public from the runner group listing; $manual" ;;
+  esac
+  echo "gha-slot: $repo is in the Default runner group (selected repositories)"
 }
 
 slot_add() {
-  local repo="${1:-}" name="" cpus="" mem="" scope="" labels=() l extra
-  [ -n "$repo" ] && [ "${repo#-}" = "$repo" ] || die "usage: gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]..."
+  local repo="${1:-}" name="" cpus="" mem="" scope="" verified="" labels=() l extra
+  [ -n "$repo" ] && [ "${repo#-}" = "$repo" ] || die "usage: gha-slot slot add <repo> [--name N] [--cpus N] [--memory SIZE] [--scope org|repo] [--label L]... [--group-verified]"
   shift
   while [ $# -gt 0 ]; do
+    case "$1" in
+      --group-verified) verified=1; shift; continue ;;
+    esac
     [ $# -ge 2 ] || die "option $1 needs a value"
     case "$1" in
       --name) name="$2" ;; --cpus) cpus="$2" ;; --memory) mem="$2" ;; --scope) scope="$2" ;; --label) labels+=("$2") ;;
@@ -374,7 +384,11 @@ slot_add() {
   OWNER=$(cfg .github.owner)
   if [ "$scope" = org ]; then
     echo "gha-slot: slot $name registers org-scope runners in $OWNER's Default runner group; only repositories that group allows can use it"
-    check_runner_group "$repo"
+    if [ -n "$verified" ]; then
+      echo "gha-slot: --group-verified: the operator checked the Default runner group by hand; no GitHub check"
+    else
+      check_runner_group "$repo"
+    fi
   fi
   check_no_volumes "$name" # again, after the GitHub requests
   extra=$(printf '%s\n' "$name" "${labels[@]}" | jq -Rnc '[inputs | select(length > 0)] | unique')
@@ -383,30 +397,14 @@ slot_add() {
       + (if $m == "" then {} else {memory: $m} end)) end' \
     '(.slots | type == "object") and .slots[$n].repo == $r and .slots[$n].scope == $s' "$name" \
     --arg n "$name" --arg r "$repo" --arg c "$cpus" --arg m "$mem" --arg s "$scope" --argjson l "$extra"
-  echo "gha-slot: next, run the repo's CI test commands in it (gha-slot exec $name '...'), then warm, then systemctl enable --now gha-slot@$name"
-}
-
-slot_remove() {
-  local name="${1:-}" state
-  [ -n "$name" ] || die "usage: gha-slot slot remove <name>"
-  valid_name "$name"
-  lock_conf
-  jq -e --arg n "$name" '.slots | has($n)' "$CONF" >/dev/null || die "no slot '$name' in $CONF"
-  # Remove only on a successful systemd query that says the unit is disabled and not running; any error refuses.
-  state=$(systemctl show "gha-slot@$name" -p UnitFileState -p ActiveState 2>&1) \
-    || die "cannot query systemd for gha-slot@$name ($state); refusing to remove"
-  grep -qx 'UnitFileState=disabled' <<<"$state" && grep -qxE 'ActiveState=(inactive|failed)' <<<"$state" \
-    || die "gha-slot@$name is not disabled and stopped ($(tr '\n' ' ' <<<"$state")); systemctl disable --now gha-slot@$name first"
-  commit_conf 'if .slots | has($n) then del(.slots[$n]) else error("no such slot") end' '(.slots | type == "object") and (.slots | has($n) | not)' "" --arg n "$name"
-  echo "gha-slot: slot $name removed; its volumes stay until: docker volume rm gha-tools-$name gha-sccache-$name"
+  echo "gha-slot: next, run the repo's CI test commands in it (gha-slot exec $name '...'), then warm, then systemctl enable --now gha-slot@$name.service"
 }
 
 case "${1:-}" in
   slot)
     case "${2:-}" in
       add) shift 2; slot_add "$@" ;;
-      remove) slot_remove "${3:-}" ;;
-      *) die "usage: gha-slot slot add <repo> [options] | gha-slot slot remove <name>" ;;
+      *) die "usage: gha-slot slot add <repo> [options]  (removing a slot is a manual step: see the README)" ;;
     esac ;;
   build)
     docker build -t "$(cfg .image)" -f "$DIR/Dockerfile" "$DIR" ;;
