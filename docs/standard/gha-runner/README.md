@@ -67,10 +67,11 @@ repositories in the group.
    adds the slot to `runner.json` with scope `org` unless `--scope repo` is given. Before writing it refuses an
    existing slot name, and refuses while a `gha-tools-<slot>` or `gha-sccache-<slot>` volume from an earlier slot of
    that name still exists. For org scope it asks GitHub, read-only with the App token, whether the Default runner
-   group allows the repo, and refuses if not; when it cannot ask, it prints the step to check by hand. Then, under a
-   lock: it backs the file up as `runner.json.bak-<sha256>` (verified), writes the new file to a temp file, checks
-   that it is non-empty and parses, dry-runs the new slot against it, keeps the owner and mode, and replaces the file
-   in one rename. Any failure leaves the file untouched. Never edit `runner.json` by hand: on 2026-11-18 a
+   group is set to selected repositories and lists the repo, and refuses if not; when it cannot ask, it prints the
+   step to check by hand. All of these checks run under one lock, which it holds while it writes the new file to a
+   temp file, checks that it is non-empty and parses, dry-runs the new slot against it in a fresh process, backs the
+   old file up as `runner.json.bak-<sha256>` (verified), keeps the owner and mode, and replaces the file in one
+   rename. Any failure leaves the file untouched. Never edit `runner.json` by hand: on 2026-11-18 a
    `jq … | tee` edit without `pipefail` wrote an empty file.
 3. `gha-slot smoke <slot>` checks the job container's limits (no GitHub, no repo code).
 4. **Run the repo's CI test commands in the runner image before any workflow moves.** For a public repo:
@@ -85,9 +86,14 @@ repositories in the group.
 6. Switch the repo's workflows to `runs-on: [self-hosted, <pc-label>, container, <slot>]`, then
    `systemctl enable --now gha-slot@<slot>`.
 
-To take a repository off: `systemctl disable --now gha-slot@<slot>`, then `gha-slot slot remove <slot>` (same lock,
-backup and checks; it refuses unless systemd answers that the unit is disabled and stopped), then remove the volumes
-it names before that slot name is used again.
+**Retire a slot:** `systemctl disable --now gha-slot@<slot>`, then `gha-slot slot remove <slot>`, then
+`docker volume rm gha-tools-<slot> gha-sccache-<slot>` before that slot name is used again. `slot remove` takes the
+same lock, makes the same backup and runs the same checks as `slot add`; it refuses unless systemd answers that the
+unit is disabled and stopped. Disable the slot before removing it, and do not start it while it is being removed.
+
+**Offboard a repository:** retire each of its slots as above, then remove the repository from the org's Default
+runner group (GitHub: org settings > Actions > Runner groups > Default) and check that it is no longer listed there.
+Until then it can still send jobs to the other slots by their labels.
 
 ## Owner decisions 2026-11-10 (to build next)
 
