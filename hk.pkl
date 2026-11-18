@@ -26,12 +26,25 @@ local shellFiles = List(new FileSelector { glob = List("**/*.sh", "**/*.bash", "
 local pctoolsFiles =
   List("python/pctools/**", ".mise/tasks/pc/**", ".mise/tasks/pctools/**", "mise.pc.toml")
 
+// The shell prefix that gives pinact an authenticated GitHub quota (#169).
+local pinactAuth =
+  #"GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}"; [ -n "$GITHUB_TOKEN" ] || { echo "pinact: no GitHub token: set GITHUB_TOKEN or run gh auth login (#169)" >&2; exit 1; }; export GITHUB_TOKEN;"#
+
 local gateSteps = new Mapping<String, Step> {
   // GitHub Actions: correctness, then pins, then policy and security.
   ["jactionlint"] = (Builtins.jactionlint) {
     check = "jactionlint --profile pedantic --strict-exit --format gcc {{ files }}"
   }
-  ["pinact"] = Builtins.pinact
+  // pinact asks the GitHub API about every action it pins, and anonymous calls
+  // get 60 an hour, which `hk check --all` exceeds (#169). The token comes
+  // from the environment or from `gh auth token`, for this step only; it is
+  // never printed or written down. With neither, the step names the fix.
+  ["pinact"] = (Builtins.pinact) {
+    check = "\(pinactAuth) pinact run --verify-comment --check {{ files }}"
+    check_diff =
+      "\(pinactAuth) hk util sarif-diff -- pinact run --verify-comment --check --format sarif {{ files }}"
+    fix = "\(pinactAuth) pinact run --verify-comment {{ files }}"
+  }
   ["ghalint"] = (Builtins.ghalint_workflow) { depends = List("pinact") }
   ["ghalint-action"] = (Builtins.ghalint_action) { depends = List("pinact") }
   ["zizmor"] = (Builtins.zizmor) {
