@@ -10,7 +10,7 @@ hyperfine = { version = "2.0.0", os = ["macos"] }
 # gcovr installs from its uv lock (.mise/locks/pypi-gcovr) into a uv
 # environment on this pinned Python; mise needs uv 0.12.10 or later for that.
 python = { version = "3.14.8", os = ["macos"] }
-uv = { version = "0.13.8", os = ["macos"] }
+uv = { version = "0.13.9", os = ["macos"] }
 "pypi:gcovr" = { version = "8.8", python = "3.14.8", os = ["macos"] }
 # Doxygen is not in the mise registry; conda-forge has it.
 "conda:doxygen" = { version = "1.18.0", os = ["macos"] }

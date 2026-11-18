@@ -2,4 +2,4 @@
 # come from build.toml on the Mac and mise.ci.toml in CI.
 [tools]
 ruff = "0.17.5"
-ty = "0.0.102"
+ty = "0.0.106"
