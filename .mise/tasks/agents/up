@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Start (or reuse) a project container with its agents on the PC, logged in with no typing: repo clone mounted, App token and agent keys mounted read-only (D151, D155)"
+#MISE description="Start (or reuse) a project container with its agents on the PC, GitHub and Claude Code logged in with no typing: repo clone mounted, App token and Claude key mounted read-only (D151, D155)"
 #USAGE arg "<project>" help="Project name; the clone is <repo url> checked out under ~/dev/containers/<project> on the PC"
 #USAGE flag "--repo <url>" help="GitHub repository URL (default: https://github.com/ray-manaloto/<project>.git)"
 #USAGE flag "--image <ref>" help="Image (default: cpp-standard-agents:dev)"
@@ -7,10 +7,11 @@
 #
 # The container runs as the non-root user dev, with no --privileged and -e container=docker. The project is a separate
 # clone on the PC, never the PC's own checkout. Logins (D155): the PC's agent-secrets service mints a one-hour GitHub
-# App token for this repository only and keeps it fresh, beside CLAUDE_CODE_OAUTH_TOKEN and GEMINI_API_KEY, in
+# App token for this repository only and keeps it fresh, beside CLAUDE_CODE_OAUTH_TOKEN, in
 # ~/.local/state/agent-secrets/<container>/ on the PC, mounted read-only at /run/agent-secrets. git and gh read the
-# token at each use; shells read the keys at each start. Commits are the App bot's. Codex alone keeps a login of its
-# own on its volume (D151). Enter the container with:
+# token at each use; shells read Claude Code's key at each start. Commits are the App bot's. The Antigravity CLI and
+# Codex each keep the owner's own login on their volume, made once per container by the owner (D151); no agent ever
+# runs agy (AGENTS.md). Enter the container with:
 #   ssh -t pc docker exec -it <project>-agents bash -l
 set -euo pipefail
 project="${usage_project:?}"
@@ -63,10 +64,7 @@ fi
 } < <(on_pc "cat $keys/git-identity")
 docker exec "$name" git config --global user.name "$bot_name"
 docker exec "$name" git config --global user.email "$bot_email"
-# The Antigravity CLI uses GEMINI_API_KEY only with modelProvider "gemini" (antigravity.google/docs/install), kept
-# in its settings on the gemini volume; other settings stay. jq is the image's cpp-standard pin (the project may set none).
-docker exec "$name" bash -c 'f=~/.gemini/antigravity-cli/settings.json; mkdir -p "${f%/*}"; [[ -s "$f" ]] || echo "{}" >"$f"
-  mise -C /opt/cpp-standard exec -- jq ".modelProvider = \"gemini\"" "$f" >"$f.new" && mv "$f.new" "$f"'
 docker ps --filter "name=^${name}$" --format '{{.Names}} {{.Status}} {{.Image}}'
-echo "agents:up: Claude Code, the Antigravity CLI, OpenCode, git and gh need no login. Codex: once per container,"
+echo "agents:up: Claude Code, OpenCode, git and gh need no login. Once per container, the owner types these themselves:"
 echo "  ssh -t pc docker exec -it $name bash -lc 'codex login --device-auth'"
+echo "  ssh -t pc docker exec -it $name bash -l   (then run agy and sign in with Google; no agent may run agy)"

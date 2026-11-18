@@ -9,8 +9,7 @@
 # Each container gets ~/.local/state/agent-secrets/<container>/ (0700), mounted read-only at /run/agent-secrets:
 #   gh-token              a GitHub App installation token for <owner/repo> only, contents and pull requests
 #                         write; GitHub makes it expire after one hour, and it is replaced after 30 minutes
-#   claude-oauth-token    CLAUDE_CODE_OAUTH_TOKEN
-#   gemini-api-key        GEMINI_API_KEY
+#   claude-oauth-token    CLAUDE_CODE_OAUTH_TOKEN (the Antigravity CLI and Codex log in per container instead)
 #   git-identity          the App bot's commit name and noreply email (not secret)
 # Every file is written to a temporary name in the same folder and renamed over the old one, so a reader in the
 # container sees the old file or the new one, never half of one. The folder is on disk, not in /run/user: Docker
@@ -19,7 +18,7 @@
 #
 # The secrets come from Doppler with the read-only service token in ~/.config/agent-secrets/doppler-token (0600;
 # a token for Doppler project agent-containers, config prd, which holds only AGENTS_APP_PRIVATE_KEY,
-# AGENTS_APP_CLIENT_ID, CLAUDE_CODE_OAUTH_TOKEN and GEMINI_API_KEY; agents:pc-doppler puts it there).
+# AGENTS_APP_CLIENT_ID and CLAUDE_CODE_OAUTH_TOKEN, plus an unused GEMINI_API_KEY; agents:pc-doppler puts it there).
 # No secret is ever an argument (ps shows those) or printed: they pass in variables, pipes and /dev/fd.
 # The JWT is the same openssl RS256 signing the runner launcher (gha-slot) uses for its App.
 set -euo pipefail
@@ -79,14 +78,13 @@ due() { # <dir>: whether its files need writing
 # Write the files of the given container folders, with one Doppler read for all of them.
 refresh_dirs() { # <dir>...
   (($#)) || return 0
-  local json pem client claude gemini jwt d repo owner name inst body tok slug uid
+  local json pem client claude jwt d repo owner name inst body tok slug uid
   json=$(secrets_json) || die "the Doppler read failed"
   # shellcheck disable=SC2034 # app_jwt reads it by name
   pem=$(jq -er .AGENTS_APP_PRIVATE_KEY <<<"$json") || die "Doppler has no AGENTS_APP_PRIVATE_KEY"
   client=$(jq -er .AGENTS_APP_CLIENT_ID <<<"$json") || die "Doppler has no AGENTS_APP_CLIENT_ID"
   # Every value is read and checked before any file is written: jq prints "null" for a missing name.
   claude=$(jq -er .CLAUDE_CODE_OAUTH_TOKEN <<<"$json") || die "Doppler has no CLAUDE_CODE_OAUTH_TOKEN"
-  gemini=$(jq -er .GEMINI_API_KEY <<<"$json") || die "Doppler has no GEMINI_API_KEY"
   # shellcheck disable=SC2034 # gh_api reads it by name
   jwt=$(app_jwt "$client" pem)
   slug=$(gh_api jwt GET /app | jq -er .slug) || die "GET /app failed: is the App key current?"
@@ -106,7 +104,7 @@ refresh_dirs() { # <dir>...
     fi
     printf '%s' "$tok" | put "$d" gh-token
     printf '%s' "$claude" | put "$d" claude-oauth-token
-    printf '%s' "$gemini" | put "$d" gemini-api-key
+    rm -f -- "$d/gemini-api-key" # written before D155 dropped the Gemini key
     printf '%s[bot]\n%s+%s[bot]@users.noreply.github.com\n' "$slug" "$uid" "$slug" | put "$d" git-identity
     log "$(basename "$d"): wrote a token for $repo"
   done
