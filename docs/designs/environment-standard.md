@@ -1376,9 +1376,13 @@ on the Mac, D155).
 - **Subscriptions, not API keys (D151, D155).** Codex keeps a device login
   per project per machine on that project's volume, never a copied
   `auth.json`. The Antigravity CLI keeps the owner's Google login, made
-  in a terminal with `mise run agents:agy-login`. D155's rule that no
-  agent runs `agy` is withdrawn (D166); what agents may do with `agy` is
-  open.
+  with `mise run agents:agy-login`: in a terminal, or in two steps
+  (`--step start`, `--step finish`) that an agent drives through the
+  owner's signed-in browser, stopping for the owner at a password, a
+  passkey, a second factor or a CAPTCHA. D155's rule that no agent runs
+  `agy` is withdrawn (D166). Agents may sign `agy` in, maintain it and
+  send prompts through it; the owner accepts the risk under Google's
+  terms (D167).
 - **OpenCode** uses a free OpenCode model with no login, now
   `opencode/deepseek-v4.1-flash-free` (D154).
 - **Accepted risks (D155).** Container agents can push and open pull
