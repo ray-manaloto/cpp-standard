@@ -131,7 +131,10 @@ local gateSteps = new Mapping<String, Step> {
   ["fix-smart-quotes"] = (Builtins.fix_smart_quotes) { exclude = dotfilesCopy }
   ["check-merge-conflict"] = Builtins.check_merge_conflict
   ["check-case-conflict"] = Builtins.check_case_conflict
-  ["check-symlinks"] = Builtins.check_symlinks
+  // The copied dsymutil link points at /usr/bin/dsymutil, which exists only on macOS (CI runs on Linux).
+  ["check-symlinks"] = (Builtins.check_symlinks) {
+    exclude = List("unix/home/.config/mise/apple-bin/dsymutil")
+  }
   ["destroyed-symlinks"] = Builtins.destroyed_symlinks
   ["forbid-submodules"] = Builtins.forbid_submodules
   ["check-executables-have-shebangs"] = Builtins.check_executables_have_shebangs
