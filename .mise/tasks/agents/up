@@ -64,9 +64,9 @@ fi
 docker exec "$name" git config --global user.name "$bot_name"
 docker exec "$name" git config --global user.email "$bot_email"
 # The Antigravity CLI uses GEMINI_API_KEY only with modelProvider "gemini" (antigravity.google/docs/install), kept
-# in its settings on the gemini volume; other settings stay.
+# in its settings on the gemini volume; other settings stay. jq is the image's cpp-standard pin (the project may set none).
 docker exec "$name" bash -c 'f=~/.gemini/antigravity-cli/settings.json; mkdir -p "${f%/*}"; [[ -s "$f" ]] || echo "{}" >"$f"
-  jq ".modelProvider = \"gemini\"" "$f" >"$f.new" && mv "$f.new" "$f"'
+  mise -C /opt/cpp-standard exec -- jq ".modelProvider = \"gemini\"" "$f" >"$f.new" && mv "$f.new" "$f"'
 docker ps --filter "name=^${name}$" --format '{{.Names}} {{.Status}} {{.Image}}'
 echo "agents:up: Claude Code, the Antigravity CLI, OpenCode, git and gh need no login. Codex: once per container,"
 echo "  ssh -t pc docker exec -it $name bash -lc 'codex login --device-auth'"
