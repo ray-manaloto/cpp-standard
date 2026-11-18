@@ -373,3 +373,12 @@ Hand-over notes from dotfiles-lead that the switch carries:
   whole allow list, the Artifact tools included, because jouet 0.0.5's setup denies them otherwise.
   `skills:doctor` lists it among its permission entries.
 - **jouet-init is gone.** jouet 0.0.5 needs `--init-skill`, so nothing installs jouet-init any more.
+
+For M2: four copied files carry an already-public account literal (dotfiles is public too), kept byte for
+byte in M1 so that the copy check holds. M2 templates them:
+
+- `unix/home/.config/git/config`: the email from `GIT_USER_EMAIL`. This is a git-settings change, so it
+  needs the owner's word.
+- `unix/home/.config/mise/miserc.toml`: the ignored clone folder.
+- `unix/home/.config/agents/workflow/ship.md`: the `--author-email` example becomes a placeholder.
+- `unix/home/.claude/settings.automode.json`: the self-merge rule's text.
