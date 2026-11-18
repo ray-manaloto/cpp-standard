@@ -22,6 +22,9 @@
 /image/*.Dockerfile               @ray-manaloto/owner
 /runner/                          @ray-manaloto/owner
 /pins-allowlist.toml              @ray-manaloto/owner
+# Installed as root on the PC by mise bootstrap (recorded, not enforced, per D101).
+/mise.pc.toml                     @ray-manaloto/owner
+/docs/standard/gha-runner/        @ray-manaloto/owner
 
 # Tasks agents may edit (section 6).
 /.mise/tasks/linux/run
