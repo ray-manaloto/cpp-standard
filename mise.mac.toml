@@ -130,6 +130,7 @@ run = "mkdir -p ~/.agents/skills"
 # Claude Code mods that CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json loads. Tests: `claude plugin test <folder>`.
 "~/.local/share/claude-mods/side-notes" = { source = "unix/home/.local/share/claude-mods/side-notes", mode = "symlink" }
 "~/.local/share/claude-mods/you-should-know-forward" = { source = "unix/home/.local/share/claude-mods/you-should-know-forward", mode = "symlink" }
+"~/.local/share/claude-mods/run-skill-auto" = { source = "unix/home/.local/share/claude-mods/run-skill-auto", mode = "symlink" }
 # The Codex profile for isolated, read-only adversarial reviews (codex exec --profile adversarial-review).
 "~/.codex/adversarial-review.config.toml" = { source = "unix/home/.codex/adversarial-review.config.toml", mode = "symlink" }
 # A skill written here: Codex reads ~/.agents/skills and Claude ~/.claude/skills, so both link to it.
