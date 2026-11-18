@@ -83,7 +83,7 @@ for n in "${moved[@]}"; do
 done
 
 # 4. A new read-only token for the PC, piped straight to its file. The older ones are revoked after the check.
-old="$(dp configs tokens -p "$dst_p" -c "$dst_c" --json | jq -r --arg t "$tokname" '.[] | select(.name == $t) | .slug')"
+old="$(dp configs tokens -p "$dst_p" -c "$dst_c" --json | jq -r --arg t "$tokname" '(. // [])[] | select(.name == $t) | .slug')"
 dp configs tokens create "$tokname" -p "$dst_p" -c "$dst_c" --access read --plain |
   ssh -o BatchMode=yes pc 'umask 077 && mkdir -p ~/.config/agent-secrets && d=~/.config/agent-secrets &&
     cat >"$d/.doppler-token.new" && test -s "$d/.doppler-token.new" && mv -f "$d/.doppler-token.new" "$d/doppler-token"'
