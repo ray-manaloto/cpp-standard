@@ -3,11 +3,12 @@
 #   2. a non-root user, because Claude Code refuses --dangerously-skip-permissions as root;
 #   3. the agent CLIs from their native installers (never mise tools), and their plugins from
 #      each CLI's own commands (D147), at the latest version on every build.
-# No credential is baked in. The PC's agent-secrets service writes Claude Code's key and a one-hour GitHub App token
+# No credential is baked in. The host's agent-secrets service writes Claude Code's key and a one-hour GitHub App token
 # into a folder that agents:up mounts read-only at /run/agent-secrets (D155); Codex and the Antigravity CLI keep the
 # owner's own login, made once per project on each machine onto a named volume (D151).
 #
-# Build on the PC:  mise run agents:image      Start:  mise run agents:up
+# Build on the PC:  mise run agents:image      Start:  mise run agents:up <project>
+# On the Mac:       mise run agents:image --host mac   and   mise run agents:up <project> --host mac
 # The volumes are named per container, and Docker fills an empty named volume from the image's
 # files on first use, so the plugins installed here reach the volume once. A later image does
 # not refresh a volume that already exists: `mise run agents:refresh <project>` updates the CLIs
@@ -78,13 +79,18 @@ RUN cd /opt/cpp-standard && mise install
 # gh for pushing and pull requests (D153). Ubuntu 26.10's apt has only gh 2.46, so mise installs
 # the current release for the dev user.
 ARG GH_VER=2.104.0
-RUN mise use -g "gh@${GH_VER}"
+# The doppler CLI is for the Mac's agent-secrets container (agents:up --host mac), pinned like mise.pc.toml's.
+ARG DOPPLER_VER=3.77.1
+RUN mise use -g "gh@${GH_VER}" "doppler@${DOPPLER_VER}"
 # D155: git and gh read the App token from /run/agent-secrets at each use, so a refreshed token needs no restart;
 # the shells read Claude Code's key from it at each start. ~/.local/bin is first on PATH, so the gh
 # wrapper runs ahead of mise's shim, which it calls.
 COPY --chmod=755 agent-auth/git-credential-agent /usr/local/bin/git-credential-agent
 COPY --chmod=755 agent-auth/gh /home/dev/.local/bin/gh
 COPY --chmod=644 agent-auth/profile.sh /etc/profile.d/agent-secrets.sh
+# The token service itself, which the Mac runs as a container of this image (agents:up --host mac); the PC runs the
+# same script as a user service.
+COPY --chmod=755 agent-auth/agent-secrets.bash /usr/local/bin/agent-secrets
 USER root
 RUN git config --system credential.https://github.com.helper /usr/local/bin/git-credential-agent \
     && printf '\n. /etc/profile.d/agent-secrets.sh\n' >> /etc/bash.bashrc

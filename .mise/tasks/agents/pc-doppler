@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Give the PC read access to the agents' keys: copy them into Doppler project agent-containers (config prd) and put a read-only token for it on the PC (D155); the owner runs it once"
+#MISE description="Give the PC read access to the agents' keys: copy them into Doppler project agent-containers (config prd) and put a read-only token for it on the PC and this Mac (D155); the owner runs it once"
 #
 # Run by the owner in their own terminal, after agents:app-create. It needs the owner's Doppler login, because the
 # doppler CLI's usual token is a service token for dotfiles/dev_personal only, which can neither make projects nor
@@ -14,9 +14,11 @@
 #      needs; CLAUDE_CODE_OAUTH_TOKEN and GEMINI_API_KEY stay there for the Mac, so rotating one means setting it in
 #      both configs (printed at the end).
 #   4. Creates a read-only service token `pc-agents` on agent-containers/prd and pipes it to the PC's
-#      ~/.config/agent-secrets/doppler-token (0600). Not `doppler configure set token`: that stores the token in the
-#      system keyring (DopplerHQ/cli pkg/configuration/config.go:320-341, plain-text fallback at :422 only when the
-#      keyring call fails), which is locked after a reboot with no login. The PC's agent-secrets service passes the
+#      ~/.config/agent-secrets/doppler-token (0600), and writes the same token to this Mac's file of that name, which
+#      the Mac's agent-secrets container reads (agents:up --host mac). One token for both: step 5 revokes the older
+#      ones, which would otherwise leave the Mac with a dead copy. Not `doppler configure set token`: that stores the
+#      token in the system keyring (DopplerHQ/cli pkg/configuration/config.go:320-341, plain-text fallback at :422
+#      only when the keyring call fails), which is locked after a reboot with no login. The PC's agent-secrets service passes the
 #      file as DOPPLER_TOKEN, Doppler's documented "Option 2" (docs.doppler.com/docs/service-tokens).
 #   5. Checks that the PC reads the four names with it (mise runs the doppler CLI there; pinned like mise.pc.toml),
 #      then revokes any older `pc-agents` token.
@@ -86,9 +88,20 @@ for n in "${moved[@]}"; do
   fi
 done
 
-# 4. A new read-only token for the PC, piped straight to its file. The older ones are revoked after the check.
+# 4. A new read-only token for the PC and this Mac, in a variable and piped (never argv or the screen). The older ones are
+# revoked after the check.
 old="$(dp configs tokens -p "$dst_p" -c "$dst_c" --json | jq -r --arg t "$tokname" '(. // [])[] | select(.name == $t) | .slug')"
-dp configs tokens create "$tokname" -p "$dst_p" -c "$dst_c" --access read --plain |
+tok="$(dp configs tokens create "$tokname" -p "$dst_p" -c "$dst_c" --access read --plain)"
+[[ -n "$tok" ]] || stop "Doppler returned no token"
+(
+  umask 077
+  d=~/.config/agent-secrets
+  mkdir -p "$d"
+  printf '%s' "$tok" >"$d/.doppler-token.new"
+  mv -f "$d/.doppler-token.new" "$d/doppler-token"
+)
+say "wrote this Mac's ~/.config/agent-secrets/doppler-token (0600)"
+printf '%s' "$tok" |
   ssh -o BatchMode=yes pc 'umask 077 && mkdir -p ~/.config/agent-secrets && d=~/.config/agent-secrets &&
     cat >"$d/.doppler-token.new" && test -s "$d/.doppler-token.new" && mv -f "$d/.doppler-token.new" "$d/doppler-token"'
 say "wrote the PC's ~/.config/agent-secrets/doppler-token (0600)"
