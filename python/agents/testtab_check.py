@@ -1,10 +1,11 @@
-"""Check testtab.py and testguard.py against #178's and #251's acceptance lines, offline: a scratch trust record,
-stand-in herdr-app and hc executables on PATH, and scratch git checkouts. It never reads the real ~/.claude.json,
-opens a tab or starts Claude Code. Prints one line per case and exits 1 when any fails.
+"""Check testtab.py and testguard.py against #178's, #251's and #303's acceptance lines, offline: a scratch trust
+record, stand-in herdr-app and hc executables on PATH, and scratch git checkouts. It never reads the real
+~/.claude.json, opens a tab or starts Claude Code. Prints one line per case and exits 1 when any fails.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,26 @@ SCREENS = {
     "dialog": "Do you trust the files in this folder?\n> 1. Yes, I trust this folder\n  2. No, exit\n",
     "blank": "\n",
 }
+# The stamp #303 puts on a session name, after the base ("probe"): the D61 shape with its offset cut to the hour.
+STAMPED = re.compile(r"probe-\d{8}T\d{6}\.\d{9}[+-]\d{2}$")
+
+
+def tab_new(calls: list) -> list:
+    return [c for c in calls if c[:3] == ["herdr-app", "do", "tab.new"]]
+
+
+def new_name(calls: list) -> str:
+    """The --name the one tab.new call carried."""
+    (new,) = tab_new(calls)
+    return new[new.index("--name") + 1]
+
+
+def guard_command(run: Path, session: str) -> str:
+    """The run's guard hook command, which names the session among the allowed names; '' when it is not alone."""
+    path = run / f"settings-{session}.json"
+    pre = json.loads(path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    hooks = [h for e in pre for h in e["hooks"] if "testguard.py" in h["command"]]
+    return hooks[0]["command"] if len(hooks) == 1 else ""
 
 
 def git(*args: str) -> None:
@@ -81,7 +102,13 @@ def setup(root: Path) -> dict[str, Path]:
 
 
 def launch(
-    env: dict[str, str], folder: Path, run: Path, screen: str, wait: str = "3"
+    env: dict[str, str],
+    folder: Path,
+    run: Path,
+    screen: str,
+    wait: str = "3",
+    name: str = "probe",
+    names: str = "probe",
 ) -> tuple[int, str, list]:
     """Run testtab.py once and return its exit code, stderr and the stand-in calls it made."""
     log = run / "standin.jsonl"
@@ -100,9 +127,9 @@ def launch(
             "--folder",
             str(folder),
             "--name",
-            "probe",
+            name,
             "--names",
-            "probe",
+            names,
             "--tools",
             "Read",
             "--wait",
@@ -177,23 +204,53 @@ def cases(
         code, err, calls = launch(env, folder, runs / name, "ready")
         return code == 3 and "no tab opened" in err and not calls
 
-    def opened(name: str, folder: Path) -> bool:
-        code, _, calls = launch(env, folder, runs / name, "ready")
-        return code == 0 and [c[:3] for c in calls if c[0] == "herdr-app"] == [
-            ["herdr-app", "do", "tab.new"]
-        ]
+    def opened(case: str, folder: Path) -> bool:
+        code, _, calls = launch(env, folder, runs / case, "ready")
+        herdr = [c[:3] for c in calls if c[0] == "herdr-app"]
+        if code != 0 or herdr != [["herdr-app", "do", "tab.new"]]:
+            return False
+        argv = json.loads(tab_new(calls)[0][-1])
+        stamped = new_name(calls)
+        return (
+            STAMPED.fullmatch(stamped) is not None
+            and argv[argv.index("-n") + 1] == stamped
+            and stamped in guard_command(runs / case, stamped)
+        )
 
-    def handoff(name: str, screen: str) -> bool:
-        code, err, calls = launch(env, s["trusted"], runs / name, screen, wait="1")
+    def stamped_kept() -> bool:
+        fixed = "probe-20261119T120850.005365000-06"
+        code, _, calls = launch(
+            env, s["trusted"], runs / "stamped", "ready", name=fixed, names=fixed
+        )
+        herdr = [c[:3] for c in calls if c[0] == "herdr-app"]
+        if code != 0 or herdr != [["herdr-app", "do", "tab.new"]]:
+            return False
+        argv = json.loads(tab_new(calls)[0][-1])
+        return (
+            new_name(calls) == fixed
+            and argv[argv.index("-n") + 1] == fixed
+            and fixed in guard_command(runs / "stamped", fixed)
+        )
+
+    def handoff(case: str, screen: str) -> bool:
+        code, err, calls = launch(env, s["trusted"], runs / case, screen, wait="1")
         sends = [c for c in calls if c[0] == "hc" and c[1] != "read"]
-        return code == 4 and "handing probe (t1) to the owner" in err and not sends
+        if len(tab_new(calls)) != 1:
+            return False
+        return (
+            code == 4
+            and f"handing {new_name(calls)} (t1) to the owner" in err
+            and not sends
+        )
 
     def guard_hook_blocks() -> bool:
         code, _, _calls = launch(env, s["trusted"], runs / "settings", "ready")
-        path = runs / "settings" / "settings-probe.json"
-        if code != 0 or not path.exists():
+        if code != 0:
             return False
-        pre = json.loads(path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+        paths = list((runs / "settings").glob("settings-*.json"))
+        if len(paths) != 1:
+            return False
+        pre = json.loads(paths[0].read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
         hooks = [h for e in pre for h in e["hooks"] if "testguard.py" in h["command"]]
         return len(hooks) == 1 and hooks[0].get("onFailure") == "block"
 
@@ -222,6 +279,7 @@ def cases(
             "worktree of a trusted checkout opens a tab",
             lambda: opened("worktree", s["worktree"]),
         ),
+        ("a stamped --name is kept as is", stamped_kept),
         (
             "trust dialog after launch: handoff, nothing sent",
             lambda: handoff("dialog", "dialog"),
