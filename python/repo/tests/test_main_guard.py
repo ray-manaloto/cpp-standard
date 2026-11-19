@@ -176,7 +176,14 @@ def test_the_shell_gate_starts_nothing_for_other_refs_and_fails_closed_for_main(
 def test_a_copy_whose_python_was_pruned_names_the_repair(clone: Path) -> None:
     # The real copy, from the real task, into scratch uv tool folders; then its venv's Python goes, as a prune does.
     tools = clone.parent / "uv"
-    env = {**os.environ, "UV_TOOL_DIR": str(tools / "tools"), "UV_TOOL_BIN_DIR": str(tools / "bin")}
+    # The tests run the checkout's own mise tasks; a checkout in a folder mise does not trust (a worktree under
+    # /private/tmp, a fresh clone) would otherwise refuse them (#270).
+    env = {
+        **os.environ,
+        "UV_TOOL_DIR": str(tools / "tools"),
+        "UV_TOOL_BIN_DIR": str(tools / "bin"),
+        "MISE_TRUSTED_CONFIG_PATHS": str(CHECKOUT),
+    }
     mise = shutil.which("mise")
     assert mise is not None, "the global mise config installs mise"
     subprocess.run([mise, "run", "//repo:main-guard-copy"], cwd=CHECKOUT, env=env, capture_output=True, check=True)
@@ -273,7 +280,11 @@ def test_post_merge_installs_nothing_but_origin_main_as_committed(clone: Path) -
 def arm_task(clone: Path, **env: str) -> subprocess.CompletedProcess[str]:
     """The real //repo:main-guard-arm, pointed at the clone, with scratch uv tool folders."""
     tools = clone.parent / "uv"
-    scratch = {"UV_TOOL_DIR": str(tools / "tools"), "UV_TOOL_BIN_DIR": str(tools / "bin")}
+    scratch = {
+        "UV_TOOL_DIR": str(tools / "tools"),
+        "UV_TOOL_BIN_DIR": str(tools / "bin"),
+        "MISE_TRUSTED_CONFIG_PATHS": str(CHECKOUT),
+    }
     where = {"GIT_DIR": str(clone / ".git"), "GIT_WORK_TREE": str(clone)}
     mise = shutil.which("mise")
     assert mise is not None, "the global mise config installs mise"
