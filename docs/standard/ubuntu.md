@@ -146,12 +146,13 @@ It holds:
 - `APT::Snapshot "20261116T000000Z"`, so apt reads the Ubuntu archive from
   snapshot.ubuntu.com as it was at that time: Ubuntu's live -updates and
   -security indexes drop a version when the next one ships, so exact pins of
-  update versions (curl, git, ca-certificates) would stop installing. Bump
-  the date with the pins to take newer security fixes. apt.llvm.org has no
-  snapshots and is read live;
-- the image's apt packages: the Ubuntu archive ones pinned exactly, and LLVM
-  23 as `latest`, because apt.llvm.org deletes old snapshots within days
-  (D27). Probe C1 records the snapshot in the report;
+  update versions (curl, git, ca-certificates) would stop installing.
+  `mise run pins:apt-bump` moves the date whenever it moves one of this
+  file's Ubuntu pins (D165). apt.llvm.org has no snapshots and is read live;
+- the image's apt packages, each pinned to the newest version in its index,
+  LLVM 23 included, and moved daily by `mise run pins:apt-bump` (D165),
+  because apt.llvm.org deletes old snapshots within days (D27). Probe C1
+  records the snapshot in the report;
 - a hook running `mise run ubuntu:clangd`, which installs only `bin/clangd`
   and `lib/clang` from the llvmorg-23.1.5 tarball into `/opt/llvm-23.1.5`,
   checked against the Dockerfile's sha256.

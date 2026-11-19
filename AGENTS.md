@@ -45,6 +45,8 @@ design is `docs/designs/environment-standard.md`. See `docs/agents/domain.md`.
 
   The empty helper comes first: without it the global `gh` helper answers before the App, as the owner. In a
   project container it is `ray-manaloto-agents`, whose token is mounted at `/run/agent-secrets` (D155).
+- Apt pins: `mise run pins:apt-bump` (skill `pins-apt-bump`) moves them to the newest indexed version; `--check`
+  reports pins gone from their index. Not a heavy run; the daily `apt-bump` workflow runs it (D165).
 - Heavy runs: one at a time on the owner's Mac, and only with the coordinator's go-ahead. Heavy are
   `mise run check`, `mise run ci`, any other build, `pytest -n auto`, image builds and pushes, and any job over
   10,000 files. Every container run on the Mac waits for the coordinator's go-ahead, however small. Jobs on the
