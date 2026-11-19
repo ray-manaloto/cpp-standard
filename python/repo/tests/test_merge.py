@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from repotools.cli import main
-from repotools.merge import BOT_CLOSE, BOT_OPEN, NOREPLY
+from repotools.merge import AUTHORS, BOT_CLOSE, BOT_OPEN, NOREPLY
 
 from . import test_gates
 from .test_gates import copy, mise, said
@@ -20,13 +20,25 @@ HK_PKL = Path(__file__).resolve().parents[3] / "hk.pkl"
 
 # A gh that answers from a scenario file and logs every call; it reaches no network. Once hk's step has left the
 # file ../hk-ran, the scenario's "after" entries replace its own: GitHub as it is after the minutes hk takes.
-GH = """import json, os, sys
+# The GraphQL read answers the scenario's "reads" in turn, the last one again and again, and logs when it was made;
+# "unknown" answers as GitHub does for a number with no pull request.
+GH = """import json, os, sys, time
 scenario, log = json.load(open(sys.argv[1])), sys.argv[2]
-if os.path.exists(os.path.join(os.path.dirname(sys.argv[1]), "hk-ran")):
+folder = os.path.dirname(sys.argv[1])
+if os.path.exists(os.path.join(folder, "hk-ran")):
     scenario |= scenario.get("after", {})
 args = sys.argv[3:]
 open(log, "a").write(json.dumps(args) + "\\n")
-if args[:2] == ["pr", "view"] and args[3:] == ["--json", "headRefOid,state,baseRefName,title,body"]:
+if args[:2] == ["api", "graphql"]:
+    times = os.path.join(folder, "reads.log")
+    made = len(open(times).read().split()) if os.path.exists(times) else 0
+    open(times, "a").write(f"{time.monotonic()}\\n")
+    answer = scenario["reads"][min(made, len(scenario["reads"]) - 1)]
+    if answer == "unknown":
+        sys.stderr.write("gh: Could not resolve to a PullRequest with the number of 7.\\n")
+        sys.exit(1)
+    print(json.dumps({"data": {"repository": {"pullRequest": answer}}}))
+elif args[:2] == ["pr", "view"] and args[3:] == ["--json", "headRefOid,state,baseRefName,title,body"]:
     print(json.dumps(scenario["pr"]))
 elif args == ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"]:
     print(scenario["default"])
@@ -34,14 +46,26 @@ elif args[:2] == ["pr", "merge"]:
     if scenario.get("refuse"):
         sys.stderr.write(scenario["refuse"])
         sys.exit(1)
-elif args[:2] == ["pr", "view"] and args[3:] == ["--json", "mergeCommit"]:
-    print(json.dumps({"mergeCommit": {"oid": "f00d"}}))
 elif args[:2] == ["api", "repos/{owner}/{repo}/commits/f00d"] and args[2:] == ["--jq", ".commit.author.email"]:
     print(scenario["email"])
 else:
     sys.stderr.write("unknown command\\n")
     sys.exit(1)
 """
+# A jouet whose `wait ci` logs its call to the same log and exits with the scenario's "checks" code (default 0).
+JOUET = """import json, sys
+scenario, log = json.load(open(sys.argv[1])), sys.argv[2]
+args = sys.argv[3:]
+open(log, "a").write(json.dumps(["jouet", *args]) + "\\n")
+if args[:2] != ["wait", "ci"]:
+    sys.exit(2)
+print(scenario.get("checks_said", "checks passed"))
+sys.exit(scenario.get("checks", 0))
+"""
+MERGED = {"merged": True, "state": "MERGED", "mergeQueueEntry": None, "mergeCommit": {"oid": "f00d"}}
+QUEUED = {"merged": False, "state": "OPEN", "mergeQueueEntry": {"position": 2}, "mergeCommit": None}
+WAITING = {"merged": False, "state": "OPEN", "mergeQueueEntry": None, "mergeCommit": None}
+CLOSED = {"merged": False, "state": "CLOSED", "mergeQueueEntry": None, "mergeCommit": None}
 BODY = "## Summary\n\nOne change.\n"  # pr()'s body file
 NOTES = f"\n\n{BOT_OPEN}\n\n## Summary by CodeRabbit\n\n* One change.\n\n{BOT_CLOSE}"
 HK_RAN = "touch ../hk-ran"
@@ -59,13 +83,13 @@ def hk_config(step: str) -> str:
     return f'{head}\n\nhooks {{\n    ["check"] {{\n{steps}    }}\n}}\n'
 
 
-def install_gh(folder: Path, scenario: Path, log: Path) -> Path:
-    """The gh stand-in as folder/gh, reading scenario and appending its calls to log."""
-    (folder.parent / "gh.py").write_text(GH)
-    program = folder / "gh"
+def install_gh(folder: Path, scenario: Path, log: Path, name: str = "gh", source: str = GH) -> Path:
+    """The gh stand-in (or another, by name and source) as folder/name, reading scenario and appending calls to log."""
+    (folder.parent / f"{name}.py").write_text(source)
+    program = folder / name
     program.write_text(
         f"#!{sys.executable}\nimport runpy, sys\nsys.argv[1:1] = [{str(scenario)!r}, {str(log)!r}]\n"
-        f"runpy.run_path({str(folder.parent / 'gh.py')!r}, run_name='__main__')\n"
+        f"runpy.run_path({str(folder.parent / f'{name}.py')!r}, run_name='__main__')\n"
     )
     program.chmod(0o755)
     return program
@@ -86,11 +110,12 @@ class World:
         folder = root.parent / "bin"
         folder.mkdir()
         install_gh(folder, self.scenario, self.log)
+        install_gh(folder, self.scenario, self.log, "jouet", JOUET)
         monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
         origin(root)
         done = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, check=True, text=True)
         self.head = done.stdout.strip()
-        self.set(pr=self.pr(), default="trunk", email=NOREPLY)
+        self.set(pr=self.pr(), default="trunk", email=NOREPLY, reads=[MERGED])
 
     def pr(self) -> dict[str, str]:
         return {"headRefOid": self.head, "state": "OPEN", "baseRefName": "trunk", "title": "feat: one", "body": BODY}
@@ -104,6 +129,11 @@ class World:
 
     def merged(self) -> bool:
         return any(call[:2] == ["pr", "merge"] for call in self.calls())
+
+    def reads(self) -> list[float]:
+        """When each GraphQL read of the pull request was made, on the monotonic clock."""
+        times = self.scenario.parent / "reads.log"
+        return [float(line) for line in times.read_text().split()] if times.exists() else []
 
 
 @pytest.fixture
@@ -124,7 +154,13 @@ def test_every_gate_holding_merges_in_the_one_form_and_reports_the_author(
     assert json.loads(capsys.readouterr().out) == {"number": 7, "merge_commit": "f00d", "author_email": NOREPLY}
     assert world.ran.exists()  # the real hk check --all ran the checkout's step
     merge = ["pr", "merge", "7", "--merge", "--match-head-commit", world.head, "--author-email", NOREPLY]
-    assert merge in world.calls()
+    calls = world.calls()
+    checks = next(i for i, call in enumerate(calls) if call[:3] == ["jouet", "wait", "ci"])
+    # The checks pass on the head first, then the merge, then the read that finds it merged.
+    assert calls[checks][3:6] == ["7", "--sha", world.head]
+    assert calls.index(merge) > checks
+    assert len(world.reads()) == 1
+    assert not any(call[:2] == ["event", "listen"] for call in calls)
 
 
 def test_a_dirty_checkout_is_refused_before_anything_runs(
@@ -207,7 +243,17 @@ def test_gh_refusing_the_merge_is_a_named_failure(world: World, capsys: pytest.C
 def test_a_merge_commit_with_another_author_is_reported(world: World, capsys: pytest.CaptureFixture[str]) -> None:
     world.set(email="someone@example.com")
     said = pr_refusal_of(capsys, "pr-merge", merge_args())
-    assert said == f"merge commit f00d has author someone@example.com, not {NOREPLY}: report it to the owner"
+    assert (
+        said == f"merge commit f00d has author someone@example.com, not {' or '.join(AUTHORS)}: report it to the owner"
+    )
+
+
+def test_a_queue_merge_authored_by_the_agent_app_is_accepted(world: World, capsys: pytest.CaptureFixture[str]) -> None:
+    """The queue's squash takes the pull request's author; an agent's pull request lands with the App's noreply."""
+    app = "356338082+cpp-standard-agents[bot]@users.noreply.github.com"
+    world.set(email=app)
+    main(["pr-merge", *merge_args()])
+    assert json.loads(capsys.readouterr().out) == {"number": 7, "merge_commit": "f00d", "author_email": app}
 
 
 def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_arguments(

@@ -38,7 +38,11 @@ and the commit belong to the coordinator or the owner.
    head: `hk check --all`, or `hk check --pr` where hk.pkl runs every suite for a shared file (dotfiles). Hosted checks from free apps are advisory, and no paid CI is added. The merge is
    `gh pr merge N --merge --match-head-commit <sha> --author-email 1428022+sortakool@users.noreply.github.com`,
    so the merge commit carries the account's noreply address, not a personal email. A repository can
-   check these gates in one task: dotfiles has `mise run //repo:pr-merge`.
+   check these gates in one task: dotfiles has `mise run //repo:pr-merge`. That task also waits for the
+   pull request's checks, then reads it until it has merged: on a branch with a merge queue `gh pr merge`
+   only queues it. A pull request dropped from the queue, or not merged within the time limit, is a failure.
+   A queue's squash commit takes the pull request's author, so an agent's pull request lands with the agent
+   App's noreply address; the task accepts either noreply address and refuses any other (owner ruling, 2026-11-18).
 
 ## Close-out
 

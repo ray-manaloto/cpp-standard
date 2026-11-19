@@ -387,6 +387,14 @@ class PrMerge(BaseModel):
     """
     Run every gate against the pull request and report each one; merge nothing
     """
+    interval: Annotated[float, Field(gt=0.0)] = 15
+    """
+    Seconds between reads of the pull request while it waits to merge
+    """
+    time_limit: Annotated[float, Field(gt=0.0)] = 3600
+    """
+    Seconds the wait for passing checks and the merge may take in all before it fails
+    """
 
 
 class GateResult(BaseModel):

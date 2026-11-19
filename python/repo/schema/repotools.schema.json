@@ -235,6 +235,18 @@
           "type": "boolean",
           "default": false,
           "description": "Run every gate against the pull request and report each one; merge nothing"
+        },
+        "interval": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 15,
+          "description": "Seconds between reads of the pull request while it waits to merge"
+        },
+        "time_limit": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 3600,
+          "description": "Seconds the wait for passing checks and the merge may take in all before it fails"
         }
       },
       "required": ["number", "title", "body_file"],
