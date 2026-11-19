@@ -162,6 +162,19 @@ local gateSteps = new Mapping<String, Step> {
     glob = List(".devcontainer/**", "tests/devcontainer/**", ".mise/tasks/image/**")
     check = "\(cleanGitEnv) python3 -I tests/devcontainer/test_devcontainer.py"
   }
+  // The gate checklist and its checker (D119, #133): the checklist file, the workflow that
+  // ticks it and the cov task that gates the checker's tests.
+  ["gate-cov"] {
+    glob =
+      List(
+        "python/gate/**",
+        "tests/gate/**",
+        "gate-items.toml",
+        ".github/workflows/post-merge.yml",
+        ".mise/tasks/gate/cov",
+      )
+    check = "\(cleanGitEnv) mise run gate:cov"
+  }
   // Refuse a repository whose shared common git config has core.worktree set (#280).
   // No glob: this runs on every hk check and pre-commit run, whatever files changed.
   ["git-config-check"] {
