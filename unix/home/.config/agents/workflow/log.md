@@ -10,6 +10,10 @@
   word a brief's limits so the pane's read-only shell stays allowed.
 
 ## 2026-11-18
+* **Added**: retro debt (#160). A closed round owes a retro until `workflowtools round-retro` records
+  one, with the sources read, the finding count (zero is valid), where the findings live and one
+  disposition per proposed change. `workflowtools report` gains its second section, closed rounds
+  owing a retro. See Rounds in workflow.md.
 * **Added**: the Rounds section in workflow.md and the round close in ship.md's close-out (#159). The
   coordinator opens a round at the hand-off, adds its pull requests and closes it with
   `workflowtools round-open`, `round-pr` and `round-close`; `workflowtools report` lists open rounds.

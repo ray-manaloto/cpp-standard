@@ -21,7 +21,7 @@ def failure(capsys: pytest.CaptureFixture[str], argv: list[str] | None) -> str:
 def test_the_first_argument_must_name_a_check(capsys: pytest.CaptureFixture[str], argv: list[str]) -> None:
     assert failure(capsys, argv) == (
         "workflowtools: the first argument is one of frontmatter, skill-table, tickets, settings-local, "
-        "round-open, round-pr, round-close, report"
+        "round-open, round-pr, round-close, round-retro, report"
     )
 
 

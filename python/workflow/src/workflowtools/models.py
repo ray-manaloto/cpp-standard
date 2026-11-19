@@ -18,6 +18,7 @@ class Command(StrEnum):
     round_open = "round-open"
     round_pr = "round-pr"
     round_close = "round-close"
+    round_retro = "round-retro"
     report = "report"
 
 
@@ -82,9 +83,57 @@ class RoundClose(BaseModel):
     """
 
 
+type SourceItem = Annotated[str, Field(min_length=1)]
+
+
+type AcceptedItem = Annotated[str, Field(min_length=1)]
+
+
+type DeclinedItem = Annotated[str, Field(min_length=1)]
+
+
+type LaterItem = Annotated[str, Field(min_length=1)]
+
+
+class RoundRetro(BaseModel):
+    """
+    Record a closed round's retro; a replay prints the stored retro event and writes nothing.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    round: RoundId
+    source: Annotated[list[SourceItem], Field(min_length=1)]
+    """
+    A source the retro actually read (session, plan, pull request); repeat the flag for each
+    """
+    findings: Annotated[int, Field(ge=0)]
+    """
+    How many findings the retro made; zero is valid
+    """
+    findings_at: Annotated[str, Field(min_length=1)]
+    """
+    Where the findings live, such as the plan's findings.md or a ticket comment
+    """
+    accepted: list[AcceptedItem] = []
+    """
+    A proposed change the owner accepted; repeat the flag for each
+    """
+    declined: list[DeclinedItem] = []
+    """
+    A proposed change the owner declined; repeat the flag for each
+    """
+    later: list[LaterItem] = []
+    """
+    A proposed change kept for later; repeat the flag for each
+    """
+
+
 class Report(BaseModel):
     """
-    Print the report: open rounds, or unknown with the reason when the store cannot be read.
+    Print open rounds and closed rounds owing a retro; each section is unknown when the store cannot be read.
     """
 
     model_config = ConfigDict(
@@ -172,7 +221,63 @@ class CloseEvent(BaseModel):
     prs: list[ClosedPr]
 
 
-type RoundEvent = OpenEvent | PrEvent | CloseEvent
+class Disposition(StrEnum):
+    """
+    What became of one change a retro proposed.
+    """
+
+    accepted = "accepted"
+    declined = "declined"
+    later = "later"
+
+
+class RetroChange(BaseModel):
+    """
+    One change a retro proposed, and its disposition.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    change: str
+    disposition: Disposition
+
+
+class RetroEvent(BaseModel):
+    """
+    A closed round's retro ran; any retro event clears the round's retro debt.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    kind: Literal["retro"]
+    round: RoundId
+    at: str
+    """
+    UTC time written, ISO 8601
+    """
+    sources: list[str]
+    """
+    The sources the retro actually read
+    """
+    findings: Annotated[int, Field(ge=0)]
+    """
+    How many findings the retro made; zero is valid
+    """
+    findings_at: str
+    """
+    Where the findings live
+    """
+    changes: list[RetroChange]
+    """
+    One disposition per proposed change
+    """
+
+
+type RoundEvent = OpenEvent | PrEvent | CloseEvent | RetroEvent
 """
 One line of a lane's store file.
 """
@@ -231,12 +336,30 @@ class OpenRound(BaseModel):
     prs: list[PrRef]
 
 
+class RetroOwed(BaseModel):
+    """
+    A report line: a closed round with no retro event, and the inputs its retro starts from.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    kind: Literal["retro-owed"]
+    round: RoundId
+    closed_at: str
+    sessions: list[str]
+    plan: str
+    prs: list[ClosedPr]
+
+
 class SectionName(StrEnum):
     """
     A report section.
     """
 
     open_rounds = "open-rounds"
+    owing_retro = "owing-retro"
 
 
 class ReportSection(BaseModel):
@@ -336,7 +459,9 @@ class SettingsLocal(BaseModel):
     )
 
 
-type Options = Frontmatter | SkillTable | Tickets | SettingsLocal | RoundOpen | RoundPr | RoundClose | Report
+type Options = (
+    Frontmatter | SkillTable | Tickets | SettingsLocal | RoundOpen | RoundPr | RoundClose | RoundRetro | Report
+)
 """
 What a workflowtools command parses from its arguments.
 """
@@ -606,3 +731,5 @@ class Workflowtools(BaseModel):
     github_pull: GitHubPull | None = None
     open_round: OpenRound | None = None
     report_section: ReportSection | None = None
+    round_retro: RoundRetro | None = None
+    retro_owed: RetroOwed | None = None

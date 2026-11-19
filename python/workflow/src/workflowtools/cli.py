@@ -18,6 +18,7 @@ from .models import (
     RoundClose,
     RoundOpen,
     RoundPr,
+    RoundRetro,
     SettingsLocal,
     SkillTable,
     Tickets,
@@ -31,6 +32,7 @@ OPTIONS: dict[Command, type[Options]] = {
     Command.round_open: RoundOpen,
     Command.round_pr: RoundPr,
     Command.round_close: RoundClose,
+    Command.round_retro: RoundRetro,
     Command.report: Report,
 }
 
@@ -74,7 +76,7 @@ def run(options: Options) -> None:
             emit([result] if isinstance(result, BaseModel) else result)
         case SettingsLocal():
             emit(found := settings_local.findings())
-        case RoundOpen() | RoundPr() | RoundClose():
+        case RoundOpen() | RoundPr() | RoundClose() | RoundRetro():
             # The event written or replayed, or why none was: exit 1 on a finding, 2 when GitHub could not answer.
             emit(lines := [rounds.run(options)])
             if status := tickets.code(lines, require_github=False):
@@ -82,7 +84,7 @@ def run(options: Options) -> None:
             return
         case Report():
             # Report-only: unknown is a line in the report, never a failing exit.
-            emit(rounds.open_rounds())
+            emit(rounds.report())
             return
         case _:
             emit(found := frontmatter.findings())

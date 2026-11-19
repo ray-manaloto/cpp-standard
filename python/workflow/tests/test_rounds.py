@@ -31,8 +31,8 @@ def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gh_stand_in: GhStandI
 
 def run(capsys: pytest.CaptureFixture[str], *args: str) -> list[dict[str, object]]:
     """The command's stdout lines without their write time, then the exit code."""
-    lines = report(capsys, *args)
-    return [{key: value for key, value in line.items() if key not in {"at", "opened_at"}} for line in lines]
+    times = {"at", "opened_at", "closed_at"}
+    return [{key: value for key, value in line.items() if key not in times} for line in report(capsys, *args)]
 
 
 def stored(state: Path, lane: str = "cpp-standard") -> list[dict[str, object]]:
@@ -158,13 +158,16 @@ def test_the_report_lists_open_rounds(capsys: pytest.CaptureFixture[str]) -> Non
         {"kind": "open-round", "round": ROUND, "prs": [{"repo": "o/r", "number": 5}, {"repo": "o/r", "number": 3}]},
         {"kind": "open-round", "round": "dotfiles-20261117-wiki", "prs": []},
         {"kind": "section", "section": "open-rounds", "count": 2, "unknown": None},
+        {"kind": "retro-owed", "round": OTHER, "sessions": ["lead-1", "w-2"], "plan": "p", "prs": []},
+        {"kind": "section", "section": "owing-retro", "count": 1, "unknown": None},
         {"exit": "0"},
     ]
 
 
-def test_a_store_never_written_reports_no_open_round(capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_store_never_written_reports_no_open_round_and_no_debt(capsys: pytest.CaptureFixture[str]) -> None:
     assert run(capsys, "report") == [
         {"kind": "section", "section": "open-rounds", "count": 0, "unknown": None},
+        {"kind": "section", "section": "owing-retro", "count": 0, "unknown": None},
         {"exit": "0"},
     ]
 
@@ -191,9 +194,13 @@ def test_an_unreadable_store_reads_unknown_with_the_reason(
 ) -> None:
     state.mkdir(parents=True)
     damage(state)
-    *_, section, code = run(capsys, "report")
-    assert (section["count"], code) == (None, {"exit": "0"})
-    assert reason in str(section["unknown"])
+    *sections, code = run(capsys, "report")
+    assert code == {"exit": "0"}
+    assert [(section["section"], section["count"]) for section in sections] == [
+        ("open-rounds", None),
+        ("owing-retro", None),
+    ]
+    assert all(reason in str(section["unknown"]) for section in sections)
 
 
 def test_a_damaged_store_refuses_a_new_event(state: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -233,7 +240,7 @@ def test_a_blank_line_in_a_lane_file_is_skipped(state: Path, capsys: pytest.Capt
     run(capsys, "round-open", "--round", ROUND)
     with (state / "cpp-standard.jsonl").open("a") as stream:
         stream.write("\n  \n")
-    assert run(capsys, "report")[-2] == {"kind": "section", "section": "open-rounds", "count": 1, "unknown": None}
+    assert {"kind": "section", "section": "open-rounds", "count": 1, "unknown": None} in run(capsys, "report")
 
 
 def test_a_pull_request_github_cannot_read_is_not_added(
@@ -246,3 +253,139 @@ def test_a_pull_request_github_cannot_read_is_not_added(
         {"exit": "2"},
     ]
     assert [event["kind"] for event in stored(state)] == ["open"]
+
+
+def retro(capsys: pytest.CaptureFixture[str], *extra: str, round_id: str = ROUND) -> list[dict[str, object]]:
+    base = ["round-retro", "--round", round_id, "--source", "lead-1", "--findings-at", "plan/findings.md"]
+    return run(capsys, *base, *extra)
+
+
+def owing(capsys: pytest.CaptureFixture[str]) -> list[object]:
+    """The rounds the report lists as owing a retro, after checking the section's count line."""
+    lines = run(capsys, "report")
+    owed = [line["round"] for line in lines if line.get("kind") == "retro-owed"]
+    assert {"kind": "section", "section": "owing-retro", "count": len(owed), "unknown": None} in lines
+    return owed
+
+
+def test_a_closed_round_owes_a_retro_and_an_open_one_does_not(capsys: pytest.CaptureFixture[str]) -> None:
+    for round_id in (ROUND, OTHER):
+        run(capsys, "round-open", "--round", round_id)
+    run(capsys, "round-pr", "--round", ROUND, "--repo", "o/r", "--number", "5")
+    close(capsys, ROUND)
+    assert run(capsys, "report") == [
+        {"kind": "open-round", "round": OTHER, "prs": []},
+        {"kind": "section", "section": "open-rounds", "count": 1, "unknown": None},
+        {
+            "kind": "retro-owed",
+            "round": ROUND,
+            "sessions": ["lead-1", "w-2"],
+            "plan": "p",
+            "prs": [{"repo": "o/r", "number": 5, "head": HEAD_A}],
+        },
+        {"kind": "section", "section": "owing-retro", "count": 1, "unknown": None},
+        {"exit": "0"},
+    ]
+
+
+def test_a_retro_with_zero_findings_clears_the_debt(
+    state: Path, capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    run(capsys, "round-open", "--round", ROUND)
+    close(capsys)
+    log = gh_stand_in({}, set())
+    assert retro(capsys, "--findings", "0") == [
+        {
+            "kind": "retro",
+            "round": ROUND,
+            "sources": ["lead-1"],
+            "findings": 0,
+            "findings_at": "plan/findings.md",
+            "changes": [],
+        },
+        {"exit": "0"},
+    ]
+    assert not log.exists()
+    assert [event["kind"] for event in stored(state)] == ["open", "close", "retro"]
+    assert owing(capsys) == []
+
+
+def test_a_retro_whose_proposals_are_all_declined_clears_the_debt(capsys: pytest.CaptureFixture[str]) -> None:
+    for round_id in (ROUND, OTHER):
+        run(capsys, "round-open", "--round", round_id)
+        close(capsys, round_id)
+    declined = ["--declined", "a mise task for X", "--declined", "a doctor check for Y"]
+    assert retro(capsys, "--findings", "2", *declined)[0]["changes"] == [
+        {"change": "a mise task for X", "disposition": "declined"},
+        {"change": "a doctor check for Y", "disposition": "declined"},
+    ]
+    assert owing(capsys) == [OTHER]
+
+
+def test_a_retro_records_one_disposition_per_change(capsys: pytest.CaptureFixture[str]) -> None:
+    run(capsys, "round-open", "--round", ROUND)
+    close(capsys)
+    changes = ["--later", "c", "--accepted", "a", "--declined", "b", "--accepted", "a2"]
+    assert retro(capsys, "--findings", "3", *changes)[0]["changes"] == [
+        {"change": "a", "disposition": "accepted"},
+        {"change": "a2", "disposition": "accepted"},
+        {"change": "b", "disposition": "declined"},
+        {"change": "c", "disposition": "later"},
+    ]
+
+
+def test_replaying_close_or_retro_neither_duplicates_nor_restores_debt(
+    state: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run(capsys, "round-open", "--round", ROUND)
+    close(capsys)
+    close(capsys)
+    assert owing(capsys) == [ROUND]
+    first = retro(capsys, "--findings", "0")
+    close(capsys)
+    assert owing(capsys) == []
+    before = (state / "cpp-standard.jsonl").read_text()
+    # A replay with other arguments prints the stored retro and writes nothing.
+    assert retro(capsys, "--findings", "4", "--later", "x") == first
+    assert (state / "cpp-standard.jsonl").read_text() == before
+    assert owing(capsys) == []
+    assert [event["kind"] for event in stored(state)] == ["open", "close", "retro"]
+
+
+@pytest.mark.parametrize(
+    ("setup", "detail"),
+    [
+        ([], f"round {ROUND} was never opened"),
+        ([["round-open", "--round", ROUND]], f"round {ROUND} is not closed: close it before its retro"),
+    ],
+)
+def test_a_retro_for_a_round_not_closed_is_refused(
+    state: Path, capsys: pytest.CaptureFixture[str], setup: list[list[str]], detail: str
+) -> None:
+    for earlier in setup:
+        report(capsys, *earlier)
+    assert retro(capsys, "--findings", "0") == [
+        {"path": str(state / "cpp-standard.jsonl"), "check": "rounds", "detail": detail},
+        {"exit": "1"},
+    ]
+    lane = state / "cpp-standard.jsonl"
+    assert ([event["kind"] for event in stored(state)] if lane.exists() else []) == ["open"] * len(setup)
+    assert owing(capsys) == []
+
+
+@pytest.mark.parametrize("findings", ["-1", "x"])
+def test_a_retro_states_a_finding_count_of_zero_or_more(capsys: pytest.CaptureFixture[str], findings: str) -> None:
+    with pytest.raises(SystemExit) as stop:
+        main(["round-retro", "--round", ROUND, "--source", "s", "--findings-at", "f", "--findings", findings])
+    assert stop.value.code == 1
+    assert "findings" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_a_change_given_twice_is_refused(state: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    run(capsys, "round-open", "--round", ROUND)
+    close(capsys)
+    assert retro(capsys, "--findings", "1", "--accepted", "x", "--declined", "x") == [
+        {"path": str(state / "cpp-standard.jsonl"), "check": "rounds", "detail": "a change has one disposition: x"},
+        {"exit": "1"},
+    ]
+    assert owing(capsys) == [ROUND]
