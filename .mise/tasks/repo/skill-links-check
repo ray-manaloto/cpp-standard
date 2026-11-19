@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#MISE description="Fail unless every symlink under .agents/skills is git-ignored and every real directory is tracked (#294)"
+#
+# mise links tool skills into .agents/skills (D102); those links are per machine and must never
+# dirty the tree. A project skill is a real directory and must be tracked, so it needs its
+# un-ignore line in .gitignore. This check names each entry that breaks either rule.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+status=0
+
+for entry in .agents/skills/*; do
+  [[ -e "$entry" || -L "$entry" ]] || continue
+  if [[ -L "$entry" ]]; then
+    if ! git check-ignore -q -- "$entry"; then
+      echo "skill-links-check: symlink $entry is not git-ignored; .gitignore must ignore .agents/skills/* (#294)" >&2
+      status=1
+    fi
+  elif [[ -d "$entry" ]]; then
+    if [[ -z "$(git ls-files -- "$entry")" ]]; then
+      echo "skill-links-check: directory $entry is untracked or ignored; add '!$entry' to .gitignore and commit it (#294)" >&2
+      status=1
+    fi
+  fi
+done
+exit "$status"

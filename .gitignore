@@ -9,7 +9,15 @@ dist/
 # live under .agents/skills/; .claude/skills/ holds committed links to them,
 # so Claude Code finds them as slash commands.
 .agents/skills/.mise-skills.json
-.agents/skills/hk-*
+# Ignore every entry, then un-ignore each tracked project skill (a new one needs its line; the
+# repo:skill-links-check step fails without it) (#294).
+.agents/skills/*
+!.agents/skills/egm-check
+!.agents/skills/macos-certify
+!.agents/skills/pins-apt-bump
+!.agents/skills/run-testtab
+!.agents/skills/ubuntu-arm64-run
+!.agents/skills/ubuntu-certify
 
 # The ticket roadmap that /to-spec and /to-tickets keep in the main checkout. It is rebuilt from GitHub
 # (workflowtools tickets --rebuild), so it is local state, not a source file.
