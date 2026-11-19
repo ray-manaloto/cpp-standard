@@ -232,6 +232,7 @@ jobs:
             && '--release-only' || '--no-rebuild' }}
         run: mise run toolchain:fetch "$MODE"
       - name: Bootstrap vcpkg at the pinned baseline
+        timeout-minutes: 15
         run: mise run vcpkg:bootstrap
       - name: Run the gate
         env:

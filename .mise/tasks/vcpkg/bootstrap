@@ -36,14 +36,23 @@ if [[ "${usage_check:-false}" == true ]]; then
   exit 0
 fi
 
+# A stalled network or download fails after ten minutes instead of holding the job (where `timeout` exists).
+limit() { if command -v timeout >/dev/null; then timeout 600 "$@"; else "$@"; fi; }
 if [[ "$head" != "$baseline" ]]; then
   rm -rf "$dir"
   mkdir -p "$dir"
   git -C "$dir" init --quiet
-  git -C "$dir" fetch --quiet --depth 1 https://github.com/microsoft/vcpkg "$baseline"
+  limit git -C "$dir" fetch --quiet --depth 1 https://github.com/microsoft/vcpkg "$baseline"
   git -C "$dir" -c advice.detachedHead=false checkout --quiet FETCH_HEAD
 fi
 if [[ ! -x "$dir/vcpkg" ]]; then
-  "$dir/bootstrap-vcpkg.sh" -disableMetrics
+  limit "$dir/bootstrap-vcpkg.sh" -disableMetrics
 fi
-exec "$0" --check --dir "$dir"
+# Check in this process: re-running this script with `exec "$0" --check` lost the flag (mise parses it,
+# the script does not) and looped forever.
+head="$(git -C "$dir" rev-parse HEAD)"
+[[ "$head" == "$baseline" ]] || {
+  echo "FAIL: vcpkg at $dir is at $head, not the baseline $baseline"
+  exit 1
+}
+echo "PASS: vcpkg is at the baseline $baseline"
