@@ -1,6 +1,6 @@
-"""Check testtab.py and testguard.py against #178's acceptance lines, offline: a scratch trust record, stand-in
-herdr-app and hc executables on PATH, and scratch git checkouts. It never reads the real ~/.claude.json, opens a
-tab or starts Claude Code. Prints one line per case and exits 1 when any fails.
+"""Check testtab.py and testguard.py against #178's and #251's acceptance lines, offline: a scratch trust record,
+stand-in herdr-app and hc executables on PATH, and scratch git checkouts. It never reads the real ~/.claude.json,
+opens a tab or starts Claude Code. Prints one line per case and exits 1 when any fails.
 """
 
 import json
@@ -142,6 +142,32 @@ def guard(payload: dict) -> str:
     return done.stdout
 
 
+def guard_run(
+    payload: object, log: Path, tools: str = "Read"
+) -> subprocess.CompletedProcess[str]:
+    """Run testguard.py on one stdin text and a log path; never raises on a non-zero exit."""
+    return subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(HERE / "testguard.py"),
+            str(log),
+            "--tools",
+            tools,
+            "probe",
+        ],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def denies_cleanly(done: subprocess.CompletedProcess[str]) -> bool:
+    """Exit 0 and a deny on stdout: what Claude Code reads as a decision, not as a hook failure."""
+    return done.returncode == 0 and '"permissionDecision": "deny"' in done.stdout
+
+
 def cases(
     s: dict[str, Path], env: dict[str, str]
 ) -> list[tuple[str, Callable[[], bool]]]:
@@ -161,6 +187,29 @@ def cases(
         code, err, calls = launch(env, s["trusted"], runs / name, screen, wait="1")
         sends = [c for c in calls if c[0] == "hc" and c[1] != "read"]
         return code == 4 and "handing probe (t1) to the owner" in err and not sends
+
+    def guard_hook_blocks() -> bool:
+        code, _, _calls = launch(env, s["trusted"], runs / "settings", "ready")
+        path = runs / "settings" / "settings-probe.json"
+        if code != 0 or not path.exists():
+            return False
+        pre = json.loads(path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+        hooks = [h for e in pre for h in e["hooks"] if "testguard.py" in h["command"]]
+        return len(hooks) == 1 and hooks[0].get("onFailure") == "block"
+
+    def log_unwritable_denies() -> bool:
+        gone = s["root"] / "gone" / "log.jsonl"
+        done = guard_run({"tool_name": "Read", "tool_input": {}}, gone)
+        return denies_cleanly(done) and "log could not be written" in done.stdout
+
+    def odd_payload_denies() -> bool:
+        return denies_cleanly(guard_run([], s["root"] / "odd.jsonl"))
+
+    def skill_says_blocked() -> bool:
+        text = (HERE.parents[1] / ".agents/skills/run-testtab/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        return "onFailure" in text and "stops every tool call" in text
 
     return [
         (
@@ -185,6 +234,13 @@ def cases(
         (
             "guard allows a listed tool",
             lambda: guard({"tool_name": "Read", "tool_input": {}}) == "",
+        ),
+        ("guard hook in the settings file has onFailure block", guard_hook_blocks),
+        ("run-testtab skill says a broken guard stops every call", skill_says_blocked),
+        ("guard denies, exit 0, when its log cannot be written", log_unwritable_denies),
+        (
+            "guard denies, exit 0, on a payload that is not an object",
+            odd_payload_denies,
         ),
     ]
 

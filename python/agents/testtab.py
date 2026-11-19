@@ -11,7 +11,8 @@ prompt is success (exit 0); a trust dialog, or a screen that never shows a ready
 (exit 4) and nothing more is sent to the tab. The first prompt goes in argv (--prompt), so the launcher never types.
 
 Settings written to RUNDIR/settings-N.json: env CLAUDE_CODE_BRIEF "0" and a PreToolUse "*" hook running testguard.py
-(tool allowlist and SendMessage recipients) first, then any hooks from --extra. The launch strips the inherited
+(tool allowlist and SendMessage recipients, with "onFailure": "block", so a broken guard blocks the call) first, then
+any hooks from --extra. The launch strips the inherited
 CLAUDE_CODE_* variables. Writes RUNDIR/tabnew_N.json. Exit 2 is a usage error.
 """
 
@@ -116,7 +117,9 @@ def settings(
     )
     data.setdefault("env", {})["CLAUDE_CODE_BRIEF"] = "0"
     pre = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    pre.insert(0, {"matcher": "*", "hooks": [{"type": "command", "command": guard}]})
+    # onFailure "block": a guard that cannot start, crashes or times out blocks the call instead of letting it through.
+    hook = {"type": "command", "command": guard, "onFailure": "block"}
+    pre.insert(0, {"matcher": "*", "hooks": [hook]})
     path = run / f"settings-{args.name}.json"
     path.write_text(json.dumps(data, indent=1), encoding="utf-8")
     return path

@@ -5,7 +5,9 @@
 testtab.py installs it as the tab's first PreToolUse hook (matcher "*"). Any tool not in --tools is denied (Bash,
 Monitor, MCP tools, ...), so a test tab cannot reach another session through a shell, sockets or scripts. A listed
 SendMessage may go only to an allowed name, or to a uds:<dir>/<pid>.sock whose process was started with
-`-n <allowed-name>`. A shell tool is refused even if listed. Any error denies: the guard fails closed.
+`-n <allowed-name>`. A shell tool is refused even if listed. Any error denies, and so does a log that cannot be
+written. The guard still exits 0 with the deny: it fails closed. testtab.py also sets "onFailure": "block" on the
+hook, for the failures the script cannot catch (it cannot start, or times out).
 """
 
 import json
@@ -65,9 +67,10 @@ def decide(payload: dict, tools: set[str], names: set[str]) -> tuple[bool, str]:
 
 def main() -> None:
     """Read the hook payload on stdin, log the decision, and print a deny when the call is refused."""
-    log = Path(sys.argv[1])
-    payload: dict = {}
+    payload: object = {}
+    log: Path | None = None
     try:
+        log = Path(sys.argv[1])
         rest = sys.argv[2:]
         if len(rest) < 2 or rest[0] != "--tools":
             msg = "usage: <log> --tools A,B <names...>"
@@ -78,14 +81,20 @@ def main() -> None:
         ok, why = decide(payload, tools, names)
     except Exception as error:  # noqa: BLE001 (any error denies)
         ok, why = False, f"guard error: {error!r}"
-    with log.open("a", encoding="utf-8") as out:
+    try:
+        fields = payload if isinstance(payload, dict) else {}
         record = {
             "at": time.time(),
             "ok": ok,
             "why": why,
-            "tool": payload.get("tool_name"),
+            "tool": fields.get("tool_name"),
+            "input": fields.get("tool_input"),
         }
-        out.write(json.dumps(record | {"input": payload.get("tool_input")}) + "\n")
+        if log is not None:
+            with log.open("a", encoding="utf-8") as out:
+                out.write(json.dumps(record) + "\n")
+    except Exception as error:  # noqa: BLE001 (a log that cannot be written denies, never exit 1)
+        ok, why = False, f"log could not be written ({error!r}); {why}"
     if not ok:
         reason = f"testguard: {why}. Test tabs may only use their listed tools and message this run's tabs."
         deny = {

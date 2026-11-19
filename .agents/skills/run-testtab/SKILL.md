@@ -11,6 +11,9 @@ folder the owner has not trusted, and it never answers a trust dialog. The drive
 `.agents/skills/run-testtab/testtab-run.sh` adds the rest of one test: it finds the space, runs the task, saves
 the tab's screen and closes the tab.
 
+The guard hook carries `"onFailure": "block"`: a broken guard (it cannot start, crashes, times out, or cannot write
+its log) now stops every tool call in the tab until it is fixed. Fix the guard or the run's log folder, not the tab.
+
 Paths are relative to the checkout root. Run from a herdr terminal (`$HC_TERMINAL_ID` set) on the Mac.
 
 ## Rules
