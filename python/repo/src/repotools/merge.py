@@ -9,7 +9,8 @@
 #   then `gh pr merge <number> --match-head-commit <sha>`, which puts the pull request in the merge queue; the queue
 #   runs the required CI checks and squashes. The command then waits as local-hk does (#158): it reports done only once
 #   `merged` is true, and fails for a pull request the queue dropped or one still unmerged at the time limit. The
-#   author-email workflow on main also checks the squash commit's author.
+#   author-email workflow on main also checks the squash commit's author. The wait is on the required checks only,
+#   read from the branch rules (#293): the others are listed with their state, never waited on, never a failure.
 # No review is required (owner ruling, 2026-11-17).
 
 import json
@@ -19,6 +20,7 @@ import sys
 import time
 import tomllib
 from collections.abc import Iterator
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -32,6 +34,8 @@ NOREPLY = "1428022+sortakool@users.noreply.github.com"
 # agent opened under the cpp-standard-agents App lands with that App's noreply address. Owner ruling 2026-11-18
 # (#158): either noreply address is accepted; any other author, a personal email above all, is still refused.
 AUTHORS = (NOREPLY, "356338082+cpp-standard-agents[bot]@users.noreply.github.com")
+# A check run's conclusion that does not hold a merge back (jouet counts skipped and neutral checks as passing too).
+PASSING = ("success", "neutral", "skipped")
 # CodeRabbit appends its release notes to a pull request's body between these markers (seen on dotfiles #720).
 BOT_OPEN = "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->"
 BOT_CLOSE = "<!-- end of auto-generated comment: release notes by coderabbit.ai -->"
@@ -198,17 +202,69 @@ def hk(head: str) -> str | None:
     return f"hk check --pr failed (exit {checked}) on {head}" if checked != 0 else None
 
 
-def checks_pass(options: PrMerge, head: str, deadline: float) -> None:
-    """Step one of the wait: jouet waits for the pull request's checks on head, within what is left of the limit."""
+def required_checks(default: str) -> list[str]:
+    """The check contexts the branch rules of the default branch require: the live truth, of which
+    .github/rulesets/main.json is the reviewed copy. A list that cannot be read, or is empty, refuses the merge; it
+    never falls back to waiting on every check (#293)."""
+    try:
+        rules = json.loads(gh("api", f"repos/{{owner}}/{{repo}}/rules/branches/{default}"))
+        names = sorted(
+            {
+                entry["context"]
+                for rule in rules
+                if rule["type"] == "required_status_checks"
+                for entry in rule["parameters"]["required_status_checks"]
+            }
+        )
+    except (subprocess.CalledProcessError, ValueError, KeyError, TypeError) as error:
+        msg = f"cannot read the required checks of {default} from its branch rules ({error!r}); refusing to merge"
+        raise ValueError(msg) from error
+    if not names:
+        msg = f"the branch rules of {default} name no required checks; refusing to wait on every check instead"
+        raise ValueError(msg)
+    return names
+
+
+def check_states(head: str) -> dict[str, str]:
+    """Every check run on head with its state: the conclusion once it has one, else its status (queued, in_progress)."""
+    answer = json.loads(gh("api", f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs", "-F", "per_page=100"))
+    return {run["name"]: run["conclusion"] or run["status"] for run in answer["check_runs"]}
+
+
+def checks_pass(
+    options: PrMerge, head: str, deadline: float, required: list[str] | None = None
+) -> dict[str, str] | None:
+    """Step one of the wait: jouet waits for the pull request's checks on head, within what is left of the limit.
+    With required (the queue gate), it waits only on those names; every other check is listed, with its state, and
+    returned, never waited on and never a failure. With None (local-hk) it waits on every check, as before."""
     left = max(1, int(deadline - CLOCK.now()))
     command = ["jouet", "wait", "ci", str(options.number), "--sha", head, "--timeout", f"{left}s"]
+    for name in required or []:
+        command += ["--check", name]
     done = subprocess.run(command, capture_output=True, check=False, text=True)
     if done.returncode != 0:
         said = (done.stdout + done.stderr).strip().splitlines()
         how = f"within the {float(options.time_limit)}s time limit " if done.returncode == JOUET_TIMEOUT else ""
         exit_code = f"(jouet wait ci exit {done.returncode})"
         msg = f"the checks of pull request #{options.number} on {head} did not pass {how}{exit_code}"
+        if required is not None:
+            states: dict[str, str] = {}
+            with suppress(subprocess.CalledProcessError, ValueError, KeyError, TypeError):
+                states = check_states(head)
+            blocking = [
+                f"{name} ({states.get(name, 'not reported')})" for name in required if states.get(name) not in PASSING
+            ]
+            if blocking:
+                msg += f"; required checks not passing: {', '.join(blocking)}"
         raise ValueError(f"{msg}: {said[-1]}" if said else msg)
+    if required is None:
+        return None
+    others = {name: state for name, state in check_states(head).items() if name not in required}
+    for name, state in sorted(others.items()):
+        sys.stderr.write(f"not required, not waited on: {name}: {state}\n")
+    if not others:
+        sys.stderr.write("no checks on the head besides the required ones\n")
+    return others
 
 
 def read(number: int) -> dict[str, Any]:
@@ -284,7 +340,9 @@ def merge(options: PrMerge) -> None:
         check_only(options, head)
         return
     gates(options, head)
-    queue = merge_gate(default_branch()) == REQUIRED_CHECKS
+    default = default_branch()
+    queue = merge_gate(default) == REQUIRED_CHECKS
+    required = required_checks(default) if queue else None
     if not queue:
         failed = hk(head)
         if failed is not None:
@@ -296,7 +354,7 @@ def merge(options: PrMerge) -> None:
     deadline = CLOCK.now() + options.time_limit
     # Passing checks come first under both gates: a red one fails here, naming it, and gh then merges or queues at
     # once rather than arming an auto-merge on pending checks. Passing checks are not a merge: the wait below is.
-    checks_pass(options, head, deadline)
+    others = checks_pass(options, head, deadline, required)
     if queue:
         # The checks took minutes: every gate is checked again before the queue call (#262).
         gates(options, head)
@@ -311,5 +369,5 @@ def merge(options: PrMerge) -> None:
     if email not in AUTHORS:
         msg = f"merge commit {commit} has author {email}, not {' or '.join(AUTHORS)}: report it to the owner"
         raise ValueError(msg)
-    merged = Merged(number=options.number, merge_commit=commit, author_email=email)
-    sys.stdout.write(merged.model_dump_json() + "\n")
+    merged = Merged(number=options.number, merge_commit=commit, author_email=email, other_checks=others)
+    sys.stdout.write(merged.model_dump_json(exclude_none=True) + "\n")

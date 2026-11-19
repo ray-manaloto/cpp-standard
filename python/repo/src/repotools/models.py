@@ -441,6 +441,10 @@ class Merged(BaseModel):
     """
     The merge commit's author email
     """
+    other_checks: dict[str, str] | None = None
+    """
+    Under required-checks: each check on the head that is not required, with its state when last read; never waited on
+    """
 
 
 class Queued(BaseModel):

@@ -52,7 +52,8 @@ def test_required_checks_runs_no_hk_and_queues_in_the_queue_form(
     capsys.readouterr()
     main(["pr-merge", *merge_args()])
     # Done only after the read showed `merged`: the output is the merge commit, not a queued receipt (#158).
-    assert json.loads(capsys.readouterr().out) == {"number": 7, "merge_commit": "f00d", "author_email": NOREPLY}
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"number": 7, "merge_commit": "f00d", "author_email": NOREPLY, "other_checks": out["other_checks"]}
     assert not queued.ran.exists()
     calls = queued.calls()
     merges = [call for call in calls if call[:2] == ["pr", "merge"]]
