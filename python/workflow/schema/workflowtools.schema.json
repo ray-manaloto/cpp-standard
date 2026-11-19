@@ -91,6 +91,12 @@
     },
     "report_section": {
       "$ref": "#/$defs/ReportSection"
+    },
+    "round_retro": {
+      "$ref": "#/$defs/RoundRetro"
+    },
+    "retro_owed": {
+      "$ref": "#/$defs/RetroOwed"
     }
   },
   "$defs": {
@@ -105,6 +111,7 @@
         "round-open",
         "round-pr",
         "round-close",
+        "round-retro",
         "report"
       ]
     },
@@ -182,8 +189,70 @@
       ],
       "additionalProperties": false
     },
+    "RoundRetro": {
+      "description": "Record a closed round's retro; a replay prints the stored retro event and writes nothing.",
+      "type": "object",
+      "properties": {
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "source": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "description": "A source the retro actually read (session, plan, pull request); repeat the flag for each"
+        },
+        "findings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many findings the retro made; zero is valid"
+        },
+        "findings_at": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the findings live, such as the plan's findings.md or a ticket comment"
+        },
+        "accepted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "description": "A proposed change the owner accepted; repeat the flag for each"
+        },
+        "declined": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "description": "A proposed change the owner declined; repeat the flag for each"
+        },
+        "later": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "description": "A proposed change kept for later; repeat the flag for each"
+        }
+      },
+      "required": [
+        "round",
+        "source",
+        "findings",
+        "findings_at"
+      ],
+      "additionalProperties": false
+    },
     "Report": {
-      "description": "Print the report: open rounds, or unknown with the reason when the store cannot be read.",
+      "description": "Print open rounds and closed rounds owing a retro; each section is unknown when the store cannot be read.",
       "type": "object",
       "properties": {},
       "additionalProperties": false
@@ -309,6 +378,82 @@
       ],
       "additionalProperties": false
     },
+    "Disposition": {
+      "description": "What became of one change a retro proposed.",
+      "type": "string",
+      "enum": [
+        "accepted",
+        "declined",
+        "later"
+      ]
+    },
+    "RetroChange": {
+      "description": "One change a retro proposed, and its disposition.",
+      "type": "object",
+      "properties": {
+        "change": {
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/Disposition"
+        }
+      },
+      "required": [
+        "change",
+        "disposition"
+      ],
+      "additionalProperties": false
+    },
+    "RetroEvent": {
+      "description": "A closed round's retro ran; any retro event clears the round's retro debt.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "retro"
+        },
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "at": {
+          "type": "string",
+          "description": "UTC time written, ISO 8601"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The sources the retro actually read"
+        },
+        "findings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many findings the retro made; zero is valid"
+        },
+        "findings_at": {
+          "type": "string",
+          "description": "Where the findings live"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RetroChange"
+          },
+          "description": "One disposition per proposed change"
+        }
+      },
+      "required": [
+        "kind",
+        "round",
+        "at",
+        "sources",
+        "findings",
+        "findings_at",
+        "changes"
+      ],
+      "additionalProperties": false
+    },
     "RoundEvent": {
       "description": "One line of a lane's store file.",
       "anyOf": [
@@ -320,6 +465,9 @@
         },
         {
           "$ref": "#/$defs/CloseEvent"
+        },
+        {
+          "$ref": "#/$defs/RetroEvent"
         }
       ]
     },
@@ -399,11 +547,52 @@
       ],
       "additionalProperties": false
     },
+    "RetroOwed": {
+      "description": "A report line: a closed round with no retro event, and the inputs its retro starts from.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "retro-owed"
+        },
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "closed_at": {
+          "type": "string"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plan": {
+          "type": "string"
+        },
+        "prs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClosedPr"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "round",
+        "closed_at",
+        "sessions",
+        "plan",
+        "prs"
+      ],
+      "additionalProperties": false
+    },
     "SectionName": {
       "description": "A report section.",
       "type": "string",
       "enum": [
-        "open-rounds"
+        "open-rounds",
+        "owing-retro"
       ]
     },
     "ReportSection": {
@@ -553,6 +742,9 @@
         },
         {
           "$ref": "#/$defs/RoundClose"
+        },
+        {
+          "$ref": "#/$defs/RoundRetro"
         },
         {
           "$ref": "#/$defs/Report"

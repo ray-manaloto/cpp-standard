@@ -1,4 +1,4 @@
-"""Rounds: open, pr and close events in one JSON-lines file per lane, and the report's open-rounds section."""
+"""Rounds: open, pr, close and retro events in one JSON-lines file per lane, and the report's two round sections."""
 
 import fcntl
 import os
@@ -15,16 +15,21 @@ from .models import (
     Check,
     ClosedPr,
     CloseEvent,
+    Disposition,
     Finding,
     OpenEvent,
     OpenRound,
     PrEvent,
     PrRef,
     ReportSection,
+    RetroChange,
+    RetroEvent,
+    RetroOwed,
     RoundClose,
     RoundEvent,
     RoundOpen,
     RoundPr,
+    RoundRetro,
     SectionName,
     Unavailable,
 )
@@ -151,6 +156,41 @@ def close_round(options: RoundClose) -> BaseModel:
         return append(path, closed)
 
 
+def retro_round(options: RoundRetro) -> BaseModel:
+    """Record a closed round's retro; the first one clears the debt, and a replay prints it and writes nothing."""
+    path = lane_file(options.round)
+    with locked(path) as events:
+        if replayed := stored(events, ("retro", options.round)):
+            return replayed
+        if stored(events, ("open", options.round)) is None:
+            return problem(path, f"round {options.round} was never opened")
+        if stored(events, ("close", options.round)) is None:
+            return problem(path, f"round {options.round} is not closed: close it before its retro")
+        dispositions = (
+            (Disposition.accepted, options.accepted),
+            (Disposition.declined, options.declined),
+            (Disposition.later, options.later),
+        )
+        changes = [
+            RetroChange(change=change, disposition=disposition)
+            for disposition, given in dispositions
+            for change in given
+        ]
+        given = [change.change for change in changes]
+        if twice := sorted({change for change in given if given.count(change) > 1}):
+            return problem(path, f"a change has one disposition: {', '.join(twice)}")
+        event = RetroEvent(
+            kind="retro",
+            round=options.round,
+            at=now(),
+            sources=options.source,
+            findings=options.findings,
+            findings_at=options.findings_at,
+            changes=changes,
+        )
+        return append(path, event)
+
+
 def all_events() -> list[RoundEvent]:
     """Every lane's events; a store directory not created yet holds none."""
     directory = store()
@@ -159,13 +199,11 @@ def all_events() -> list[RoundEvent]:
     return [event for path in sorted(directory.iterdir()) if path.suffix == ".jsonl" for event in read(path)]
 
 
-def open_rounds() -> list[BaseModel]:
-    section = SectionName.open_rounds
-    try:
-        events = all_events()
-    # OSError: a file or the directory cannot be read; ValueError: a line is not a round event.
-    except (OSError, ValueError) as error:
-        return [ReportSection(kind="section", section=section, count=None, unknown=str(error))]
+def section_end(section: SectionName, lines: list[BaseModel]) -> list[BaseModel]:
+    return [*lines, ReportSection(kind="section", section=section, count=len(lines), unknown=None)]
+
+
+def open_rounds(events: list[RoundEvent]) -> list[BaseModel]:
     closed = {event.round for event in events if isinstance(event, CloseEvent)}
     lines: list[BaseModel] = [
         OpenRound(
@@ -177,15 +215,47 @@ def open_rounds() -> list[BaseModel]:
         for event in events
         if isinstance(event, OpenEvent) and event.round not in closed
     ]
-    return [*lines, ReportSection(kind="section", section=section, count=len(lines), unknown=None)]
+    return section_end(SectionName.open_rounds, lines)
 
 
-def run(options: RoundOpen | RoundPr | RoundClose) -> BaseModel:
+def owing_retro(events: list[RoundEvent]) -> list[BaseModel]:
+    """Closed rounds with no retro event, each with the inputs its retro starts from."""
+    retros = {event.round for event in events if isinstance(event, RetroEvent)}
+    lines: list[BaseModel] = [
+        RetroOwed(
+            kind="retro-owed",
+            round=event.round,
+            closed_at=event.at,
+            sessions=event.sessions,
+            plan=event.plan,
+            prs=event.prs,
+        )
+        for event in events
+        if isinstance(event, CloseEvent) and event.round not in retros
+    ]
+    return section_end(SectionName.owing_retro, lines)
+
+
+def report() -> list[BaseModel]:
+    """Each section from one read of the store; when it cannot be read, every section is unknown with the reason."""
+    try:
+        events = all_events()
+    # OSError: a file or the directory cannot be read; ValueError: a line is not a round event.
+    except (OSError, ValueError) as error:
+        return [
+            ReportSection(kind="section", section=section, count=None, unknown=str(error)) for section in SectionName
+        ]
+    return [*open_rounds(events), *owing_retro(events)]
+
+
+def run(options: RoundOpen | RoundPr | RoundClose | RoundRetro) -> BaseModel:
     """The event written or replayed, or why none was: a Finding or an Unavailable."""
     match options:
         case RoundOpen():
             return open_round(options)
         case RoundPr():
             return add_pr(options)
+        case RoundRetro():
+            return retro_round(options)
         case _:
             return close_round(options)

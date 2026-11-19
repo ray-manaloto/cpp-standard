@@ -86,8 +86,17 @@ the installed `workflowtools`; replaying a command adds nothing.
   is no longer readable), hand it to the owner. Exit 1 means the round was never opened
   or is already closed. A replay prints the stored close and ignores new `--session` and `--plan`
   values.
-- **Check-in.** `workflowtools report` prints the open rounds, or "unknown" with the reason when the
-  store cannot be read.
+- **Retro.** Closing a round makes it owe a retro. Whoever runs the retro (`ticket-retro` or
+  `session-retro`) records it by hand until those skills do it themselves:
+  `workflowtools round-retro --round <ID> --source <what was read>
+  [--source ...] --findings <N> --findings-at <where the findings live>`, plus one `--accepted`,
+  `--declined` or `--later <change>` per proposed change, stored grouped in that order; a change
+  given twice is refused. Zero findings, or every change declined, still clears the debt. Exit 1
+  means the round was never opened, is not closed yet, or a change was given twice. A replay prints
+  the stored retro and ignores the new values.
+- **Check-in.** `workflowtools report` prints the open rounds, then the closed rounds owing a retro
+  with the inputs the retro starts from. Each section reads "unknown" with the reason when the store
+  cannot be read.
 
 ## Plans
 
