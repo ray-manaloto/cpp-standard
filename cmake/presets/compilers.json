@@ -3,6 +3,7 @@
     {
       "cacheVariables": {
         "CPPSTD_GCOV": "gcov-16",
+        "VCPKG_HOST_TRIPLET": "arm64-linux-gcc16",
         "VCPKG_TARGET_TRIPLET": "arm64-linux-gcc16"
       },
       "hidden": true,
@@ -11,6 +12,7 @@
     {
       "cacheVariables": {
         "CPPSTD_GCOV": "llvm-cov-23 gcov",
+        "VCPKG_HOST_TRIPLET": "arm64-linux-clang23-libcxx",
         "VCPKG_TARGET_TRIPLET": "arm64-linux-clang23-libcxx"
       },
       "hidden": true,
@@ -19,6 +21,7 @@
     {
       "cacheVariables": {
         "CPPSTD_GCOV": "$env{CPPSTD_P2996_PREFIX}/bin/llvm-cov gcov",
+        "VCPKG_HOST_TRIPLET": "arm64-linux-p2996-libcxx",
         "VCPKG_TARGET_TRIPLET": "arm64-linux-p2996-libcxx"
       },
       "hidden": true,

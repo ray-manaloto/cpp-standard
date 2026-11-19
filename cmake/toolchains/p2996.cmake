@@ -11,6 +11,8 @@ if(NOT DEFINED ENV{CPPSTD_P2996_PREFIX}
   )
 endif()
 set(_p2996_prefix "$ENV{CPPSTD_P2996_PREFIX}")
+# vcpkg's detect_compiler enables C too, and the image has no `cc`.
+set(CMAKE_C_COMPILER "${_p2996_prefix}/bin/clang")
 set(CMAKE_CXX_COMPILER "${_p2996_prefix}/bin/clang++")
 string(APPEND CMAKE_CXX_FLAGS_INIT " -stdlib=libc++ -freflection-latest")
 set(_p2996_link

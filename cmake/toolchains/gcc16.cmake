@@ -3,5 +3,7 @@
 # has reflection behind -freflection. Flags go in _INIT so a preset's CXXFLAGS
 # environment adds to
 # them instead of replacing them.
+# vcpkg's detect_compiler enables C too, and the image has no `cc`.
+set(CMAKE_C_COMPILER gcc-16)
 set(CMAKE_CXX_COMPILER g++-16)
 string(APPEND CMAKE_CXX_FLAGS_INIT " -freflection")
