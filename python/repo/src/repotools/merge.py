@@ -25,12 +25,26 @@ AUTHORS = (NOREPLY, "356338082+cpp-standard-agents[bot]@users.noreply.github.com
 # CodeRabbit appends its release notes to a pull request's body between these markers (seen on dotfiles #720).
 BOT_OPEN = "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->"
 BOT_CLOSE = "<!-- end of auto-generated comment: release notes by coderabbit.ai -->"
-# What the wait reads of a pull request. gh fills {owner} and {repo} from the checkout's remote; a number with no
-# pull request makes gh exit 1 ("Could not resolve to a PullRequest"), which ends the wait as an error.
+
+
+class Clock:
+    """The wait's time: a monotonic now and a sleep. Tests put a clock of their own in CLOCK, so the reads a wait
+    makes and the pauses between them do not depend on how fast the machine runs."""
+
+    def now(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+CLOCK = Clock()
 # jouet wait's exit code when its --timeout ran out.
 JOUET_TIMEOUT = 124
 # Reads in a row with no queue entry, after one was seen, that make a dropped pull request.
 DROP_READS = 2
+# What the wait reads of a pull request. gh fills {owner} and {repo} from the checkout's remote; a number with no
+# pull request makes gh exit 1 ("Could not resolve to a PullRequest"), which ends the wait as an error.
 READ = (
     "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {"
     " pullRequest(number: $number) { merged state mergeQueueEntry { position } mergeCommit { oid } } } }"
@@ -120,7 +134,7 @@ def hk(head: str) -> str | None:
 
 def checks_pass(options: PrMerge, head: str, deadline: float) -> None:
     """Step one of the wait: jouet waits for the pull request's checks on head, within what is left of the limit."""
-    left = max(1, int(deadline - time.monotonic()))
+    left = max(1, int(deadline - CLOCK.now()))
     command = ["jouet", "wait", "ci", str(options.number), "--sha", head, "--timeout", f"{left}s"]
     done = subprocess.run(command, capture_output=True, check=False, text=True)
     if done.returncode != 0:
@@ -164,12 +178,12 @@ def landed(options: PrMerge, deadline: float) -> str:
             if missing == DROP_READS:
                 msg = f"{number} was dropped from the merge queue: no queue entry and not merged"
                 raise ValueError(msg)
-        left = deadline - time.monotonic()
+        left = deadline - CLOCK.now()
         if left <= 0:
             state = f"still queued at position {entry['position']}" if entry else "open, neither queued nor merged"
             msg = f"{number} did not merge within the {float(options.time_limit)}s time limit; last read: {state}"
             raise ValueError(msg)
-        time.sleep(min(options.interval, left))
+        CLOCK.sleep(min(options.interval, left))
 
 
 def check_only(options: PrMerge, head: str) -> None:
@@ -199,7 +213,7 @@ def merge(options: PrMerge) -> None:
     # checked again. What is left between this and the merge is GitHub's to hold: --match-head-commit refuses a moved
     # head; a retarget or text edit within that last request is not caught.
     gates(options, head)
-    deadline = time.monotonic() + options.time_limit
+    deadline = CLOCK.now() + options.time_limit
     checks_pass(options, head, deadline)
     # With a merge queue, gh adds the pull request to it and returns before anything has merged.
     gh("pr", "merge", str(options.number), "--merge", "--match-head-commit", head, "--author-email", NOREPLY)
