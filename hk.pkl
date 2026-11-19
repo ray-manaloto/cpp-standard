@@ -123,6 +123,10 @@ local gateSteps = new Mapping<String, Step> {
     glob = List("python/agents/**", ".mise/tasks/agents/cov", ".mise/tasks/slot/**")
     check = "mise run agents:cov"
   }
+  ["artifact-cov"] {
+    glob = List("python/artifact/**", "tests/artifact/**", ".mise/tasks/artifact/cov")
+    check = "mise run artifact:cov"
+  }
 
   // Config and docs.
   // Every Dockerfile in the repository (D102). The builtin matches Dockerfile* only, and the

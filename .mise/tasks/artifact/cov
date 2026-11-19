@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#MISE description="Run python/artifact's unit tests under coverage; fail below its floor (#185)"
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+cd "$root"
+data="$(mktemp -d)"
+trap 'rm -rf "$data"' EXIT
+export COVERAGE_FILE="$data/.coverage"
+rc=python/artifact/pyproject.toml
+cov=(uv run --no-project --quiet --with coverage==7.17.3 python -I -m coverage)
+# The same tests as ci.yml's artifact-check job, which runs them on CI's bare python3.
+"${cov[@]}" run --rcfile="$rc" tests/artifact/test_artifact.py
+"${cov[@]}" combine --rcfile="$rc" --quiet "$data"
+exec "${cov[@]}" report --rcfile="$rc"
