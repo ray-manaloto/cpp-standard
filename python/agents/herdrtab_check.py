@@ -1,4 +1,4 @@
-"""Check herdrtab.py against #200's and #303's acceptance lines, offline: stand-in herdr-app and hc executables on
+"""Check herdrtab.py against #200's, #303's and #304's acceptance lines, offline: stand-in herdr-app and hc executables on
 PATH, never a real herdr tab. Prints one line per case and exits 1 when any fails.
 """
 
@@ -61,6 +61,8 @@ def call(
     env = {
         "PATH": f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}",
         "HC_TERMINAL_ID": "tmine",
+        # HOME points at the scratch so herdrtab's default --state stays inside it.
+        "HOME": str(root),
         "STANDIN_LOG": str(log),
         "STANDIN_SCREEN": str(screen_file),
         "STANDIN_LS": str(ls_file),
@@ -96,12 +98,29 @@ def new_name(calls: list[list[str]]) -> str:
 
 
 def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
-    def tab(agent: str, task: str = TASK, screen: str | None = None) -> tuple:
+    def tab(
+        agent: str, task: str = TASK, screen: str | None = None, state: bool = True
+    ) -> tuple:
         return call(
             root,
-            ["tab", "--agent", agent, "--name", "w1", "--task", task, "--wait", "1"],
+            [
+                "tab",
+                "--agent",
+                agent,
+                "--name",
+                "w1",
+                "--task",
+                task,
+                *(["--state", str(root / "state")] if state else []),
+                "--wait",
+                "1",
+            ],
             screen=task if screen is None else screen,
         )
+
+    def supervised_argv(new: list[str]) -> list[str]:
+        """The tab.new --argv, now the supervisor wrapping the agent argv (#304)."""
+        return json.loads(new[-1])
 
     def opens(agent: str, first: str) -> bool:
         code, out, _, calls = tab(agent)
@@ -109,13 +128,18 @@ def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
         lines = out.splitlines()
         info = json.loads(lines[0])
         name = new[new.index("--name") + 1]
+        argv = supervised_argv(new)
         return (
             code == 0
             and new[new.index("--space") + 1] == "sp2"
             and name.startswith("w1-")
             and STAMP.fullmatch(name.removeprefix("w1-")) is not None
-            and json.loads(new[-1])
-            == ([first, "-n", name, TASK] if agent == "claude" else [first, TASK])
+            and argv[:3] == [sys.executable, "-I", str(HERE / "supervise.py")]
+            and argv[argv.index("--state") + 1] == str(root / "state")
+            and argv[argv.index("--agent") + 1] == agent
+            and argv[argv.index("--prompt") + 1] == TASK
+            and argv[argv.index("--name") + 1] == name
+            and argv[-2:] == ["--", first]
             and lines[-1] == f"{name} (t9)"
             and info["name"] == name
             and info["tab"] == "tbnew"
@@ -144,7 +168,8 @@ def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
         return (
             code == 0
             and new[new.index("--name") + 1] == fixed
-            and json.loads(new[-1]) == ["claude", "-n", fixed, TASK]
+            and (argv := supervised_argv(new))[argv.index("--name") + 1] == fixed
+            and argv[-2:] == ["--", "claude"]
             and lines[-1] == f"{fixed} (t9)"
             and info["name"] == fixed
         )
@@ -178,7 +203,19 @@ def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
 
     def odd_task() -> bool:
         code, _, _, calls = tab("codex", task=ODD)
-        return code == 0 and json.loads(tab_new(calls)[0][-1]) == ["codex-hc", ODD]
+        argv = supervised_argv(tab_new(calls)[0])
+        return (
+            code == 0
+            and argv[argv.index("--prompt") + 1] == ODD
+            and argv[-2:] == ["--", "codex-hc"]
+        )
+
+    def default_state() -> bool:
+        """Without --state, the supervisor's state dir is ~/.local/state/agent-tabs (#304)."""
+        expected = root / ".local" / "state" / "agent-tabs"
+        code, _, _, calls = tab("claude", state=False)
+        argv = supervised_argv(tab_new(calls)[0])
+        return code == 0 and argv[argv.index("--state") + 1] == str(expected)
 
     def close(tab_id: str) -> tuple[int, list[list[str]]]:
         code, _, _, calls = call(root, ["close", "--id", tab_id])
@@ -224,6 +261,10 @@ def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
             lambda: not_arrived(DIALOG, "trust dialog"),
         ),
         ("quotes, newline, non-ASCII reach tab.new unchanged", odd_task),
+        (
+            "without --state, the supervisor's state dir defaults to ~/.local/state/agent-tabs",
+            default_state,
+        ),
         ("a task starting with a dash is refused", dash_task),
         ("tab-close closes a tab of the current space", closes_own),
         ("tab-close refuses a tab of another space", refuses_other),

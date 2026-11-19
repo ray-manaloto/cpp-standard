@@ -11,12 +11,14 @@ the folder's git root, or a linked worktree's main checkout, as the client keys 
 the guard's allowed names carry. An untrusted, unknown or non-git
 folder is refused (exit 3) and no tab opens. After launch the tab's screen is read for up to --wait seconds: a ready
 prompt is success (exit 0); a trust dialog, or a screen that never shows a ready prompt, is handed to the owner
-(exit 4) and nothing more is sent to the tab. The first prompt goes in argv (--prompt), so the launcher never types.
+(exit 4) and nothing more is sent to the tab. The first prompt goes to the supervisor (--prompt), so the launcher
+never types.
 
 Settings written to RUNDIR/settings-N.json: env CLAUDE_CODE_BRIEF "0" and a PreToolUse "*" hook running testguard.py
 (tool allowlist and SendMessage recipients, with "onFailure": "block", so a broken guard blocks the call) first, then
-any hooks from --extra. The launch strips the inherited
-CLAUDE_CODE_* variables. Writes RUNDIR/tabnew_N.json. Exit 2 is a usage error.
+any hooks from --extra. The launch runs under the #304 same-tab supervisor (`herdrtab.supervised`), which strips the
+inherited CLAUDE_CODE_* variables and, after an exit with a resume request, resumes the same session in this same
+tab. Writes RUNDIR/tabnew_N.json. Exit 2 is a usage error.
 """
 
 import argparse
@@ -132,7 +134,9 @@ def parse() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     for flag in ("--space", "--run", "--folder", "--name", "--names", "--tools"):
         parser.add_argument(flag, required=True)
-    parser.add_argument("--prompt", help="the tab's first prompt, passed in argv")
+    parser.add_argument(
+        "--prompt", help="the tab's first prompt, given to the first launch only"
+    )
     parser.add_argument("--model", default="haiku")
     parser.add_argument("--effort", default="low")
     parser.add_argument("--mode", default="default")
@@ -191,29 +195,33 @@ def main() -> None:
     run = Path(args.run)
     (run / "log").mkdir(parents=True, exist_ok=True)
     path = settings(name, args, run, tools, names)
-    unset = [
-        x for k in sorted(os.environ) if k.startswith("CLAUDE_CODE_") for x in ("-u", k)
-    ]
-    argv = [
-        "env",
-        *unset,
+    # No env -u, no -n and no prompt here: the supervisor strips the CLAUDE_CODE_* variables and gives the name and
+    # the first prompt to the first launch only, so a relaunch is the agent argv plus the resume form (#304).
+    argv = herdrtab.supervised(
         "claude",
-        "--model",
-        args.model,
-        "--effort",
-        args.effort,
-        "-n",
-        name,
-        "--permission-mode",
-        args.mode,
-        "--strict-mcp-config",
-        "--no-chrome",
-        *([] if args.no_tools_flag else ["--tools", ",".join(tools)]),
-        "--settings",
-        str(path),
-        *[x for d in args.plugin_dir for x in ("--plugin-dir", str(Path(d).resolve()))],
-        *([args.prompt] if args.prompt else []),
-    ]
+        [
+            "claude",
+            "--model",
+            args.model,
+            "--effort",
+            args.effort,
+            "--permission-mode",
+            args.mode,
+            "--strict-mcp-config",
+            "--no-chrome",
+            *([] if args.no_tools_flag else ["--tools", ",".join(tools)]),
+            "--settings",
+            str(path),
+            *[
+                x
+                for d in args.plugin_dir
+                for x in ("--plugin-dir", str(Path(d).resolve()))
+            ],
+        ],
+        str(run / "supervise"),
+        prompt=args.prompt,
+        name=name,
+    )
     try:
         reply = herdrtab.open_tab(args.space, name, str(folder), argv)
     except herdrtab.TabError as error:

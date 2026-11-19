@@ -216,7 +216,7 @@ def cases(
         stamped = new_name(calls)
         return (
             STAMPED.fullmatch(stamped) is not None
-            and argv[argv.index("-n") + 1] == stamped
+            and argv[argv.index("--name") + 1] == stamped
             and stamped in guard_command(runs / case, stamped)
         )
 
@@ -231,7 +231,7 @@ def cases(
         argv = json.loads(tab_new(calls)[0][-1])
         return (
             new_name(calls) == fixed
-            and argv[argv.index("-n") + 1] == fixed
+            and argv[argv.index("--name") + 1] == fixed
             and fixed in guard_command(runs / "stamped", fixed)
         )
 

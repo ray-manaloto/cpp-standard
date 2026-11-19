@@ -1,15 +1,16 @@
 """Open, watch and close agent tabs in the herdr-app space that holds this terminal (#200). The one implementation of
 "find the space", "open a tab" and "watch its screen"; `testtab.py` imports it and adds its guard on top.
 
-  python -I herdrtab.py tab --agent claude|codex --name N --task TEXT [--folder DIR] [--wait 30]
+  python -I herdrtab.py tab --agent claude|codex --name N --task TEXT [--folder DIR] [--wait 30] [--state DIR]
   python -I herdrtab.py close --id TAB_ID
 
-`tab` finds the space whose tabs list $HC_TERMINAL_ID in `herdr-app ls`, opens the tab there with `tab.new` (Codex as
-`codex-hc`, Claude as `claude`, the task as the last argv word and, for Claude, `-n <name>` before it), and reads the
-new terminal with `hc read` until the start of the task text is on its screen. The name is `<N>-<stamp>` (#303), the
-stamp of tabname.stamp() at launch, unless `N` already carries one: the same string names the tab and, for Claude,
-the session. It prints one JSON line {"name","space","tab","terminal"} and, as the last line, `name (terminal)`.
-Exit 0: the task arrived. Exit 2: usage, or `herdr-app` failed, or no space lists this
+`tab` finds the space whose tabs list $HC_TERMINAL_ID in `herdr-app ls`, opens the tab there with `tab.new` — Codex
+as `codex-hc`, Claude as `claude`, both under the #304 same-tab supervisor (`supervised`): the task is the first
+prompt, the name the session name (Claude only) and `--state` the supervisor's state dir, default
+~/.local/state/agent-tabs — and reads the new terminal with `hc read` until the start of the task text is on its
+screen. The name is `<N>-<stamp>` (#303), the stamp of tabname.stamp() at launch, unless `N` already carries one: the
+same string names the tab and, for Claude, the session. It prints one JSON line {"name","space","tab","terminal"} and,
+as the last line, `name (terminal)`. Exit 0: the task arrived. Exit 2: usage, or `herdr-app` failed, or no space lists this
 terminal; nothing opened and `hc run` is never the fallback. Exit 4: a tab opened but a trust dialog is open or the
 task never appeared; the screen is named on stderr, nothing more is sent to the tab, and the tab stays open for the
 owner. `close` closes a tab of the current space and refuses (exit 2) one that is in another space or is unknown.
@@ -29,6 +30,7 @@ sys.path.insert(0, str(HERE))  # python -I leaves the script's directory off sys
 import tabname
 
 USAGE, HANDOFF = 2, 4
+HERE = Path(__file__).resolve().parent
 # Markers taken from captured screens of Claude Code 2.1.3xx tabs, and Codex's own directory-trust prompt.
 DIALOG = (
     "Do you trust the files in this folder",
@@ -114,6 +116,30 @@ def open_tab(space: str, name: str, folder: str, argv: list[str]) -> dict:
     return reply
 
 
+def supervised(
+    agent: str,
+    argv: list[str],
+    state: str,
+    prompt: str | None = None,
+    name: str | None = None,
+) -> list[str]:
+    """The tab command that runs `argv` under the same-tab supervisor (#304): the prompt and the session name ride as
+    supervisor options, never inside the agent argv, so a relaunch is only the agent argv plus the resume form."""
+    return [
+        sys.executable,
+        "-I",
+        str(HERE / "supervise.py"),
+        "--state",
+        state,
+        "--agent",
+        agent,
+        *(["--prompt", prompt] if prompt else []),
+        *(["--name", name] if name else []),
+        "--",
+        *argv,
+    ]
+
+
 def squeeze(text: str) -> str:
     """Text without any whitespace, so a screen's wrapping and indent cannot split a match."""
     return "".join(text.split())
@@ -160,13 +186,19 @@ def tab_cmd(args: argparse.Namespace) -> int:
         if tabname.is_stamped(args.name)
         else tabname.make_name(args.name, now)
     )
-    argv = [AGENTS[args.agent]]
-    if args.agent == "claude":
-        argv += [
-            "-n",
-            name,
-        ]  # #303: the session starts under the tab's own stamped name
-    reply = open_tab(space, name, folder, [*argv, args.task])
+    Path(args.state).mkdir(parents=True, exist_ok=True)
+    reply = open_tab(
+        space,
+        name,
+        folder,
+        supervised(
+            args.agent,
+            [AGENTS[args.agent]],
+            args.state,
+            prompt=args.task,
+            name=name,
+        ),
+    )
     terminal = reply["terminal"]
     ok, why = watch(terminal, args.wait, task=args.task)
     sys.stdout.write(
@@ -215,6 +247,9 @@ def parse() -> argparse.Namespace:
     tab.add_argument("--task", required=True)
     tab.add_argument("--folder", default=os.getcwd())
     tab.add_argument("--wait", type=float, default=30)
+    tab.add_argument(
+        "--state", default=str(Path.home() / ".local" / "state" / "agent-tabs")
+    )
     close = sub.add_parser("close", help="close a tab of the current space")
     close.add_argument("--id", required=True)
     return parser.parse_args()
