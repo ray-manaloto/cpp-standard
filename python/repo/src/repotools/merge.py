@@ -7,6 +7,7 @@
 import json
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -17,9 +18,23 @@ from .models import GateResult, Merged, PrMerge, PrText
 
 # The merging account's noreply address (merge-author-noreply ruling): never a personal email on a public repository.
 NOREPLY = "1428022+sortakool@users.noreply.github.com"
+# A merge queue squashes, and its commit's author is the pull request's author, not --author-email: a pull request an
+# agent opened under the cpp-standard-agents App lands with that App's noreply address. Owner ruling 2026-11-18
+# (#158): either noreply address is accepted; any other author, a personal email above all, is still refused.
+AUTHORS = (NOREPLY, "356338082+cpp-standard-agents[bot]@users.noreply.github.com")
 # CodeRabbit appends its release notes to a pull request's body between these markers (seen on dotfiles #720).
 BOT_OPEN = "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->"
 BOT_CLOSE = "<!-- end of auto-generated comment: release notes by coderabbit.ai -->"
+# What the wait reads of a pull request. gh fills {owner} and {repo} from the checkout's remote; a number with no
+# pull request makes gh exit 1 ("Could not resolve to a PullRequest"), which ends the wait as an error.
+# jouet wait's exit code when its --timeout ran out.
+JOUET_TIMEOUT = 124
+# Reads in a row with no queue entry, after one was seen, that make a dropped pull request.
+DROP_READS = 2
+READ = (
+    "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {"
+    " pullRequest(number: $number) { merged state mergeQueueEntry { position } mergeCommit { oid } } } }"
+)
 
 
 def gh(*args: str) -> str:
@@ -103,6 +118,60 @@ def hk(head: str) -> str | None:
     return f"hk check --pr failed (exit {checked}) on {head}" if checked != 0 else None
 
 
+def checks_pass(options: PrMerge, head: str, deadline: float) -> None:
+    """Step one of the wait: jouet waits for the pull request's checks on head, within what is left of the limit."""
+    left = max(1, int(deadline - time.monotonic()))
+    command = ["jouet", "wait", "ci", str(options.number), "--sha", head, "--timeout", f"{left}s"]
+    done = subprocess.run(command, capture_output=True, check=False, text=True)
+    if done.returncode != 0:
+        said = (done.stdout + done.stderr).strip().splitlines()
+        how = f"within the {float(options.time_limit)}s time limit " if done.returncode == JOUET_TIMEOUT else ""
+        exit_code = f"(jouet wait ci exit {done.returncode})"
+        msg = f"the checks of pull request #{options.number} on {head} did not pass {how}{exit_code}"
+        raise ValueError(f"{msg}: {said[-1]}" if said else msg)
+
+
+def read(number: int) -> dict[str, Any]:
+    """The pull request's merged flag, state, queue entry and merge commit, as GitHub has them now."""
+    answer = gh(
+        "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-F", f"number={number}", "-f", f"query={READ}"
+    )
+    return json.loads(answer)["data"]["repository"]["pullRequest"]
+
+
+def landed(options: PrMerge, deadline: float) -> str:
+    """Step two of the wait: read the pull request every interval until it has merged, and return its merge commit.
+
+    Passing checks do not mean merged. A missing queue entry alone decides nothing: it is missing for a merged pull
+    request and for one not queued yet. Only after a read has shown an entry do reads with none, unmerged, mean the
+    queue dropped it, and DROP_READS of them in a row: one read can fall between the entry's removal and the merge.
+    The last read is made at the time limit, not one interval before it."""
+    number = f"pull request #{options.number}"
+    queued = False
+    missing = 0
+    while True:
+        pr = read(options.number)
+        if pr["merged"]:
+            return pr["mergeCommit"]["oid"]
+        if pr["state"] == "CLOSED":
+            msg = f"{number} was closed without being merged"
+            raise ValueError(msg)
+        entry = pr["mergeQueueEntry"]
+        if entry is not None:
+            queued, missing = True, 0
+        elif queued:
+            missing += 1
+            if missing == DROP_READS:
+                msg = f"{number} was dropped from the merge queue: no queue entry and not merged"
+                raise ValueError(msg)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            state = f"still queued at position {entry['position']}" if entry else "open, neither queued nor merged"
+            msg = f"{number} did not merge within the {float(options.time_limit)}s time limit; last read: {state}"
+            raise ValueError(msg)
+        time.sleep(min(options.interval, left))
+
+
 def check_only(options: PrMerge, head: str) -> None:
     """Run every gate, hk too, whatever an earlier one said; print each result and merge nothing."""
     results = [*checks(options, head), ("hk", hk(head))]
@@ -115,8 +184,9 @@ def check_only(options: PrMerge, head: str) -> None:
 
 
 def merge(options: PrMerge) -> None:
-    """Refuse at the first gate that fails; merge only after all of them, then check the merge commit's author.
-    With check_only, run and report every gate and merge nothing."""
+    """Refuse at the first gate that fails; merge only after all of them and the pull request's passing checks, wait
+    until GitHub has merged it (a merge queue may hold it a while), then check the merge commit's author. With
+    check_only, run and report every gate and merge nothing."""
     head = git("rev-parse", "HEAD").strip()
     if options.check_only:
         check_only(options, head)
@@ -129,11 +199,14 @@ def merge(options: PrMerge) -> None:
     # checked again. What is left between this and the merge is GitHub's to hold: --match-head-commit refuses a moved
     # head; a retarget or text edit within that last request is not caught.
     gates(options, head)
+    deadline = time.monotonic() + options.time_limit
+    checks_pass(options, head, deadline)
+    # With a merge queue, gh adds the pull request to it and returns before anything has merged.
     gh("pr", "merge", str(options.number), "--merge", "--match-head-commit", head, "--author-email", NOREPLY)
-    commit = view(options.number, "mergeCommit")["mergeCommit"]["oid"]
+    commit = landed(options, deadline)
     email = gh("api", f"repos/{{owner}}/{{repo}}/commits/{commit}", "--jq", ".commit.author.email").strip()
-    if email != NOREPLY:
-        msg = f"merge commit {commit} has author {email}, not {NOREPLY}: report it to the owner"
+    if email not in AUTHORS:
+        msg = f"merge commit {commit} has author {email}, not {' or '.join(AUTHORS)}: report it to the owner"
         raise ValueError(msg)
     merged = Merged(number=options.number, merge_commit=commit, author_email=email)
     sys.stdout.write(merged.model_dump_json() + "\n")
