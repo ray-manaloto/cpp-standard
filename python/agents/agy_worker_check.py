@@ -187,7 +187,7 @@ def main() -> int:
         case(
             "ok reply but the log lacks aicode: refuses with the owner step, starts no worker",
             rc == 3
-            and "owner: run /logout" in out
+            and "owner: type /logout" in out
             and "aicode" in out
             and "IDE" not in out
             and argv is None,
