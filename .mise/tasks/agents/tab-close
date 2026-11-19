@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Close a tab of this terminal's herdr-app space by tab id; refuses a tab of another space (#200)"
+#
+# Usage: mise run agents:tab-close --id <tab id>   (the "tab" value of agents:tab's JSON line)
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/herdrtab.py" close "$@"

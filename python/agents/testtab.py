@@ -22,17 +22,14 @@ import os
 import shlex
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REFUSED, HANDOFF = 3, 4
-# Markers taken from captured screens of Claude Code 2.1.3xx tabs.
-DIALOG = (
-    "Do you trust the files in this folder",
-    "Is this a project you created or one you trust",
-    "trust this folder",
-)
+sys.path.insert(0, str(HERE))  # python -I leaves the script's directory off sys.path
+import herdrtab
+
+REFUSED, HANDOFF = 3, herdrtab.HANDOFF
+# Marker taken from captured screens of Claude Code 2.1.3xx tabs.
 READY = ("? for shortcuts", "shift+tab to cycle", "esc to interrupt")
 
 
@@ -125,22 +122,6 @@ def settings(
     return path
 
 
-def watch(terminal: str, wait: float) -> tuple[bool, str]:
-    """Read the tab's screen until it shows a ready prompt or a trust dialog, or the wait ends."""
-    deadline = time.monotonic() + wait
-    while True:
-        screen = subprocess.run(
-            ["hc", "read", terminal], capture_output=True, text=True, check=False
-        ).stdout
-        if any(marker in screen for marker in DIALOG):
-            return False, "a workspace-trust dialog is open"
-        if any(marker in screen for marker in READY):
-            return True, "ready"
-        if time.monotonic() >= deadline:
-            return False, f"no ready prompt within {wait:g}s"
-        time.sleep(1)
-
-
 def parse() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     for flag in ("--space", "--run", "--folder", "--name", "--names", "--tools"):
@@ -210,27 +191,13 @@ def main() -> None:
         str(path),
         *([args.prompt] if args.prompt else []),
     ]
-    out = subprocess.run(
-        [
-            "herdr-app",
-            "do",
-            "tab.new",
-            "--space",
-            args.space,
-            "--name",
-            args.name,
-            "--folder",
-            str(folder),
-            "--argv",
-            json.dumps(argv),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    (run / f"tabnew_{args.name}.json").write_text(out, encoding="utf-8")
-    terminal = json.loads(out)["terminal"]
-    ok, why = watch(terminal, args.wait)
+    try:
+        reply = herdrtab.open_tab(args.space, args.name, str(folder), argv)
+    except herdrtab.TabError as error:
+        sys.exit(f"testtab: no tab opened: {error}")
+    (run / f"tabnew_{args.name}.json").write_text(json.dumps(reply), encoding="utf-8")
+    terminal = reply["terminal"]
+    ok, why = herdrtab.watch(terminal, args.wait, ready=READY)
     result = {"name": args.name, "terminal": terminal, "ready": ok, "why": why}
     sys.stdout.write(json.dumps(result) + "\n")
     if not ok:
