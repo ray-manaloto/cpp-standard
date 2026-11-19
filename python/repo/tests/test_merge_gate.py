@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from repotools.cli import main
+from repotools.merge import NOREPLY
 
 from .test_gates import REPO
 from .test_merge import PR_REFUSALS, World, merge_args, world
@@ -50,18 +51,20 @@ def test_required_checks_runs_no_hk_and_queues_in_the_queue_form(
 ) -> None:
     capsys.readouterr()
     main(["pr-merge", *merge_args()])
-    assert json.loads(capsys.readouterr().out) == {"number": 7, "head_commit": queued.head, "merged": False}
+    # Done only after the read showed `merged`: the output is the merge commit, not a queued receipt (#158).
+    assert json.loads(capsys.readouterr().out) == {"number": 7, "merge_commit": "f00d", "author_email": NOREPLY}
     assert not queued.ran.exists()
     calls = queued.calls()
     merges = [call for call in calls if call[:2] == ["pr", "merge"]]
     # The exact argument list: no --merge (the ruleset allows only the queue's squash), no --author-email (the
     # queue's squash takes the pull request's author), no --auto.
     assert merges == [queue_form(queued)]
-    # The required checks pass on the head first, then the queue call; the merge itself is not waited for.
+    # The required checks pass on the head first, then the queue call, then the reads until merged.
     checks = next(i for i, call in enumerate(calls) if call[:3] == ["jouet", "wait", "ci"])
     assert calls[checks][3:6] == ["7", "--sha", queued.head]
     assert calls.index(queue_form(queued)) > checks
-    assert not any(call[:2] == ["api", "graphql"] for call in calls)
+    read = next(i for i, call in enumerate(calls) if call[:2] == ["api", "graphql"])
+    assert read > calls.index(queue_form(queued))
 
 
 def test_required_checks_failing_stops_before_the_queue(queued: World, capsys: pytest.CaptureFixture[str]) -> None:

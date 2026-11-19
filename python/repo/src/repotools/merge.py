@@ -7,7 +7,9 @@
 #   until it has merged and a check of the merge commit's author.
 # - required-checks (cpp-standard): every gate but hk, no local hk run, a wait for the pull request's checks to pass,
 #   then `gh pr merge <number> --match-head-commit <sha>`, which puts the pull request in the merge queue; the queue
-#   runs the required CI checks and squashes. The author-email workflow on main checks the squash commit's author.
+#   runs the required CI checks and squashes. The command then waits as local-hk does (#158): it reports done only once
+#   `merged` is true, and fails for a pull request the queue dropped or one still unmerged at the time limit. The
+#   author-email workflow on main also checks the squash commit's author.
 # No review is required (owner ruling, 2026-11-17).
 
 import json
@@ -22,7 +24,7 @@ from typing import Any, cast
 
 from . import process
 from .git import git
-from .models import GateResult, Merged, PrMerge, PrText, Queued
+from .models import GateResult, Merged, PrMerge, PrText
 
 # The merging account's noreply address (merge-author-noreply ruling): never a personal email on a public repository.
 NOREPLY = "1428022+sortakool@users.noreply.github.com"
@@ -275,34 +277,35 @@ def check_only(options: PrMerge, head: str) -> None:
 def merge(options: PrMerge) -> None:
     """Refuse at the first gate that fails; merge only after all of them and the pull request's passing checks, wait
     until GitHub has merged it (a merge queue may hold it a while), then check the merge commit's author. With
-    check_only, run and report every gate and merge nothing. Under required-checks, after every gate but hk and its
-    passing checks, queue it and report it queued."""
+    check_only, run and report every gate and merge nothing. Under required-checks the same wait follows the queue
+    call: the command reports done only once `merged` is true, and a pull request the queue drops is a failure."""
     head = git("rev-parse", "HEAD").strip()
     if options.check_only:
         check_only(options, head)
         return
     gates(options, head)
-    if merge_gate(default_branch()) == REQUIRED_CHECKS:
-        # The required checks pass on head first: a red one fails here, naming it, and gh then queues at once rather
-        # than arming an auto-merge on pending checks.
-        checks_pass(options, head, CLOCK.now() + options.time_limit)
+    queue = merge_gate(default_branch()) == REQUIRED_CHECKS
+    if not queue:
+        failed = hk(head)
+        if failed is not None:
+            raise ValueError(failed)
+        # hk runs for minutes: the checkout or the pull request may have changed meanwhile, so every gate is
+        # checked again. What is left between this and the merge is GitHub's to hold: --match-head-commit refuses a
+        # moved head; a retarget or text edit within that last request is not caught.
+        gates(options, head)
+    deadline = CLOCK.now() + options.time_limit
+    # Passing checks come first under both gates: a red one fails here, naming it, and gh then merges or queues at
+    # once rather than arming an auto-merge on pending checks. Passing checks are not a merge: the wait below is.
+    checks_pass(options, head, deadline)
+    if queue:
+        # The checks took minutes: every gate is checked again before the queue call (#262).
         gates(options, head)
         # The one form the ruleset allows: the queue picks the squash, so no --merge; its squash takes the pull
         # request's author, so no --author-email. With a merge queue gh enables auto-merge for it, which queues it.
         gh("pr", "merge", str(options.number), "--match-head-commit", head)
-        sys.stdout.write(Queued(number=options.number, head_commit=head, merged=False).model_dump_json() + "\n")
-        return
-    failed = hk(head)
-    if failed is not None:
-        raise ValueError(failed)
-    # hk runs for minutes: the checkout or the pull request may have changed meanwhile, so every gate is
-    # checked again. What is left between this and the merge is GitHub's to hold: --match-head-commit refuses a moved
-    # head; a retarget or text edit within that last request is not caught.
-    gates(options, head)
-    deadline = CLOCK.now() + options.time_limit
-    checks_pass(options, head, deadline)
-    # With a merge queue, gh adds the pull request to it and returns before anything has merged.
-    gh("pr", "merge", str(options.number), "--merge", "--match-head-commit", head, "--author-email", NOREPLY)
+    else:
+        # With a merge queue, gh adds the pull request to it and returns before anything has merged.
+        gh("pr", "merge", str(options.number), "--merge", "--match-head-commit", head, "--author-email", NOREPLY)
     commit = landed(options, deadline)
     email = gh("api", f"repos/{{owner}}/{{repo}}/commits/{commit}", "--jq", ".commit.author.email").strip()
     if email not in AUTHORS:
