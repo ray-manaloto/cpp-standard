@@ -980,10 +980,12 @@ give cpp-standard a slot.
 #### Identities (D40, D52, D71)
 
 - Agents on the Mac host push and open PRs as the agent App,
-  `cpp-standard-agents`. It has contents,
-  pull_requests and workflows write, on cpp-standard only. It had actions
-  write until D134; the owner removes it in M1a, since `linux:run` now
-  opens draft PRs (D130).
+  `cpp-standard-agents`. It has contents, pull_requests and workflows write,
+  on cpp-standard only. It had actions write until D134; the owner removes
+  it in M1a, since `linux:run` now opens draft PRs (D130). The daily
+  `apt-bump.yml` workflow also pushes and opens its pin-bump PRs as
+  `cpp-standard-agents`, minting a per-run token scoped down to contents and
+  pull requests (D173).
 - Agents in a project container push and open PRs as the container agent
   App, `ray-manaloto-agents` (D155). The organization owns it, and it is
   installed on all of the organization's repositories, with workflows
@@ -1004,8 +1006,37 @@ give cpp-standard a slot.
 
 #### Credentials (D109)
 
-Jobs receive only `GITHUB_TOKEN`, minted for each job. `publish.yml` also
-gets an OIDC `id-token` to sign.
+Every job except `apt-bump.yml`'s `bump` job receives only `GITHUB_TOKEN`,
+minted for each job. `publish.yml` also gets an OIDC `id-token` to sign.
+
+**The one Actions exception (D173):** the `apt-bump` Actions environment is
+the one Actions place that holds the agent App's credential: variable
+`APT_BUMP_CLIENT_ID` (the `cpp-standard-agents` client ID) and secret
+`APT_BUMP_PRIVATE_KEY` (its private key). Its deployment branches are `main`
+only, so no pull-request or branch workflow can read it. `apt-bump.yml`'s
+`bump` job runs only on `refs/heads/main`, enters `environment: apt-bump`
+and, when pins change, mints a per-run token with
+`actions/create-github-app-token` scoped down to `contents: write` and
+`pull-requests: write`, because a `GITHUB_TOKEN` pull request starts no
+required checks. The owner (or the repository's settings owner on the
+owner's word; no App here has repository Administration or secrets
+permission) creates the `apt-bump` environment, restricts its deployment
+branches to `main`, and stores `APT_BUMP_CLIENT_ID` and
+`APT_BUMP_PRIVATE_KEY`.
+
+**Accepted risk (D173):** a copy of the agent App's private key lives in
+GitHub Actions rather than on the Mac host alone. Any job running on `main`
+that names `environment: apt-bump` can read `APT_BUMP_PRIVATE_KEY`, and
+`apt-bump.yml` runs repository code (`mise run pins:apt-bump`) in that job.
+Because workflow and code changes merge to `main` on the required checks
+with no human look before merge (D149), a merged change on `main` can reach
+the key and mint tokens with all of `cpp-standard-agents`'s permissions on
+cpp-standard (`contents`, `pull_requests` and `workflows` write, plus
+`actions` write until setup step 9 removes it). What bounds it: deployment
+branches are `main` only, `apt-bump.yml` scopes its own token down to
+`contents: write` and `pull-requests: write`, the App is installed on
+cpp-standard only with no Administration or secrets permission, and every PR
+it opens still goes through the required checks and the merge queue.
 
 The daily settings check reads the rulesets with `GITHUB_TOKEN`, so it
 cannot read the bypass list, which needs Administration write. Only the
@@ -1014,10 +1045,16 @@ which no App here is, can add a bypass actor (D131).
 
 #### Credential storage (D65, D70, D71)
 
-- **The agent App key** stays on the Mac host, behind `agent:token`, a git
-  and gh credential helper that mints a one-hour App token (D71, D80, D84).
-  From M3 a host job passes the token into the dev VM; the key never enters
-  it (file plan, `runner/mac/agent-token.plist`).
+- **The agent App key** lives in two places: on the Mac host in the login
+  Keychain (item `cpp-standard-agent-app`), behind `agent:token`, a git and
+  gh credential helper that mints a one-hour App token (D71, D80, D84; from
+  M3 a host job passes the token into the dev VM and the key never enters
+  it, file plan `runner/mac/agent-token.plist`); and, as the one Actions
+  place that holds it, as secret `APT_BUMP_PRIVATE_KEY` (with variable
+  `APT_BUMP_CLIENT_ID`) in the `apt-bump` Actions environment, whose
+  deployment branches are `main` only (D173). The owner (or the repository's
+  settings owner on the owner's word) creates that environment and stores
+  its variable and secret; §6 Credentials states the risk D173 accepts.
 - **The container agent App key** is in the Doppler project
   `agent-containers` (D155). A Doppler service token that can fetch it is
   on both hosts: a file the `agent-secrets` service reads on the PC
@@ -1051,6 +1088,7 @@ job. A job that runs `toolchain:fetch` or `image:verify` also gets
 | `retention.yml` | `schedule` | `packages: write` (only `pr-<n>-` versions), `actions: write`, to delete PR images and caches (D79) |
 | `repo-verify.yml` | `schedule`, `workflow_dispatch` on `main` | `contents: read`, `actions: read` |
 | `digest.yml` | `schedule` | `contents: read`, `actions: read`, `issues: write`, `pull-requests: read` |
+| `apt-bump.yml` | `schedule` (daily, `23 3 * * *`), `workflow_dispatch`; `bump` runs only on `refs/heads/main` | `contents: read` on `check` and `bump`; `bump` uses environment `apt-bump` (`main` deployment branches only) and mints a per-run `cpp-standard-agents` token scoped to `contents: write` and `pull-requests: write` from `APT_BUMP_CLIENT_ID` and `APT_BUMP_PRIVATE_KEY` when pins change (D165, D173) |
 
 #### Trust roots (D108, D134, D149)
 
@@ -1174,13 +1212,15 @@ fails if the queue stops being required.
     newest version differs between the two, and moves `mise.ubuntu.toml`'s
     snapshot date with that file's Ubuntu pins. It trusts TLS and the
     release file's checksums; it does not yet verify the release file's
-    signature or its Valid-Until (a follow-up ticket). The daily
+    signature or its Valid-Until (ticket #229, D173). The daily
     `apt-bump.yml` runs it once per group, LLVM and Ubuntu, so a red Ubuntu
     bump never holds an LLVM bump back: each group with changes gets one PR
     from its own branch (`apt-bump/llvm`, `apt-bump/ubuntu`), opened and
-    queued as the agent App (D40), which merges on its checks, so the image
-    tags change and the daily build rebuilds. Its `check` job fails, naming
-    the package, when a pinned version is gone from its index (#193).
+    queued as the agent App (D40, D173; minting a per-run token from the
+    `main`-only `apt-bump` environment, §6 Credentials), which merges on its
+    checks, so the image tags change and the daily build rebuilds. Its
+    `check` job fails, naming the package, when a pinned version is gone
+    from its index (#193).
   - A change to `apt-toolchain-host.toml` or a toolchain's `pins.toml`
     changes the toolchain hash, so the builder rebuilds the Linux toolchain
     in that PR; nothing is written back (D75, D85). One PR bumps every OS;
@@ -1861,6 +1901,7 @@ This list is not complete for D136 to D155.
 | The shared Renovate preset and hk-config are one point of compromise for every project | open | a bad change lands in either repository | Projects import them at a tag; how tag updates are held or checked is part of #222 | D148 |
 | A PC runner slot runs a job from any repository its runner group allows, with a writable cache | open | a workflow in an allowed repository names a slot's label | One-job containers, the slot network rules and a cache wiped after seven days (`docs/standard/gha-runner/README.md`); no decision accepts this for the repositories that use slots; cpp-standard gets no slot until runner-side admission is proven (#218) | D141 |
 | Ubuntu 26.10 is an interim release, supported to about July 2027, and the archive drops superseded exact versions | dependency | end of support, or a pinned package version leaves the archive | The daily apt bump moves each pin to the newest version, and a daily check fails when a pinned version is gone (§7); old bases are reproduced only by pulling their images; the move to the next release is a base upgrade (§7) | D27, D36, D165 |
+| The agent App's private key is held in the `apt-bump` Actions environment | accepted | a workflow or code change merged to `main` runs in `environment: apt-bump` | Deployment branches are `main` only, so no PR workflow can read `APT_BUMP_PRIVATE_KEY`; `apt-bump.yml` scopes its minted token down to `contents: write` and `pull-requests: write`; the App is installed on cpp-standard only with no Administration or secrets permission, and its PRs merge only through the merge queue on the required checks (§6 Credentials); changes still merge to `main` without human review (D149) | D149, D173 |
 
 ## Detailed Implementation
 
@@ -1937,9 +1978,15 @@ history. So nothing unscrubbed is ever pushed.
    - **The owner confirms once** in the browser, as GitHub requires (2FA).
    - **Exchange** the returned code through
      `gh api -X POST /app-manifests/{code}/conversions`.
-   - **Store the private key** on the Mac host only, in the login Keychain
-     (item `cpp-standard-agent-app`), behind `agent:token`. It is never
-     printed, never enters the VM, and no Actions job holds it.
+   - **Store the private key** on the Mac host in the login Keychain (item
+     `cpp-standard-agent-app`), behind `agent:token`. It is never printed
+     and never enters the VM. The one Actions place that holds it is the
+     `apt-bump` environment, whose deployment branches are `main` only
+     (D173): the owner (or the repository's settings owner on the owner's
+     word) creates that environment and stores variable
+     `APT_BUMP_CLIENT_ID` and secret `APT_BUMP_PRIVATE_KEY` for
+     `.github/workflows/apt-bump.yml` (§6 Credentials); no other Actions job
+     holds the key.
 
    Done when `agent:token` mints a token and `gh api
    /installation/repositories` with it lists only cpp-standard.
