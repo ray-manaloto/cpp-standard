@@ -26,7 +26,19 @@ fi
 build_and_test() { # <preset>
   rm -rf "build/$1"
   echo "::group::configure $1"
-  cmake --preset "$1"
+  cmake --preset "$1" || {
+    # vcpkg prints only "unable to detect the compiler"; its own logs say why.
+    echo "::endgroup::"
+    echo "::group::vcpkg logs for $1 (ninja: $(command -v ninja || echo none))"
+    for f in "build/$1/vcpkg-manifest-install.log" "${VCPKG_ROOT:-$root/.cache/vcpkg}"/buildtrees/detect_compiler/*.log; do
+      [[ -f "$f" ]] && {
+        echo "== $f"
+        tail -n 40 "$f"
+      }
+    done
+    echo "::endgroup::"
+    return 1
+  }
   echo "::endgroup::"
   echo "::group::build $1"
   cmake --build --preset "$1"
