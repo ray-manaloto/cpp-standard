@@ -42,6 +42,15 @@ elif args[:2] == ["pr", "view"] and args[3:] == ["--json", "headRefOid,state,bas
     print(json.dumps(scenario["pr"]))
 elif args == ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"]:
     print(scenario["default"])
+elif args == ["api", "repos/{owner}/{repo}/rules/branches/" + scenario["default"]]:
+    if scenario["rules"] == "unreadable":
+        sys.stderr.write("gh: HTTP 403\\n")
+        sys.exit(1)
+    print(scenario["rules"] if isinstance(scenario["rules"], str) else json.dumps(scenario["rules"]))
+elif args[:2] == ["api", "repos/{owner}/{repo}/commits/" + scenario["pr"]["headRefOid"] + "/check-runs"]:
+    if args[2:] != ["-F", "per_page=100"]:
+        sys.exit(2)
+    print(json.dumps({"check_runs": scenario["check_runs"]}))
 elif args[:2] == ["pr", "merge"]:
     if scenario.get("refuse"):
         sys.stderr.write(scenario["refuse"])
@@ -64,6 +73,20 @@ if "after_checks" in scenario:
 print(scenario.get("checks_said", "checks passed"))
 sys.exit(scenario.get("checks", 0))
 """
+# The branch rules as the API answers: a deletion rule, then the required status checks, then another rule.
+RULES = [
+    {"type": "deletion"},
+    {
+        "type": "required_status_checks",
+        "parameters": {"required_status_checks": [{"context": "lint", "integration_id": 1}, {"context": "gate"}]},
+    },
+    {"type": "non_fast_forward"},
+]
+RUNS = [
+    {"name": "lint", "status": "completed", "conclusion": "success"},
+    {"name": "gate", "status": "completed", "conclusion": "neutral"},
+    {"name": "Repowise review", "status": "queued", "conclusion": None},
+]
 MERGED = {"merged": True, "state": "MERGED", "mergeQueueEntry": None, "mergeCommit": {"oid": "f00d"}}
 QUEUED = {"merged": False, "state": "OPEN", "mergeQueueEntry": {"position": 2}, "mergeCommit": None}
 WAITING = {"merged": False, "state": "OPEN", "mergeQueueEntry": None, "mergeCommit": None}
@@ -117,7 +140,7 @@ class World:
         origin(root)
         done = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, check=True, text=True)
         self.head = done.stdout.strip()
-        self.set(pr=self.pr(), default="trunk", email=NOREPLY, reads=[MERGED])
+        self.set(pr=self.pr(), default="trunk", email=NOREPLY, reads=[MERGED], rules=RULES, check_runs=RUNS)
 
     def pr(self) -> dict[str, str]:
         return {"headRefOid": self.head, "state": "OPEN", "baseRefName": "trunk", "title": "feat: one", "body": BODY}
@@ -297,7 +320,9 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
     subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head], check=True)
     shown = {"headRefOid": head, "state": "OPEN", "baseRefName": "main", "title": title, "body": BODY}
     (copy.parent / "scenario.json").write_text(
-        json.dumps({"pr": shown, "default": "main", "reads": [MERGED], "email": NOREPLY})
+        json.dumps(
+            {"pr": shown, "default": "main", "reads": [MERGED], "email": NOREPLY, "rules": RULES, "check_runs": RUNS}
+        )
     )
     done = mise("//repo:pr-merge", "7", title, body_file)
     assert done.returncode == 0, done.stderr
@@ -310,6 +335,13 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
         assert result == [{"number": 7, "merge_commit": "f00d", "author_email": NOREPLY}]
     else:
         assert merges == [["pr", "merge", "7", "--match-head-commit", head]]
-        assert result == [{"number": 7, "merge_commit": "f00d", "author_email": NOREPLY}]
+        assert result == [
+            {
+                "number": 7,
+                "merge_commit": "f00d",
+                "author_email": NOREPLY,
+                "other_checks": {"Repowise review": "queued"},
+            }
+        ]
     assert ["jouet", "wait", "ci", "7", "--sha", head] in [call[:6] for call in calls]
     assert not list(copy.parent.rglob("pwned*"))
