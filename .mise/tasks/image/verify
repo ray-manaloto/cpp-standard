@@ -1,11 +1,38 @@
 #!/usr/bin/env bash
 #MISE description="Verify a main image's attestation (publish.yml on refs/heads/main) and print its digest (D114, D116)"
-#USAGE arg "<image>" help="<image>@sha256:<digest>, or <image>:<tag> to look up, e.g. ghcr.io/ray-manaloto/cpp-standard/tools:arm64-<hash>"
+#USAGE arg "<image>" help="<image>@sha256:<digest>, <image>:<tag> to look up, or base|tools for this commit's image"
+#USAGE flag "--arch <arch>" help="Docker arch for base|tools (default: this host's)" {
+#USAGE   choices "arm64" "amd64"
+#USAGE }
+#USAGE flag "--env-file <path>" help="After verification, write CPPSTD_TOOLS_IMAGE=<image>@<digest> there (the devcontainer's .devcontainer/.env, D93)"
 #
 # The image:verify row of the file plan: gh attestation verify oci://<image>@<digest> with the
 # repository, publish.yml as the signer workflow and refs/heads/main as the source ref, before
 # any use of a main image. A tag existing proves nothing (section 2 step 5). Needs gh logged in
 # to GitHub and, for a private package, to ghcr.io. The refusal test is tests/image_verify/.
+# `base` and `tools` expand to this commit's <kind>:<arch>-<hash> tag (artifact:tag), as
+# image:resolve picks it. With --env-file, the verified digest is written to the devcontainer's
+# generated .env (D93); a failed verification leaves no env file behind, so the devcontainer
+# never starts from a stale digest.
 set -euo pipefail
 root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
-exec python3 -I "$root/python/artifact/artifact.py" verify "${usage_image:?}"
+image="${usage_image:?}"
+case "$image" in
+  base | tools)
+    arch="${usage_arch:-$(uname -m)}"
+    case "$arch" in
+      aarch64 | arm64) arch=arm64 ;;
+      x86_64 | amd64) arch=amd64 ;;
+      *)
+        printf 'FAIL: no %s image for machine %s; pass --arch\n' "$image" "$arch" >&2
+        exit 1
+        ;;
+    esac
+    tag="$(python3 -I "$root/python/pins/pins.py" tag "$image" --arch "$arch" --root "$root")"
+    image="ghcr.io/ray-manaloto/cpp-standard/$image:$tag"
+    ;;
+esac
+if [[ -n "${usage_env_file:-}" ]]; then
+  exec python3 -I "$root/python/artifact/artifact.py" verify "$image" --env-file "${usage_env_file}"
+fi
+exec python3 -I "$root/python/artifact/artifact.py" verify "$image"

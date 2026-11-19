@@ -309,6 +309,59 @@ def gh_verify(image_at_digest: str) -> bool:
     return subprocess.run(cmd, check=False).returncode == 0
 
 
+# The one variable the devcontainer's compose.yaml reads (D93, the file plan's .devcontainer row):
+# `image:verify tools --env-file .devcontainer/.env` writes it there, and compose starts exactly
+# that digest. The file is generated and gitignored; it is never committed.
+DEVCONTAINER_ENV_VAR = "CPPSTD_TOOLS_IMAGE"
+
+
+def write_env_file(path: str, image_at_digest: str) -> None:
+    """Write `<DEVCONTAINER_ENV_VAR>=<image@digest>` to the devcontainer's generated .env file
+    (D93), creating parent folders. Compose reads only this one reference back, so the image it
+    starts is exactly the digest image:verify verified."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"{DEVCONTAINER_ENV_VAR}={image_at_digest}\n")
+
+
+def _drop_env_file(path: str | None) -> None:
+    """The devcontainer starts compose only from the env file image:verify wrote (D93): a refusal
+    removes any stale one, so a digest no verification backed cannot survive to compose."""
+    if path:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
+def verify(
+    image: str,
+    registry: Registry,
+    verifier: Callable[[str], bool],
+    env_file: str | None = None,
+) -> str:
+    """image:verify (the D114 policy of gh_verify) with the devcontainer's env file (D93): a tag
+    is looked up by digest, image@digest is held to the policy, and with env_file the verified
+    reference is written there. Returns image@sha256:<digest>; any failure, a refusal or a probe
+    error alike, names the image and leaves no env file behind."""
+    try:
+        if "@" not in image:
+            digest = registry.digest(image)
+            if not digest:
+                raise ArtifactError(f"{image} does not exist")
+            image = f"{image.rpartition(':')[0]}@{digest}"
+        if not verifier(image):
+            raise ArtifactError(f"{image}: attestation refused")
+    except ArtifactError:
+        _drop_env_file(env_file)
+        raise
+    if env_file:
+        write_env_file(env_file, image)
+    return image
+
+
 # --- resolve (the `resolve` job, D54, D98, D134) ------------------------------
 
 
@@ -389,6 +442,11 @@ def main(argv: list[str]) -> int:
     pr.add_argument("ref")
     v = sub.add_parser("verify")
     v.add_argument("image", help="<image>@sha256:<digest>, or <image>:<tag> to look up")
+    v.add_argument(
+        "--env-file",
+        help="write CPPSTD_TOOLS_IMAGE=<image@digest> there after verification"
+        " (the devcontainer's generated .devcontainer/.env, D93)",
+    )
     sub.add_parser("verify-flags")
     args = parser.parse_args(argv)
 
@@ -436,14 +494,7 @@ def main(argv: list[str]) -> int:
                 {"exists": "true" if digest else "false", "digest": digest or ""}
             )
         elif args.cmd == "verify":
-            image = args.image
-            if "@" not in image:
-                digest = Registry(_token()).digest(image)
-                if not digest:
-                    raise ArtifactError(f"{image} does not exist")
-                image = f"{image.rpartition(':')[0]}@{digest}"
-            if not gh_verify(image):
-                raise ArtifactError(f"{image}: attestation refused")
+            image = verify(args.image, Registry(_token()), gh_verify, args.env_file)
             print(image.rpartition("@")[2])
         else:
             print(" ".join(verify_flags()))
