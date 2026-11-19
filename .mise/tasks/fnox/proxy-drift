@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#MISE description="Fail while this repo's fnox proxy rules differ from the live dotfiles copy (until cutover)"
+#USAGE arg "[dotfiles]" help="The dotfiles fnox config to compare with" default="~/dev/github/ray-manaloto/dotfiles/unix/home/.config/fnox/config.toml"
+# Compares only the [proxy] table: this copy also carries entries dotfiles lacks (e.g. the git identity).
+# Skips where the dotfiles checkout is absent (CI). Never prints a secret: the table holds names and hosts only.
+set -euo pipefail
+here="${MISE_PROJECT_ROOT:-$PWD}/unix/home/.config/fnox/config.toml"
+there="${usage_dotfiles:-$HOME/dev/github/ray-manaloto/dotfiles/unix/home/.config/fnox/config.toml}"
+there="${there/#\~/$HOME}"
+if [[ ! -f "$there" ]]; then
+  echo "skip: fnox-proxy-drift: no dotfiles copy at the default path (checkout absent)"
+  exit 0
+fi
+table() { sed -n '/^\[proxy\]/,$p' "$1"; }
+if diff <(table "$here") <(table "$there") >&2; then
+  echo "ok: fnox proxy rules match the dotfiles copy"
+else
+  echo "FAIL: fnox proxy rules differ from the dotfiles copy (diff above)" >&2
+  exit 1
+fi
