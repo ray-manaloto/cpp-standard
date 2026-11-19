@@ -29,7 +29,7 @@ depends = ["sync"]
 dir = "{{ config_root }}/../.."
 run = "uv run --project python/workflow --locked workflowtools tickets"
 
-# Rounds (#159): one JSON-lines file per lane under $XDG_STATE_HOME/workflowtools/rounds. A replay prints the stored
+# Rounds (#159, #160): one JSON-lines file per lane under $XDG_STATE_HOME/workflowtools/rounds. A replay prints the stored
 # event and writes nothing. The coordinator runs the installed copy (`workflowtools round-open ...`) from any repo.
 [tasks.round-open]
 description = "Open a round: --round <repo-or-lane>-<yyyymmdd>-<slug>"
@@ -49,8 +49,14 @@ depends = ["sync"]
 dir = "{{ config_root }}/../.."
 run = "uv run --project python/workflow --locked workflowtools round-close"
 
+[tasks.round-retro]
+description = "Record a closed round's retro: --round ID --source S... --findings N --findings-at WHERE, and --accepted, --declined or --later per change"
+depends = ["sync"]
+dir = "{{ config_root }}/../.."
+run = "uv run --project python/workflow --locked workflowtools round-retro"
+
 [tasks.report]
-description = "Print open rounds, or unknown with the reason when the store cannot be read"
+description = "Print open rounds and closed rounds owing a retro, each unknown with the reason when the store cannot be read"
 depends = ["sync"]
 dir = "{{ config_root }}/../.."
 run = "uv run --project python/workflow --locked workflowtools report"
