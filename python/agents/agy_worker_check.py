@@ -27,9 +27,7 @@ else:
     with open(os.environ["STANDIN_LOG"], "w") as log:
         log.write(json.dumps(sys.argv[1:]))
 """
-PGREP = """#!/bin/sh
-exit ${STANDIN_IDE:-1}
-"""
+OSASCRIPT = """#!/bin/sh\nif [ "${STANDIN_IDE:-1}" = 0 ]; then echo true; else echo false; fi\n"""
 LACKS_LINE = "E1119 03:49:29.1 aicode_scope.go:88] OAuth token lacks https://www.googleapis.com/auth/aicode; routing AICode traffic to CCPA"
 SCREENS = {
     "signed-in": "ok\n",
@@ -98,9 +96,9 @@ def main() -> int:
         standin = root / "bin" / "agy"
         standin.write_text(STANDIN.format(python=sys.executable))
         standin.chmod(0o755)
-        pgrep = root / "bin" / "pgrep"
-        pgrep.write_text(PGREP)
-        pgrep.chmod(0o755)
+        osa = root / "bin" / "osascript"
+        osa.write_text(OSASCRIPT)
+        osa.chmod(0o755)
         wt = root / agy_worker.WORKTREES / "t1"
         wt.mkdir(parents=True)
         plan = root / agy_worker.PLANS / ".planning" / PLAN
@@ -169,8 +167,11 @@ def main() -> int:
             root, "signed-in", str(wt), str(brief), agylog=LACKS_LINE, ide=True
         )
         case(
-            "lacks aicode with the IDE running: the refusal names the IDE",
-            rc == 3 and "Antigravity IDE" in out and argv is None,
+            "Antigravity.app running: refuses before the probe with the exact text, even when signed in",
+            rc == 3
+            and agy_worker.IDE_REFUSAL in out
+            and "agy:ide-stop" in out
+            and argv is None,
             out,
         )
         rc, out, argv = run(
@@ -195,7 +196,7 @@ def main() -> int:
                 LACKS_LINE,
                 True,
                 1,
-                "Antigravity IDE is running",
+                "Antigravity.app is running",
             ),
         ):
             shutil.rmtree(root / "hl", ignore_errors=True)
@@ -214,6 +215,41 @@ def main() -> int:
                 done.returncode == want_rc and want in done.stdout,
                 done.stdout + done.stderr,
             )
+
+        pg = root / "bin" / "pgrep"
+        pg.write_text(
+            '#!/bin/sh\n[ -n "$STANDIN_LS" ] && echo "$STANDIN_LS language_server --standalone"; exit 0\n'
+        )
+        pg.chmod(0o755)
+        for name, ide, ls, want_rc, want in (
+            ("idle", False, "", 0, "com.google.antigravity: not running"),
+            ("app running", True, "", 1, "com.google.antigravity: running"),
+            ("language_server left", False, "4242", 1, "language_server pids 4242"),
+        ):
+            done = subprocess.run(
+                [sys.executable, "-I", str(HERE / "agy_ide.py"), "status"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env | {"STANDIN_IDE": "0" if ide else "1", "STANDIN_LS": ls},
+            )
+            case(
+                f"agy_ide status: {name}",
+                done.returncode == want_rc and want in done.stdout,
+                done.stdout + done.stderr,
+            )
+        done = subprocess.run(
+            [sys.executable, "-I", str(HERE / "agy_ide.py"), "status", "--app", "ide"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env | {"STANDIN_IDE": "1"},
+        )
+        case(
+            "agy_ide status --app ide names com.google.antigravity-ide",
+            "com.google.antigravity-ide" in done.stdout,
+            done.stdout,
+        )
 
         rc, out, argv = run(root, "signed-in", str(wt), str(brief))
         flags = {

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#MISE description="Quits the Antigravity desktop app and waits until it and its language_server are gone; closes the owner's windows, so only the owner or an explicit task run starts it"
+#USAGE flag "--app <app>" default="antigravity" help="antigravity is Antigravity.app (com.google.antigravity); ide is Antigravity IDE.app (com.google.antigravity-ide)" {
+#USAGE   choices "antigravity" "ide"
+#USAGE }
+#USAGE flag "--timeout <seconds>" default="30" help="How long to wait for the app and its language_server to go"
+# Run from anywhere with: mise -C <cpp-standard checkout> run agy:ide-stop
+set -euo pipefail
+root="${MISE_PROJECT_ROOT:-$PWD}"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/agy_ide.py" stop --app "${usage_app:-antigravity}"${usage_timeout:+ --timeout "$usage_timeout"}
