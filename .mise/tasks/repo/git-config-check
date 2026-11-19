@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#MISE description="Fail when the common git directory's config has core.worktree set (#280)"
+#
+# A hook or test that runs `git init` without clearing GIT_DIR and GIT_WORK_TREE writes
+# core.worktree into the shared common git config, pointing the main checkout at another
+# worktree. This check reads only the common git config (<git-common-dir>/config) and fails
+# when core.worktree is set, naming its value(s) and the command that removes it.
+set -euo pipefail
+
+find_common_dir() {
+  local dir="$PWD" line="" gitdir rel=""
+  while true; do
+    if [[ -d "$dir/.git" ]]; then
+      printf '%s\n' "$dir/.git"
+      return 0
+    elif [[ -f "$dir/.git" ]]; then
+      IFS= read -r line <"$dir/.git" || [[ -n "$line" ]]
+      if [[ "$line" == gitdir:\ * ]]; then
+        gitdir="${line#gitdir: }"
+        [[ "$gitdir" == /* ]] || gitdir="$dir/$gitdir"
+        if [[ -f "$gitdir/commondir" ]]; then
+          IFS= read -r rel <"$gitdir/commondir" || [[ -n "$rel" ]]
+          [[ "$rel" == /* ]] || rel="$gitdir/$rel"
+          (
+            cd "$rel" || exit 1
+            pwd -P
+          )
+          return 0
+        fi
+        (
+          cd "$gitdir" || exit 1
+          pwd -P
+        )
+        return 0
+      fi
+    fi
+    [[ "$dir" == "/" ]] && return 1
+    dir="${dir%/*}"
+    [[ -n "$dir" ]] || dir="/"
+  done
+}
+
+if ! common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+  # An empty core.worktree stops git from entering the worktree during repo discovery;
+  # locate the common git dir directly without invoking git in $PWD.
+  common_dir="$(find_common_dir)" || {
+    echo "FAIL: not a git repository (and could not locate common git dir)" >&2
+    exit 1
+  }
+fi
+cfg="$common_dir/config"
+if [[ ! -f "$cfg" ]]; then
+  echo "FAIL: common git config not found: $cfg" >&2
+  exit 1
+fi
+
+# Run git config from / with local git env vars cleared so repo discovery in $PWD
+# cannot fail when core.worktree is malformed or empty.
+rc=0
+values="$(
+  cd / || exit 2
+  # shellcheck disable=SC2046
+  unset $(git rev-parse --local-env-vars)
+  git config --file "$cfg" --get-all core.worktree
+)" || rc=$?
+if [[ $rc -eq 0 ]]; then
+  echo "FAIL: core.worktree is set in common git config $cfg:" >&2
+  while IFS= read -r val; do
+    printf '  core.worktree = %s\n' "$val" >&2
+  done <<<"$values"
+  echo "Remove it with:" >&2
+  printf '  git config --file %q --unset-all core.worktree\n' "$cfg" >&2
+  exit 1
+elif [[ $rc -ne 1 ]]; then
+  echo "FAIL: could not read core.worktree from $cfg (git config exited $rc)" >&2
+  exit 1
+fi

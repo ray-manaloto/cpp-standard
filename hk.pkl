@@ -42,6 +42,11 @@ local pctoolsFiles =
 local pinactAuth =
   #"GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}"; [ -n "$GITHUB_TOKEN" ] || { echo "pinact: no GitHub token: set GITHUB_TOKEN or run gh auth login (#169)" >&2; exit 1; }; export GITHUB_TOKEN;"#
 
+// Clear git's repository-local variables before running tests or fixtures (#280): a git hook
+// exports GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and the rest, under which a test's scratch
+// `git init` or `git commit` acts on the real repository (writing core.worktree or recursing).
+local cleanGitEnv = #"unset $(git rev-parse --local-env-vars);"#
+
 local gateSteps = new Mapping<String, Step> {
   // GitHub Actions: correctness, then pins, then policy and security.
   ["jactionlint"] = (Builtins.jactionlint) {
@@ -108,7 +113,7 @@ local gateSteps = new Mapping<String, Step> {
   ["pctools-test"] {
     depends = List("pctools-sync")
     glob = pctoolsFiles
-    check = "mise run pctools:test"
+    check = "\(cleanGitEnv) mise run pctools:test"
   }
   // The standard-library scripts: each one's checks under coverage, failing below its recorded floor (#185,
   // python/README.md). They take seconds, so they run on every commit that touches their inputs.
@@ -120,19 +125,19 @@ local gateSteps = new Mapping<String, Step> {
         "tests/artifact_tag/**",
         ".mise/tasks/pins/**",
       )
-    check = "mise run pins:cov"
+    check = "\(cleanGitEnv) mise run pins:cov"
   }
   ["suites-cov"] {
     glob = List("python/suites/**", ".mise/tasks/suites/**")
-    check = "mise run suites:cov"
+    check = "\(cleanGitEnv) mise run suites:cov"
   }
   ["agents-cov"] {
     glob = List("python/agents/**", ".mise/tasks/agents/cov", ".mise/tasks/slot/**")
-    check = "mise run agents:cov"
+    check = "\(cleanGitEnv) mise run agents:cov"
   }
   ["artifact-cov"] {
     glob = List("python/artifact/**", "tests/artifact/**", ".mise/tasks/artifact/cov")
-    check = "mise run artifact:cov"
+    check = "\(cleanGitEnv) mise run artifact:cov"
   }
   ["toolchain-cov"] {
     glob =
@@ -146,7 +151,31 @@ local gateSteps = new Mapping<String, Step> {
         ".mise/tasks/ci-must-fail",
         ".mise/tasks/toolchain/cov",
       )
-    check = "mise run toolchain:cov"
+    check = "\(cleanGitEnv) mise run toolchain:cov"
+  }
+  // Refuse a repository whose shared common git config has core.worktree set (#280).
+  // No glob: this runs on every hk check and pre-commit run, whatever files changed.
+  ["git-config-check"] {
+    check = "mise run repo:git-config-check"
+  }
+  ["hook-git-env"] {
+    glob =
+      List(
+        "hk.pkl",
+        "tests/hook_git_env/**",
+        ".mise/tasks/repo/git-config-check",
+        ".mise/tasks/ci-must-fail",
+        ".mise/tasks/pctools/test",
+        ".mise/tasks/pins/cov",
+        ".mise/tasks/pins/validate",
+        ".mise/tasks/suites/cov",
+        ".mise/tasks/agents/cov",
+        ".mise/tasks/agents/testtab-check",
+        ".mise/tasks/slot/guard-check",
+        ".mise/tasks/artifact/cov",
+        ".mise/tasks/toolchain/cov",
+      )
+    check = "\(cleanGitEnv) python3 -I tests/hook_git_env/test_hook_git_env.py"
   }
 
   // Config and docs.
@@ -221,11 +250,11 @@ local suites = new Mapping<String, Step> {
   // Also on Linux in CI's lint job since #181; CI warms uv's cache first (uv:cache-warm), as its offline tests need.
   ["repo-check"] {
     glob = List("python/repo/**")
-    check = "mise run //repo:check"
+    check = "\(cleanGitEnv) mise run //repo:check"
   }
   ["workflow-check"] {
     glob = List("python/workflow/**")
-    check = "mise run //workflow:check"
+    check = "\(cleanGitEnv) mise run //workflow:check"
   }
 }
 
