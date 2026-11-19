@@ -81,7 +81,12 @@ def setup(root: Path) -> dict[str, Path]:
 
 
 def launch(
-    env: dict[str, str], folder: Path, run: Path, screen: str, wait: str = "3"
+    env: dict[str, str],
+    folder: Path,
+    run: Path,
+    screen: str,
+    wait: str = "3",
+    extra: tuple[str, ...] = (),
 ) -> tuple[int, str, list]:
     """Run testtab.py once and return its exit code, stderr and the stand-in calls it made."""
     log = run / "standin.jsonl"
@@ -107,6 +112,7 @@ def launch(
             "Read",
             "--wait",
             wait,
+            *extra,
         ],
         env=env | {"STANDIN_LOG": str(log), "STANDIN_SCREEN": str(screen_file)},
         capture_output=True,
@@ -143,7 +149,7 @@ def guard(payload: dict) -> str:
 
 
 def guard_run(
-    payload: object, log: Path, tools: str = "Read"
+    payload: object, log: Path, tools: str = "Read", monitor: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run testguard.py on one stdin text and a log path; never raises on a non-zero exit."""
     return subprocess.run(
@@ -154,6 +160,7 @@ def guard_run(
             str(log),
             "--tools",
             tools,
+            *(["--allow-monitor", monitor] if monitor is not None else []),
             "probe",
         ],
         input=json.dumps(payload),
@@ -205,6 +212,54 @@ def cases(
     def odd_payload_denies() -> bool:
         return denies_cleanly(guard_run([], s["root"] / "odd.jsonl"))
 
+    def plugin_dir_passed() -> bool:
+        mod = s["root"] / "probe-mod"
+        mod.mkdir(exist_ok=True)
+        code, _, calls = launch(
+            env,
+            s["trusted"],
+            runs / "plugin-dir",
+            "ready",
+            extra=("--plugin-dir", str(mod)),
+        )
+        new = [c for c in calls if c[:3] == ["herdr-app", "do", "tab.new"]]
+        argv = json.loads(new[0][new[0].index("--argv") + 1]) if new else []
+        at = argv.index("--plugin-dir") if "--plugin-dir" in argv else -1
+        return code == 0 and at > 0 and argv[at + 1] == str(mod.resolve())
+
+    def allow_monitor_exact_only() -> bool:
+        cmd = "tail -f /run/watch.log"
+        log = s["root"] / "monitor.jsonl"
+
+        def call(tool: str, tool_input: dict) -> subprocess.CompletedProcess[str]:
+            payload = {"tool_name": tool, "tool_input": tool_input}
+            return guard_run(payload, log, monitor=cmd)
+
+        exact = call("Monitor", {"command": cmd, "description": "w", "timeout_ms": 1})
+        other = call("Monitor", {"command": cmd + "; id", "description": "w"})
+        socket = call("Monitor", {"command": cmd, "ws": {"url": "ws://x"}})
+        shell = call("Bash", {"command": cmd})
+        unset = guard_run({"tool_name": "Monitor", "tool_input": {"command": cmd}}, log)
+        return (
+            exact.returncode == 0
+            and exact.stdout == ""
+            and all(denies_cleanly(d) for d in (other, socket, shell, unset))
+        )
+
+    def allow_monitor_in_settings() -> bool:
+        code, _, _calls = launch(
+            env,
+            s["trusted"],
+            runs / "allow-monitor",
+            "ready",
+            extra=("--allow-monitor", "tail -f /run/watch.log"),
+        )
+        path = runs / "allow-monitor" / "settings-probe.json"
+        if code != 0 or not path.exists():
+            return False
+        text = path.read_text(encoding="utf-8")
+        return "--allow-monitor 'tail -f /run/watch.log'" in text
+
     def skill_says_blocked() -> bool:
         text = (HERE.parents[1] / ".agents/skills/run-testtab/SKILL.md").read_text(
             encoding="utf-8"
@@ -236,6 +291,12 @@ def cases(
             lambda: guard({"tool_name": "Read", "tool_input": {}}) == "",
         ),
         ("guard hook in the settings file has onFailure block", guard_hook_blocks),
+        ("--plugin-dir reaches the claude argv", plugin_dir_passed),
+        (
+            "--allow-monitor: only the exact Monitor command passes; Bash stays denied",
+            allow_monitor_exact_only,
+        ),
+        ("--allow-monitor reaches the guard command", allow_monitor_in_settings),
         ("run-testtab skill says a broken guard stops every call", skill_says_blocked),
         ("guard denies, exit 0, when its log cannot be written", log_unwritable_denies),
         (

@@ -38,7 +38,8 @@ R=~/dev/tmp/run-testtab/run2      # the run directory, outside the checkout
 
 `testtab-run.sh RUNDIR NAME [agents:testtab flags...]`. Its defaults, each replaced by the same flag after NAME:
 `--space` the space that lists this terminal, `--folder` the checkout root, `--names NAME`, `--tools Read`. Other
-flags (`--model haiku`, `--effort low`, `--mode default|plan`, `--extra FILE`, `--no-tools-flag`, `--wait 20`)
+flags (`--model haiku`, `--effort low`, `--mode default|plan`, `--extra FILE`, `--no-tools-flag`, `--plugin-dir DIR` (repeatable: a mod or plugin folder for this tab only), `--allow-monitor CMD` (the guard allows
+the Monitor tool for this exact command only; Bash and PowerShell stay refused), `--wait 20`)
 are in the docstring of `python/agents/testtab.py`. The driver exits with the task's code.
 
 Read the result from the run directory:
