@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Annotated
+from typing import Annotated, Literal
 
 
 class Command(StrEnum):
@@ -364,7 +364,7 @@ class PrText(BaseModel):
 
 class PrMerge(BaseModel):
     """
-    A pull request to merge once its head is this clean HEAD, its text is the given one and hk check --all passes.
+    A pull request to merge once its head is this clean HEAD, its text is the given one and its merge gate holds.
     """
 
     model_config = ConfigDict(
@@ -414,6 +414,10 @@ class GateResult(BaseModel):
     """
     Why the gate refused; null when it holds
     """
+    skipped: str | None = None
+    """
+    Why the gate did not run, naming the setting; left out of the line when it ran
+    """
 
 
 class Merged(BaseModel):
@@ -436,6 +440,29 @@ class Merged(BaseModel):
     author_email: str
     """
     The merge commit's author email
+    """
+
+
+class Queued(BaseModel):
+    """
+    What pr-merge printed under the required-checks gate: queued for the merge queue, not merged.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    number: int
+    """
+    The pull request number
+    """
+    head_commit: str
+    """
+    The head the queue was told to match
+    """
+    merged: Literal[False]
+    """
+    Always false: the merge commit does not exist yet
     """
 
 
@@ -513,6 +540,7 @@ class Repotools(BaseModel):
     pr_merge: PrMerge | None = None
     merged: Merged | None = None
     gate_result: GateResult | None = None
+    queued: Queued | None = None
     zero_bash: ZeroBash | None = None
     privacy_scan: PrivacyScan | None = None
     main_guard: MainGuard | None = None

@@ -1,20 +1,27 @@
 """pr-create opens a pull request; pr-merge is a lead's self-merge, done only once every gate holds, in one form."""
 
-# The gates are the owner's self-merge ruling's (2026-11-15): local hk check --pr passes on the exact head, then
-# `gh pr merge --merge --match-head-commit <sha>` with the account's noreply address as the merge author. No review
-# is required (owner ruling, 2026-11-17).
+# The gates are the owner's self-merge ruling's (2026-11-15), as D169 changed it: a repository names its merge gate in
+# repotools.toml's [pr-merge] gate, read from origin's default branch, never from the checkout under merge.
+# - local-hk, the default (dotfiles): hk check --pr passes on the exact head, then
+#   `gh pr merge --merge --match-head-commit <sha>` with the account's noreply address as the merge author, then a wait
+#   until it has merged and a check of the merge commit's author.
+# - required-checks (cpp-standard): every gate but hk, no local hk run, a wait for the pull request's checks to pass,
+#   then `gh pr merge <number> --match-head-commit <sha>`, which puts the pull request in the merge queue; the queue
+#   runs the required CI checks and squashes. The author-email workflow on main checks the squash commit's author.
+# No review is required (owner ruling, 2026-11-17).
 
 import json
 import subprocess
 import sys
 import time
+import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
 from . import process
 from .git import git
-from .models import GateResult, Merged, PrMerge, PrText
+from .models import GateResult, Merged, PrMerge, PrText, Queued
 
 # The merging account's noreply address (merge-author-noreply ruling): never a personal email on a public repository.
 NOREPLY = "1428022+sortakool@users.noreply.github.com"
@@ -25,6 +32,10 @@ AUTHORS = (NOREPLY, "356338082+cpp-standard-agents[bot]@users.noreply.github.com
 # CodeRabbit appends its release notes to a pull request's body between these markers (seen on dotfiles #720).
 BOT_OPEN = "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->"
 BOT_CLOSE = "<!-- end of auto-generated comment: release notes by coderabbit.ai -->"
+# Where a repository names its merge gate, and the gates it may name; the first is the default.
+SETTINGS = "repotools.toml"
+LOCAL_HK = "local-hk"
+REQUIRED_CHECKS = "required-checks"
 
 
 class Clock:
@@ -101,7 +112,7 @@ def checks(options: PrMerge, head: str) -> Iterator[tuple[str, str | None]]:
     moved = git("rev-parse", "HEAD").strip() != head
     yield "head", f"this checkout's HEAD moved from {head} while pr-merge ran" if moved else None
     pr = view(options.number, "headRefOid,state,baseRefName,title,body")
-    default = gh("repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name").strip()
+    default = default_branch()
     number = f"pull request #{options.number}"
     given = Path(options.body_file).read_bytes().decode()  # bytes: text mode would turn a CRLF body into LF
     refusals = [
@@ -117,6 +128,36 @@ def checks(options: PrMerge, head: str) -> Iterator[tuple[str, str | None]]:
     ]
     for name, refused, msg in refusals:
         yield name, msg if refused else None
+
+
+def default_branch() -> str:
+    """GitHub's default branch for the repository."""
+    return gh("repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name").strip()
+
+
+def merge_gate(default: str) -> str:
+    """The [pr-merge] gate in SETTINGS as origin's default branch has it, so a pull request cannot change its own gate;
+    no file, or no table or key in it, means local-hk."""
+    ref = f"origin/{default}"
+    listed = subprocess.run(["git", "ls-tree", "--name-only", ref, "--", SETTINGS], capture_output=True, check=False)
+    if listed.returncode != 0:
+        msg = f"{ref} is not in this clone, so its {SETTINGS} cannot be read; run git fetch origin"
+        raise ValueError(msg)
+    if not listed.stdout.strip():
+        return LOCAL_HK
+    gate = tomllib.loads(git("show", f"{ref}:{SETTINGS}")).get("pr-merge", {}).get("gate", LOCAL_HK)
+    if gate not in (LOCAL_HK, REQUIRED_CHECKS):
+        msg = f"{SETTINGS} on {ref} sets [pr-merge] gate = {gate!r}; it takes {LOCAL_HK} or {REQUIRED_CHECKS}"
+        raise ValueError(msg)
+    return gate
+
+
+def skipped(default: str) -> str:
+    """Why hk does not run under required-checks, naming the setting."""
+    return (
+        f'{SETTINGS} on origin/{default} sets [pr-merge] gate = "{REQUIRED_CHECKS}": the merge queue\'s required checks'
+        " are the gate, so hk check --pr does not run"
+    )
 
 
 def gates(options: PrMerge, head: str) -> None:
@@ -187,11 +228,17 @@ def landed(options: PrMerge, deadline: float) -> str:
 
 
 def check_only(options: PrMerge, head: str) -> None:
-    """Run every gate, hk too, whatever an earlier one said; print each result and merge nothing."""
-    results = [*checks(options, head), ("hk", hk(head))]
-    for name, refusal in results:
-        sys.stdout.write(GateResult(gate=name, refusal=refusal).model_dump_json() + "\n")
-    refused = sum(refusal is not None for _, refusal in results)
+    """Run every gate, hk too, whatever an earlier one said; print each result and merge nothing. Under
+    required-checks the hk gate is reported as skipped, with the setting that skips it."""
+    results = [GateResult(gate=name, refusal=refusal) for name, refusal in checks(options, head)]
+    default = default_branch()
+    if merge_gate(default) == REQUIRED_CHECKS:
+        results.append(GateResult(gate="hk", refusal=None, skipped=skipped(default)))
+    else:
+        results.append(GateResult(gate="hk", refusal=hk(head)))
+    for result in results:
+        sys.stdout.write(result.model_dump_json(exclude_defaults=True) + "\n")
+    refused = sum(result.refusal is not None for result in results)
     if refused:
         msg = f"check-only: {refused} of {len(results)} gates refused pull request #{options.number}"
         raise ValueError(msg)
@@ -200,12 +247,22 @@ def check_only(options: PrMerge, head: str) -> None:
 def merge(options: PrMerge) -> None:
     """Refuse at the first gate that fails; merge only after all of them and the pull request's passing checks, wait
     until GitHub has merged it (a merge queue may hold it a while), then check the merge commit's author. With
-    check_only, run and report every gate and merge nothing."""
+    check_only, run and report every gate and merge nothing. Under required-checks, after every gate but hk and its
+    passing checks, queue it and report it queued."""
     head = git("rev-parse", "HEAD").strip()
     if options.check_only:
         check_only(options, head)
         return
     gates(options, head)
+    if merge_gate(default_branch()) == REQUIRED_CHECKS:
+        # The required checks pass on head first: a red one fails here, naming it, and gh then queues at once rather
+        # than arming an auto-merge on pending checks.
+        checks_pass(options, head, CLOCK.now() + options.time_limit)
+        # The one form the ruleset allows: the queue picks the squash, so no --merge; its squash takes the pull
+        # request's author, so no --author-email. With a merge queue gh enables auto-merge for it, which queues it.
+        gh("pr", "merge", str(options.number), "--match-head-commit", head)
+        sys.stdout.write(Queued(number=options.number, head_commit=head, merged=False).model_dump_json() + "\n")
+        return
     failed = hk(head)
     if failed is not None:
         raise ValueError(failed)

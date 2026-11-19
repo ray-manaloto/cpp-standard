@@ -61,7 +61,8 @@ def test_failing_gates_are_each_reported_and_every_other_gate_still_runs(
 
 def test_the_task_passes_check_only_to_the_installed_repotools(copy: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """mise run //repo:pr-merge --check-only reaches the installed repotools as --check-only: every gate is reported,
-    the copy's hk check exits 3, and the gh stand-in is never asked to merge."""
+    and the gh stand-in is never asked to merge. The copy is this repository, whose repotools.toml sets the
+    required-checks gate, so the hk gate is reported skipped and the copy's hk check, which exits 3, never runs."""
     tools = copy.parent / "tool-bin"
     tools.mkdir()
     (tools / "repotools").symlink_to(Path(sys.executable).parent / "repotools")
@@ -79,11 +80,11 @@ def test_the_task_passes_check_only_to_the_installed_repotools(copy: Path, monke
     shown = {"headRefOid": head, "state": "OPEN", "baseRefName": "main", "title": "feat: one", "body": BODY}
     (copy.parent / "scenario.json").write_text(json.dumps({"pr": shown, "default": "main"}))
     done = mise("//repo:pr-merge", "--check-only", "7", "feat: one", "body.md")
-    assert done.returncode == 1
+    assert done.returncode == 0, done.stderr
     gates = [json.loads(line) for line in done.stdout.splitlines() if line.startswith('{"gate"')]
     assert [gate["gate"] for gate in gates] == GATES
-    assert [gate["gate"] for gate in gates if gate["refusal"]] == ["hk"]
-    (error,) = said(done, "{")
-    assert json.loads(error)["error"] == "check-only: 1 of 8 gates refused pull request #7"
+    assert [gate["gate"] for gate in gates if gate["refusal"]] == []
+    assert "required-checks" in gates[-1]["skipped"]
+    assert said(done, "{") == []
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert not any(call[:2] == ["pr", "merge"] for call in calls)
