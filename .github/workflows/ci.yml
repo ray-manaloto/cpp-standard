@@ -1,8 +1,9 @@
 # The required checks (D93). `lint` runs the hk gate (D102), `pins-validate`
 # the pins check, `artifact-check` and `resolve` pick the tools image (M1a PR 2)
-# and `gate-linux-arm64` runs the gate in it; `must-fail` is still a stub from
-# setup step 3 that passes at once until M1a PR 3 replaces it. Each job's
-# name is its required-check name in .github/rulesets/main.json.
+# and wait for the p2996 toolchain (M1a PR 3), `gate-linux-arm64` runs the gate
+# and the toolchain smoke step in the image, and `must-fail` runs the must-fail
+# fixtures there (M1a PR 3, #130). Each job's name is its required-check name in
+# .github/rulesets/main.json.
 name: ci
 
 on:
@@ -93,8 +94,11 @@ jobs:
 
   # M1a PR 2 (#128): waits until the tools image this commit needs exists, as main's image or,
   # in a pull-request or merge-queue run, the builder run's own pr- image (D54, D61, D62, D134),
-  # for at most 180 minutes (D61, D159). It also checks that publish.yml's inline names and
-  # `artifact:names` agree (D114) and runs the unit tests of the wait and of resolve.
+  # for at most 180 minutes (D61, D159). M1a PR 3 (#130): it waits the same way for the p2996
+  # toolchain, as main's release or, in a pull-request or merge-queue run, the builder's cache
+  # entry on this ref (D83, D91); it never builds. It also checks that publish.yml's inline names
+  # and `artifact:names` agree (D114) and runs the unit tests of the wait, of resolve and of
+  # toolchain:fetch's source table.
   artifact-check:
     name: artifact-check
     runs-on: ubuntu-26.04-arm
@@ -114,7 +118,11 @@ jobs:
           install: false
       - name: Publisher and artifact:names agree; the wait and resolve cases
         run: python3 -I tests/artifact/test_artifact.py
-      - name: Wait for this commit's tools image
+      - name: The source table of toolchain:fetch; the recipe's patch step
+        run: |
+          python3 -I tests/toolchain/test_fetch.py
+          python3 -I tests/toolchain/test_build_patch.py
+      - name: Wait for this commit's tools image and p2996 toolchain
         timeout-minutes: 181
         env:
           GH_TOKEN: ${{ github.token }}
@@ -162,7 +170,11 @@ jobs:
         run: mise run image:resolve --arch arm64
 
   # The gate (#125, M1a PR 2): `mise run ci` in the tools image, by the digest `resolve`
-  # picked. PR 4 adds the other presets and the toolchain fetch.
+  # picked. M1a PR 3 (#130) adds the toolchain smoke step: toolchain:fetch installs p2996 and the
+  # stand-in module's test is compiled and run with it. The job never builds a toolchain: in a
+  # pull-request or merge-queue run it takes main's release, else the copy the builder staged in
+  # this ref's cache (artifact-check waited for one of them); in a run dispatched on main it
+  # takes only main's release (release-only mode). PR 4 adds the other presets.
   gate-linux-arm64:
     name: gate-linux-arm64
     needs: [artifact-check, resolve]
@@ -171,6 +183,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      attestations: read  # gh attestation verify of the toolchain release
     container:
       # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
       image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]
@@ -195,12 +208,64 @@ jobs:
           persist-credentials: false
       - name: Trust the checkout's mise config
         run: mise trust "$GITHUB_WORKSPACE"
+      - id: tag
+        name: The p2996 tag
+        run: echo "p2996=$(mise run -q artifact:tag p2996-linux-arm64)" >> "$GITHUB_OUTPUT"
+      # The staged copy (D91): the exact path and key builder.yml saved on this ref.
+      - if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .cache/toolchains/${{ steps.tag.outputs.p2996 }}
+          key: toolchain-${{ steps.tag.outputs.p2996 }}
+      - id: fetch
+        name: Fetch the p2996 toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # fetch.py allows the staged copy only on a hosted runner. RUNNER_* names are the
+          # runner's own and a workflow cannot set them (GitHub's default-variables docs), and a
+          # job container may not see the runner's, so the value comes under our own name.
+          CPPSTD_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          # A run dispatched on main takes only main's release (the second acceptance step of
+          # #130 and the next ticket); every other run may take the staged copy but never builds.
+          MODE: >-
+            ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+            && '--release-only' || '--no-rebuild' }}
+        run: mise run toolchain:fetch "$MODE"
+      - name: Toolchain smoke step (the stand-in module's test with p2996)
+        env:
+          PREFIX: ${{ steps.fetch.outputs.prefix }}
+        run: mise run toolchain:smoke "$PREFIX"
       - name: Run the gate
         run: mise run ci
 
+  # M1a PR 3 (#130): `mise run ci-must-fail` in the tools image, the same command as outside
+  # Actions. Its runner's own test runs first: a fixture that goes green fails the job.
   must-fail:
     name: must-fail
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    needs: [artifact-check, resolve]
+    if: ${{ needs.artifact-check.result == 'success' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      attestations: read  # gh attestation verify in the toolchain fixture
+    container:
+      # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
+      image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
     steps:
-      - run: echo "stub until M1a"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trust the checkout's mise config
+        run: mise trust "$GITHUB_WORKSPACE"
+      - name: A fixture that goes green fails the run
+        run: python3 -I tests/must_fail/test_ci_must_fail.py
+      - name: Run the must-fail fixtures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise run ci-must-fail

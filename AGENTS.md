@@ -29,6 +29,13 @@ design is `docs/designs/environment-standard.md`. See `docs/agents/domain.md`.
   them on every file (`hk check --all`) and is a heavy run.
 - Gate: `mise run ci` configures, builds, tests and measures coverage for each gate preset. CI runs it in the
   `gate-linux-arm64` job; on the owner's Mac it is a heavy run.
+- Must-fail: `mise run ci-must-fail` runs every fixture in `fixtures/must-fail/` (listed in its `expected.toml`) and
+  fails when a check accepts its planted fault. CI runs it in the `must-fail` job in the tools image; outside Actions
+  it runs in that image as a container run, which waits for the coordinator's go-ahead. The toolchain fixture needs
+  gh, a GitHub token in `GH_TOKEN` (or a gh login) and the network; without them it reports "could not run".
+- Toolchain: `mise run toolchain:fetch` installs clang-p2996 by its artifact tag: `main`'s attested release, else a
+  rebuild (outside Actions it never takes a staged copy, and it stops, without rebuilding, when it cannot ask
+  GitHub, e.g. no token); `--release-only` takes the release or fails.
 - Shipping: a branch and a pull request into `main`, opened with
   `repotools pr-create --title <title> --body-file <body file>`. The merge is
   `mise run //repo:pr-merge <number> <title> <body file>`, run alone: the local hk gate is not run (D169,

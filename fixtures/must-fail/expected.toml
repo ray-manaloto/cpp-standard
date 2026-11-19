@@ -1,0 +1,7 @@
+# The must-fail fixtures (environment-standard.md section 5, D37, D42): one table per fixture directory, naming the
+# check that must refuse it. `mise run ci-must-fail` runs `<fixture>/run` for each; a run that exits 0 means the
+# check refused the planted fault as it must. Ticket #130 adds the first one; M1a PR 4 adds the gate's fixtures.
+
+[fixture.toolchain-unattested]
+check = "toolchain:fetch"
+what = "an unattested release, on the code path used outside Actions (spec #122 Testing Decisions)"

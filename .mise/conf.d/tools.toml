@@ -4,6 +4,8 @@
 [tools]
 cmake = "4.5.0"
 ninja = "1.13.2"
+# toolchain:fetch verifies a toolchain release with `gh attestation verify` in the gate container (#130, D116).
+gh = "2.104.0"
 # gcovr installs from its uv lock (.mise/locks/pypi-gcovr) into a uv environment on this pinned
 # Python; mise needs uv 0.12.10 or later for that, and `mise lock` needs uv to write the sidecar.
 python = "3.14.8"

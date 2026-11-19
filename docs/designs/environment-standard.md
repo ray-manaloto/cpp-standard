@@ -1386,7 +1386,7 @@ in parallel, does not block M1a, and feeds M3. The evidence for each is in
   are deleted before M1b turns on immutable releases.
 - **(j)** Coverage in gcov mode (D88) at 100% on GCC 16 and p2996 with no
   markers, and the uncovered-line fixture fails on each. **Result:** passed
-  on the stand-in module (`spikes/m0/bj/`), so the fallback (p2996 coverage
+  on the stand-in module (`spikes/m0/bj/`, now `src/standin/`), so the fallback (p2996 coverage
   report-only) is not taken; M1a PR 5 re-proves it on the real modules
   (D106).
 

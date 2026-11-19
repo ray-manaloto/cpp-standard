@@ -1,5 +1,5 @@
 // The stand-in module, copied from the M0 (b) and (j) spike
-// (spikes/m0/bj/src/encoder.cppm, D106) so that the gate keeps a source file
+// (the spike's encoder.cppm, deleted by D135; D106) so that the gate keeps a source file
 // when M1a PR 3 deletes the spikes. It is removed when the encoder and core
 // modules reach 100% coverage. Run-time code with branches,
 // compile-time-only helpers (a consteval function, a static consteval

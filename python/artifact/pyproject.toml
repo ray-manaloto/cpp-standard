@@ -11,6 +11,6 @@ source = ["python/artifact"]
 # The floor is the coverage measured when it was set (#185). Raise it when coverage rises; a change that lowers it
 # says why in its commit message and pull request. The tests replace GHCR and `gh attestation verify` with fakes, so
 # the live Registry, gh_verify and the CLI stay unmeasured.
-fail_under = 44.1
+fail_under = 52.2
 precision = 1
 show_missing = true

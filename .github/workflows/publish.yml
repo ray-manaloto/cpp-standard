@@ -1,16 +1,18 @@
 # The publisher (environment-standard.md section 2 step 4, D59, D98, D114, D116). A trust root
-# (D108): the only workflow with packages: write for non-pr- tags, attestations: write and
-# id-token: write. builder.yml dispatches it on main with its run id; it refuses any run that is
+# (D108): the only workflow with packages: write for non-pr- tags, contents: write (its toolchain
+# job creates releases and their tags), attestations: write and id-token: write. builder.yml dispatches it on main with its run id; it refuses any run that is
 # not a builder.yml run from push, schedule or workflow_dispatch on main whose head is on main's
-# history, so a pull-request or merge-group build is never published or attested.
+# history, so a pull-request or merge-group build is never published, released or attested.
 #
 # It runs no repository code (D114): no checkout, no mise. The artifact names are computed inline
 # below; `mise run artifact:names` is the same computation for tests and local use, and
 # tests/artifact/ checks that the two agree (the step between the BEGIN and END markers).
 #
 # M1a PR 2 publishes the base and tools images: pushed by digest to
-# ghcr.io/ray-manaloto/cpp-standard/<base|tools>:<arch>-<hash> and attested. Toolchain releases
-# arrive with PR 3; packslip signing and the post-merge dispatch with M2 (D111, D112).
+# ghcr.io/ray-manaloto/cpp-standard/<base|tools>:<arch>-<hash> and attested. M1a PR 3 (#130)
+# releases each toolchain archive as a GitHub Release tagged and titled with its artifact tag,
+# with the archive attested (D111, D116, D131, D134). packslip signing and the post-merge dispatch
+# arrive with M2 (D111, D112).
 #
 # Refusal test (spec #122, run once on main by the coordinator): dispatch it with the id of a
 # builder.yml run that came from a pull request; it must fail in "Check the builder run".
@@ -45,7 +47,9 @@ jobs:
       actions: read  # read the builder run
       contents: read  # compare its head with main
     outputs:
-      artifacts: ${{ steps.run.outputs.artifacts }}
+      images: ${{ steps.run.outputs.images }}
+      toolchains: ${{ steps.run.outputs.toolchains }}
+      sha: ${{ steps.run.outputs.sha }}
     steps:
       - id: run
         name: Check the builder run
@@ -79,15 +83,19 @@ jobs:
             *) refuse "head $sha of run $RUN_ID is not on main's history ($status)" ;;
           esac
           # --slurp joins the pages into one array, so the filter sees every artifact once.
-          artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --paginate --slurp |
-            jq -c '[.[].artifacts[].name | select(test("^image-(base|tools)-(arm64|amd64)-[0-9a-f]{16}$"))] | unique')"
-          [[ "$(jq length <<<"$artifacts")" -gt 0 ]] || refuse "run $RUN_ID has no image artifact"
-          echo "artifacts=$artifacts" >> "$GITHUB_OUTPUT"
-          echo "PASS: run $RUN_ID is a builder.yml run on main; images: $artifacts"
+          all="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --paginate --slurp |
+            jq -c '[.[].artifacts[].name]')"
+          images="$(jq -c '[.[] | select(test("^image-(base|tools)-(arm64|amd64)-[0-9a-f]{16}$"))] | unique' <<<"$all")"
+          toolchains="$(jq -c '[.[] | select(test("^toolchain-[a-z0-9][a-z0-9-]*-(linux|macos)-(arm64|amd64)-[0-9a-f]{16}$"))] | unique' <<<"$all")"
+          [[ "$(jq length <<<"$images")" -gt 0 || "$(jq length <<<"$toolchains")" -gt 0 ]] ||
+            refuse "run $RUN_ID has no image or toolchain artifact"
+          { echo "images=$images"; echo "toolchains=$toolchains"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
+          echo "PASS: run $RUN_ID is a builder.yml run on main; images: $images; toolchains: $toolchains"
 
   image:
     name: image (${{ matrix.artifact }})
     needs: check
+    if: ${{ needs.check.outputs.images != '[]' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 30
     permissions:
@@ -98,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        artifact: ${{ fromJSON(needs.check.outputs.artifacts) }}
+        artifact: ${{ fromJSON(needs.check.outputs.images) }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
@@ -178,3 +186,127 @@ jobs:
           subject-name: ${{ steps.names.outputs.image }}
           subject-digest: ${{ steps.art.outputs.digest }}
           push-to-registry: true
+
+  # A toolchain becomes a GitHub Release tagged and titled with its artifact tag (D134), with the
+  # archive attested as publish.yml on refs/heads/main (D116). The order is fixed (D131): if the
+  # release exists, stop; delete a stale draft of the tag; create a draft; upload; attest; publish.
+  # inputs-hash.txt is uploaded beside the archive and is also inside it (D131), where
+  # toolchain:fetch checks it.
+  toolchain:
+    name: toolchain (${{ matrix.artifact }})
+    needs: check
+    if: ${{ needs.check.outputs.toolchains != '[]' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 30
+    # One publisher per release tag, never cancelled: a second run cannot delete the first's
+    # live draft between its create and its publish.
+    concurrency:
+      group: publish-${{ matrix.artifact }}
+      cancel-in-progress: false
+    permissions:
+      actions: read  # download the builder run's artifact
+      contents: write  # create the release and its tag
+      attestations: write  # store the attestation
+      id-token: write  # sign it as publish.yml on refs/heads/main
+    strategy:
+      fail-fast: false
+      matrix:
+        artifact: ${{ fromJSON(needs.check.outputs.toolchains) }}
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: ${{ matrix.artifact }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: dist/${{ matrix.artifact }}/
+      - id: art
+        name: Read the artifact
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          d="dist/$ARTIFACT"
+          tag="${ARTIFACT#toolchain-}"
+          [[ -s "$d/$tag.tar.zst" ]] || { echo "::error::$d has no $tag.tar.zst"; exit 1; }
+          hash="$(cat "$d/inputs-hash.txt")"
+          [[ "$hash" =~ ^[0-9a-f]{16}$ && "$tag" == *"-$hash" ]] || {
+            echo "::error::$d/inputs-hash.txt is $hash, not the hash of $tag"
+            exit 1
+          }
+          { echo "dir=$d"; echo "tag=$tag"; } >> "$GITHUB_OUTPUT"
+      - id: names
+        name: Compute the names
+        env:
+          TAG: ${{ steps.art.outputs.tag }}
+        run: |
+          # BEGIN names
+          # The same names as `mise run artifact:names` (python/artifact/artifact.py, D98, D134).
+          if [[ "$TAG" =~ ^(base|tools)-(arm64|amd64)-([0-9a-f]{16})$ ]]; then
+            image="ghcr.io/ray-manaloto/cpp-standard/${BASH_REMATCH[1]}"
+            image_tag="${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
+            {
+              echo "kind=image"
+              echo "image=$image"
+              echo "image_tag=$image_tag"
+              echo "ref=$image:$image_tag"
+            } >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" =~ ^[a-z0-9][a-z0-9-]*-(linux|macos)-(arm64|amd64)-[0-9a-f]{16}$ ]]; then
+            {
+              echo "kind=toolchain"
+              echo "release_tag=$TAG"
+              echo "release_title=$TAG"
+              echo "archive=$TAG.tar.zst"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::not an artifact tag: $TAG"
+            exit 1
+          fi
+          # END names
+      - id: exists
+        name: Stop if the release exists; delete a stale draft
+        env:
+          RELEASE: ${{ steps.names.outputs.release_tag }}
+          KIND: ${{ steps.names.outputs.kind }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$KIND" == toolchain ]] || { echo "::error::$RELEASE is not a toolchain"; exit 1; }
+          # Every release, drafts included (the token can see them), whose tag or title is the tag.
+          hits="$(gh api "repos/$GH_REPO/releases?per_page=100" --paginate --slurp |
+            jq -c --arg t "$RELEASE" '[.[][] | select(.tag_name == $t or .name == $t) | {id, draft}]')"
+          if [[ "$(jq '[.[] | select(.draft | not)] | length' <<<"$hits")" -gt 0 ]]; then
+            echo "$RELEASE is already released; nothing to publish"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for id in $(jq -r '.[] | select(.draft) | .id' <<<"$hits"); do
+            echo "deleting stale draft $id of $RELEASE"
+            gh api -X DELETE "repos/$GH_REPO/releases/$id"
+          done
+          echo "published=false" >> "$GITHUB_OUTPUT"
+      - name: Create the draft and upload
+        if: ${{ steps.exists.outputs.published == 'false' }}
+        env:
+          DIR: ${{ steps.art.outputs.dir }}
+          RELEASE: ${{ steps.names.outputs.release_tag }}
+          TITLE: ${{ steps.names.outputs.release_title }}
+          ARCHIVE: ${{ steps.names.outputs.archive }}
+          SHA: ${{ needs.check.outputs.sha }}
+          RUN_ID: ${{ inputs.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE" --draft --latest=false --target "$SHA" --title "$TITLE" \
+            --notes "Built by builder.yml run $RUN_ID at $SHA; attested as publish.yml on refs/heads/main." \
+            "$DIR/$ARCHIVE" "$DIR/inputs-hash.txt"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        if: ${{ steps.exists.outputs.published == 'false' }}
+        with:
+          subject-path: ${{ steps.art.outputs.dir }}/${{ steps.names.outputs.archive }}
+      - name: Publish the release
+        if: ${{ steps.exists.outputs.published == 'false' }}
+        env:
+          RELEASE: ${{ steps.names.outputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "$RELEASE" --draft=false
+          gh release view "$RELEASE" --json tagName,name,isDraft,assets --jq '{tagName, name, isDraft, assets: [.assets[].name]}'

@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
-#MISE description="Build one image layer (base or tools) from the files of its hash into dist/<tag>/ (D49, D98)"
-#USAGE arg "<name>" help="The layer: base or tools" {
-#USAGE   choices "base" "tools"
-#USAGE }
-#USAGE flag "--arch <arch>" help="Docker arch" default="arm64" {
+#MISE description="Build one image layer (base or tools) or one toolchain into dist/<tag>/ (D49, D98)"
+#USAGE arg "<name>" help="base, tools, or a toolchain as <name>-<os>-<arch>, e.g. p2996-linux-arm64"
+#USAGE flag "--arch <arch>" help="Docker arch of an image layer" default="arm64" {
 #USAGE   choices "arm64" "amd64"
 #USAGE }
 #USAGE flag "--commit <commit>" help="Commit whose files are built" default="HEAD"
 #USAGE flag "--base <dir>" help="dist/<base tag>/ of the base a tools build starts from (default: dist/ of this commit's base tag)"
 #
 # environment-standard.md section 2 and the artifact/build row of the file plan. The build
-# context is exactly the files of the layer's inputs hash, read from git at the commit
+# context is exactly the files of the artifact's inputs hash, read from git at the commit
 # (python/pins/pins.py tag <name> --inputs), so nothing outside the hash reaches the image. It writes
 # dist/<tag>/image.tar (an OCI archive with one manifest, no provenance or SBOM manifest, so its
 # digest is the digest pushed) and dist/<tag>/image.txt (tag, digest, arch, the base digest of a
 # tools layer, and the build tools' versions). Workflow steps upload, push and attest it (D98);
-# this task holds no token. Toolchain builds arrive with M1a PR 3.
+# this task holds no token.
 #
-# Needs a buildx builder with the docker-container driver (docker/setup-buildx-action): the
-# default docker driver cannot write an OCI archive or read an OCI layout build context.
-# A heavy run on the owner's Mac (AGENTS.md, Workflow facts).
+# A toolchain (M1a PR 3) builds natively, in this commit's tools image on Linux: its
+# toolchains/<name>/ files at the commit (a subset of its hash inputs) are copied out of git and
+# toolchains/<name>/build.sh builds and smoke-tests it. The task writes inputs-hash.txt (the tag's
+# hash) at the root of the install, packs it as dist/<tag>/<tag>.tar.zst, and writes
+# dist/<tag>/inputs-hash.txt and dist/<tag>/toolchain.txt (tag, commit, arch and the build tools'
+# versions). The scratch directory is a new one inside $CPPSTD_BUILD_WORK when it is set (else
+# in the system temp dir) and is removed at the end; a p2996 build needs about 50 GB.
+#
+# An image build needs a buildx builder with the docker-container driver
+# (docker/setup-buildx-action): the default docker driver cannot write an OCI archive or read an
+# OCI layout build context. A heavy run on the owner's Mac (AGENTS.md, Workflow facts).
 set -euo pipefail
 
 name="${usage_name:?}"
@@ -29,10 +35,55 @@ root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
 pins=(python3 -I "$root/python/pins/pins.py")
 cd "$root"
 
-tag="$("${pins[@]}" tag "$name" --arch "$arch" --commit "$commit" --root "$root")"
+case "$name" in
+  base | tools) tag="$("${pins[@]}" tag "$name" --arch "$arch" --commit "$commit" --root "$root")" ;;
+  *-linux-* | *-macos-*) tag="$("${pins[@]}" tag "$name" --commit "$commit" --root "$root")" ;;
+  *)
+    echo "FAIL: $name is not base, tools or <toolchain>-<os>-<arch>" >&2
+    exit 1
+    ;;
+esac
 out="dist/$tag"
-work="$(mktemp -d)"
+# A private directory, inside $CPPSTD_BUILD_WORK when it is set; only it is removed at the end.
+if [[ -n "${CPPSTD_BUILD_WORK:-}" ]]; then
+  mkdir -p "$CPPSTD_BUILD_WORK"
+  work="$(mktemp -d "$CPPSTD_BUILD_WORK/build.XXXXXX")"
+else
+  work="$(mktemp -d)"
+fi
 trap 'rm -rf "$work"' EXIT
+
+if [[ "$name" != base && "$name" != tools ]]; then
+  toolchain="${name%-*-*}"
+  # A toolchain builds natively: the tag's os and arch must be this host's.
+  host="$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/')-$(uname -m | sed 's/aarch64/arm64/; s/x86_64/amd64/')"
+  [[ "${name#"$toolchain"-}" == "$host" ]] || {
+    echo "FAIL: $name builds on $host only as ${toolchain}-$host" >&2
+    exit 1
+  }
+  echo "toolchain $tag from toolchains/$toolchain/ at $(git rev-parse "$commit")"
+  mkdir "$work/ctx"
+  git archive "$commit" -- "toolchains/$toolchain" | tar -x -C "$work/ctx"
+  "$work/ctx/toolchains/$toolchain/build.sh" "$work/build" "$work/prefix"
+  hash="${tag##*-}"
+  echo "$hash" >"$work/prefix/inputs-hash.txt"
+  rm -rf "$out"
+  mkdir -p "$out"
+  tar -C "$work/prefix" --zstd -cf "$out/$tag.tar.zst" .
+  echo "$hash" >"$out/inputs-hash.txt"
+  {
+    echo "tag=$tag"
+    echo "commit=$(git rev-parse "$commit")"
+    echo "arch=$(uname -m)"
+    echo "cmake=$(cmake --version | head -1)"
+    echo "ninja=$(ninja --version)"
+    echo "bootstrap=$(/usr/lib/llvm-23/bin/clang --version 2>/dev/null | head -1 || echo none)"
+    echo "sha256=$(sha256sum "$out/$tag.tar.zst" | cut -d' ' -f1)"
+  } >"$out/toolchain.txt"
+  cat "$out/toolchain.txt"
+  echo "PASS: $out"
+  exit 0
+fi
 
 # The context: the hashed files at the commit, nothing else.
 inputs=()

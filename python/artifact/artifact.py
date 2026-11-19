@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -164,11 +165,65 @@ class Clock:
 
 def candidates(tag: str, pr: int | None, mq: bool) -> list[str]:
     """Where a PR's gate jobs may take a tag from: `main`'s image, else the run's own `pr-`
-    image (D54, D62, D134)."""
+    image (D54, D62, D134); for a toolchain, `main`'s release, else in a pull-request or
+    merge-queue run the builder's cache entry on the run's ref (D83, D91)."""
     n = names(tag, pr, mq)
-    if n["kind"] != "image":
-        raise ArtifactError(f"{tag}: artifact:check waits for images only until PR 3")
+    if n["kind"] == "toolchain":
+        return [f"release {tag}"] + (
+            [f"cache {CACHE_PREFIX}{tag}"] if pr is not None else []
+        )
     return [n["ref"]] + ([n["pr_ref"]] if "pr_ref" in n else [])
+
+
+# The actions/cache key builder.yml saves a pull-request or merge-queue toolchain build under, and
+# ci.yml's gate jobs restore into .cache/toolchains/<tag>/ (D83, D91).
+CACHE_PREFIX = "toolchain-"
+
+
+class Toolchains:
+    """Whether a toolchain tag exists: `main`'s published release with that tag (D134), else, in a
+    pull-request or merge-queue run, the builder run's cache entry on `ref` (D91)."""
+
+    def __init__(self, token: str | None, ref: str | None) -> None:
+        self.token = token
+        self.ref = ref
+
+    # Transient answers (5xx, 429, network errors) are retried, as Registry.digest does, so one
+    # bad answer during a 3-hour wait does not fail the check.
+    RETRIES = 3
+
+    def _get(self, path: str) -> dict | None:
+        for attempt in range(self.RETRIES + 1):
+            req = urllib.request.Request(f"https://api.github.com/{path}")
+            req.add_header("Accept", "application/vnd.github+json")
+            if self.token:
+                req.add_header("Authorization", f"Bearer {self.token}")
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return json.load(resp)
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    return None
+                if (e.code < 500 and e.code != 429) or attempt == self.RETRIES:
+                    raise ArtifactError(f"GitHub API {path}: HTTP {e.code}") from e
+            except (urllib.error.URLError, TimeoutError) as e:
+                if attempt == self.RETRIES:
+                    raise ArtifactError(f"GitHub API {path}: {e}") from e
+            time.sleep(5 * (attempt + 1))
+        raise ArtifactError(f"GitHub API {path}: no answer")
+
+    def where(self, tag: str) -> str | None:
+        rel = self._get(f"repos/{REPO}/releases/tags/{urllib.parse.quote(tag)}")
+        if rel and not rel.get("draft"):
+            return f"release {tag}"
+        if self.ref:
+            key = urllib.parse.quote(CACHE_PREFIX + tag, safe="")
+            ref = urllib.parse.quote(self.ref, safe="")
+            caches = self._get(f"repos/{REPO}/actions/caches?key={key}&ref={ref}") or {}
+            for c in caches.get("actions_caches", []):
+                if c.get("key") == CACHE_PREFIX + tag:
+                    return f"cache {c['key']} on {self.ref}"
+        return None
 
 
 def check(
@@ -180,14 +235,22 @@ def check(
     interval: float,
     clock: Clock | None = None,
     log: Callable[[str], None] = print,
+    toolchains: Toolchains | None = None,
 ) -> list[str]:
     """Wait until every tag exists in one of its places; return the tags still missing when
-    the wait ends (empty on success)."""
+    the wait ends (empty on success). It never builds anything."""
     clock = clock or Clock()
     deadline = clock.now() + timeout
     waiting = {t: candidates(t, pr, mq) for t in tags}
     while True:
         for tag in list(waiting):
+            if names(tag)["kind"] == "toolchain":
+                if toolchains is None:
+                    raise ArtifactError(f"{tag}: no toolchain lookup given")
+                if where := toolchains.where(tag):
+                    log(f"found {tag}: {where}")
+                    del waiting[tag]
+                continue
             for ref in waiting[tag]:
                 if registry.digest(ref):
                     log(f"found {tag}: {ref}")
@@ -307,7 +370,8 @@ def main(argv: list[str]) -> int:
         if name == "resolve":
             p.add_argument("--event", default=os.environ.get("GITHUB_EVENT_NAME", ""))
     pr = sub.add_parser(
-        "probe", help="exists=true|false for a ref; any other registry answer fails"
+        "probe",
+        help="exists=true|false for an image ref or a toolchain tag; any other answer fails",
     )
     pr.add_argument("ref")
     v = sub.add_parser("verify")
@@ -320,8 +384,16 @@ def main(argv: list[str]) -> int:
             _write_output(names(args.tag, *_pr_args(args)))
         elif args.cmd == "check":
             pr, mq = _pr_args(args)
+            # The cache entry counts only in a pull-request or merge-queue run (D91).
+            ref = os.environ.get("GITHUB_REF") if pr is not None else None
             missing = check(
-                args.tag, Registry(_token()), pr, mq, args.timeout, args.interval
+                args.tag,
+                Registry(_token()),
+                pr,
+                mq,
+                args.timeout,
+                args.interval,
+                toolchains=Toolchains(_token(), ref),
             )
             if missing:
                 run = os.environ.get("BUILDER_RUN", "the builder run for this commit")
@@ -336,6 +408,15 @@ def main(argv: list[str]) -> int:
             r = resolve(args.tag, args.event, pr, mq, Registry(_token()), gh_verify)
             print(f"resolved {args.tag} to {r.image} ({r.source})", file=sys.stderr)
             _write_output({"image": r.image, "source": r.source})
+        elif args.cmd == "probe" and TOOLCHAIN_TAG.fullmatch(args.ref):
+            # A toolchain: main's release, or in a pull-request or merge-queue run this ref's
+            # cache entry (an earlier run of the same ref already built it).
+            event = os.environ.get("GITHUB_EVENT_NAME", "")
+            ref = os.environ.get("GITHUB_REF") if event in PR_EVENTS else None
+            where = Toolchains(_token(), ref).where(args.ref)
+            _write_output(
+                {"exists": "true" if where else "false", "where": where or ""}
+            )
         elif args.cmd == "probe":
             digest = Registry(_token()).digest(args.ref)
             _write_output(

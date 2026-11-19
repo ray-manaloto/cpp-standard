@@ -134,6 +134,20 @@ local gateSteps = new Mapping<String, Step> {
     glob = List("python/artifact/**", "tests/artifact/**", ".mise/tasks/artifact/cov")
     check = "mise run artifact:cov"
   }
+  ["toolchain-cov"] {
+    glob =
+      List(
+        "python/toolchain/**",
+        "python/artifact/**",
+        "tests/toolchain/**",
+        "tests/must_fail/**",
+        "fixtures/must-fail/**",
+        "toolchains/**",
+        ".mise/tasks/ci-must-fail",
+        ".mise/tasks/toolchain/cov",
+      )
+    check = "mise run toolchain:cov"
+  }
 
   // Config and docs.
   // Every Dockerfile in the repository (D102). The builtin matches Dockerfile* only, and the
@@ -142,7 +156,7 @@ local gateSteps = new Mapping<String, Step> {
     glob = List("**/Dockerfile*", "**/*.Dockerfile")
   }
   ["mise"] = (Builtins.mise) {
-    glob = List("mise.toml", "mise.ci.toml", ".mise/conf.d/*.toml", "spikes/**/mise.toml")
+    glob = List("mise.toml", "mise.ci.toml", ".mise/conf.d/*.toml")
   }
   ["mise-tasks"] {
     glob = List("mise.toml", ".mise/tasks/**")
