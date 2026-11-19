@@ -1,3 +1,0 @@
-# M0 (i) spike: one package for the bootstrap status check (D75).
-[bootstrap.packages]
-"apt:make" = { os = ["linux"] }

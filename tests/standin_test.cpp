@@ -1,4 +1,4 @@
-// The stand-in module's test, copied from spikes/m0/bj/tests/encoder_test.cpp.
+// The stand-in module's test, copied from the M0 (b) and (j) spike's encoder_test.cpp (deleted by D135).
 // It returns the number of failed checks, so ctest fails on any of them.
 #include <string_view>
 import standin;

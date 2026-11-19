@@ -203,6 +203,19 @@ source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c794269
 '''
 
 [[vector]]
+name = "a toolchain commit that is not the commit of its source url"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = false
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "1111111111111111111111111111111111111111" }
+'''
+
+[[vector]]
 name = "a toolchain source with a build option"
 reject = "inputs"
 

@@ -1,5 +1,8 @@
 # M0 spike results
 
+Moved by M1a PR 3 (D135): the p2996 recipe and patch to `toolchains/p2996/`, the stand-in module to
+`src/standin/` and `tests/standin_test.cpp`; the other spike files and both spike workflows are deleted.
+
 One line per check in environment-standard.md section 10. The spike code
 is deleted after M0; this file is kept.
 

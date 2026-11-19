@@ -513,10 +513,13 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    Each hash also starts with the line `schema = 1`, bumped when the
    hashing rule changes (D90). `artifact:tag` has golden-vector tests in
    `tests/artifact_tag/`.
-   - **Toolchain releases (D134).** In M1a a toolchain release's git tag is
-     its artifact tag, so `toolchain:fetch` finds it with one
-     `GET /releases/tags/<artifact tag>` (tags are unique; drafts are not
-     returned), authenticated with `GITHUB_TOKEN` in Actions. How M2 maps an
+   - **Toolchain releases (D134, D176).** In M1a a toolchain release's git
+     tag is its artifact tag. `artifact:check` and the builder find it with
+     one `GET /releases/tags/<artifact tag>` (tags are unique; drafts are not
+     returned). `toolchain:fetch`, which installs, lists every page of the
+     releases and refuses a tag whose title matches two (D122, D176); a
+     release source it cannot ask is never read as "no release". Both are
+     authenticated with `GITHUB_TOKEN` in Actions. How M2 maps an
      artifact tag to packslip's `<project>-v<version>` release (D89) is part
      of the M2 design.
 3. **Build.** `builder.yml`'s triggers are in its file-plan row (D61, D112).
@@ -1386,7 +1389,7 @@ in parallel, does not block M1a, and feeds M3. The evidence for each is in
   are deleted before M1b turns on immutable releases.
 - **(j)** Coverage in gcov mode (D88) at 100% on GCC 16 and p2996 with no
   markers, and the uncovered-line fixture fails on each. **Result:** passed
-  on the stand-in module (`spikes/m0/bj/`), so the fallback (p2996 coverage
+  on the stand-in module (`spikes/m0/bj/`, now `src/standin/`), so the fallback (p2996 coverage
   report-only) is not taken; M1a PR 5 re-proves it on the real modules
   (D106).
 
@@ -2127,7 +2130,7 @@ is green, or cut at its §10 cut date.
 | `.mise/tasks/artifact/build` **(O)** | PR 2, new | Builds one missing tag: an image layer, or a toolchain's `build.sh`. It runs the smoke test, records the build-tool versions, and writes `dist/<tag>/`: for a toolchain, `<tag>.tar.zst` with `inputs-hash.txt` at its root; for an image, `image.tar` and `image.txt`. Workflow steps upload it as `toolchain-<tag>` or `image-<tag>` (§2); the PR status job pushes a PR's `image.tar` as its `pr-` tag, and `publish.yml` pushes `main`'s. It holds no token (D98). |
 | `.mise/tasks/artifact/names` **(O)** | PR 2, new | Prints the release tag, release title and image references for a tag (§2, D98), for tests and local use. `publish.yml` computes the same values inline and never runs it (D114); a test checks the two agree. |
 | `.github/workflows/publish.yml` **(O)** | PR 2, new | Dispatched by `builder.yml` on `main` with the build run id. Refuses any run id that is not a `builder.yml` run from `push`, `schedule` or `workflow_dispatch` on `main` with its head on `main`'s history; a negative test dispatches it with a PR run id (D114). Downloads the artifact, computes names inline, attests toolchain tarballs and images (M1a, D116), and from M2 signs toolchains with `jdx/packslip@<commit sha>` (`attest: false`) and dispatches the post-merge workflows (D112). Runs no repository code. A trust root (D108, D114). |
-| `.mise/tasks/toolchain/fetch` **(O)** | PR 3, new | Computes each toolchain's hash, finds the release by its tag (`GET /releases/tags/<artifact tag>`, D134), and installs it. In M1a it checks the tarball's attestation (`gh attestation verify --signer-workflow publish.yml --source-ref refs/heads/main`, D116) and, after extracting, the archive's `inputs-hash.txt` (D131); from M2 it installs with `packslip install … --identity https://github.com/ray-manaloto/cpp-standard/.github/workflows/publish.yml@refs/heads/main` (§2, D111, D114). If no release matches, it installs from `.cache/toolchains/<tag>/` (filled by workflow steps, D91); if that is empty, it rebuilds (D72, D83). |
+| `.mise/tasks/toolchain/fetch` **(O)** | PR 3, new | Computes each toolchain's hash, finds the release by its tag on every page of the releases, refusing a title that matches two (D122, D176), and installs it into an immutable `<root>/.<tag>.<unique>/` directory behind `<root>/<tag>`, a symlink switched in one atomic step, so the prefix always resolves to a complete install. In M1a it checks the tarball's attestation (`gh attestation verify --signer-workflow publish.yml --source-ref refs/heads/main`, D116) and, after extracting, the archive's `inputs-hash.txt` (D131); from M2 it installs with `packslip install … --identity https://github.com/ray-manaloto/cpp-standard/.github/workflows/publish.yml@refs/heads/main` (§2, D111, D114). If no release matches, it installs from `.cache/toolchains/<tag>/` (filled by workflow steps, D91); if that is empty, it rebuilds (D72, D83). |
 | `.mise/tasks/image/verify` **(O)** | PR 2, new | Runs `gh attestation verify oci://<image>@<digest> --repo ray-manaloto/cpp-standard --signer-workflow ray-manaloto/cpp-standard/.github/workflows/publish.yml --source-ref refs/heads/main` before any non-PR image use, and prints the digest. In CI a `resolve` job picks the image: `main`'s attested `tools:<arch>-<hash>` if it exists, verified here; else, in a PR or merge-group job only, the run's own unattested `pr-` image (D54). It passes the digest as a job output; container jobs use `image@digest`, never a tag. Negative test: `tests/image_verify/` checks that an image signed from a branch ref is refused (D59, D93, D98). |
 | `toolchains/p2996/build.sh` **(O)** | PR 3, new | Starts from the proven `spikes/m0/h/build.sh` (run 43509894509), with a link: the full CMake line, including `-DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON` (D105), the patch loop, compiler-rt, libcxx, libcxxabi, libunwind and the `llvm-cov` and `llvm-profdata` tools (D88). All CMake arguments live here. The smoke test starts from `spikes/m0/h/smoke.sh` and runs a P2996 `members_of` program with ASan and coverage. The macOS branch comes in M3. |
 | `toolchains/p2996/pins.toml` **(P)** | PR 3, new | Shared by Linux and macOS (D85): `upstream = "21.0.0-p2996"`, the commit (`562409c7942690d59ea470762515f88f24b16e23`), source URL and sha256, `salt`, and `host_tools = ["cmake", "ninja"]`. Renovate bumps the commit in one PR for every OS (D32). |

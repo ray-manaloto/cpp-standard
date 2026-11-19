@@ -1,7 +1,7 @@
 # The builder (environment-standard.md section 2 steps 3 and 4, D49, D59, D61, D98, D112, D114).
-# M1a PR 2: the base and tools images, by inputs hash, on hosted arm64 runners. Toolchains arrive
-# with PR 3, amd64 and the PC runners with M2. A trust root (D108), because from M2 it runs on
-# the self-hosted runners.
+# M1a PR 2: the base and tools images, by inputs hash, on hosted arm64 runners; M1a PR 3 (#130):
+# the clang-p2996 toolchain. amd64 and the PC runners arrive with M2. A trust root (D108), because
+# from M2 it runs on the self-hosted runners.
 #
 #   tags        computes this commit's tags and probes GHCR for main's tools image; any probe
 #               answer other than found or not found fails (the probe of dotfiles-legacy
@@ -10,8 +10,14 @@
 #               each layer as the artifact image-<tag> (D98); read-only token, no OIDC
 #   pr-image    pull_request and merge_group: pushes the layers under the run's own
 #               pr-<n>-[mq-]<arch>-<hash> tags (D54, D134) and posts a commit status per tag
+#   toolchain   builds the p2996 toolchain when main has no release of its tag (and, in a
+#               pull-request or merge-queue run, this ref has no cache entry of it yet), in this
+#               commit's tools image: the one this run built, else main's verified image. It
+#               uploads the artifact toolchain-<tag> and, in a pull-request or merge-queue run,
+#               saves .cache/toolchains/<tag>/ under the cache key toolchain-<tag>, which ci.yml's
+#               gate jobs restore (D83, D91). It is the only job of a run that builds a toolchain.
 #   dispatch    on main: dispatches publish.yml with this run's id; publish.yml alone pushes
-#               main's tags and attests (D114)
+#               main's tags, releases the toolchains and attests (D114, D116)
 #
 # It holds no id-token and no attestations permission: only publish.yml signs (D114).
 name: builder
@@ -22,8 +28,9 @@ on:
   schedule:
     - cron: '17 4 * * *'
   workflow_dispatch:
-  # Pull requests that change an image input (python/pins/pins.py tag <name> --inputs) or this file. The
-  # merge queue cannot filter paths; there `tags` finds main's image and nothing builds.
+  # Pull requests that change an image or toolchain input (python/pins/pins.py tag <name> --inputs,
+  # toolchains/**) or this file. The merge queue cannot filter paths; there `tags` finds main's
+  # image and release and nothing builds.
   pull_request:
     paths:
       - image/**
@@ -31,6 +38,7 @@ on:
       - .mise/mise.lock
       - .mise/locks/**
       - .mise/tasks/artifact/build
+      - toolchains/**
       # The hashing rule itself (a schema bump changes every tag).
       - python/pins/**
       - .github/workflows/builder.yml
@@ -58,10 +66,13 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read  # this ref's cache entries (the toolchain probe)
     outputs:
       base: ${{ steps.tags.outputs.base }}
       tools: ${{ steps.tags.outputs.tools }}
+      p2996: ${{ steps.tags.outputs.p2996 }}
       build: ${{ steps.probe.outputs.exists == 'false' }}
+      build_p2996: ${{ steps.probe-p2996.outputs.exists == 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -72,6 +83,7 @@ jobs:
           for name in base tools; do
             echo "$name=$(python3 -I python/pins/pins.py tag "$name" --arch "$ARCH")" >> "$GITHUB_OUTPUT"
           done
+          echo "p2996=$(python3 -I python/pins/pins.py tag "p2996-linux-$ARCH")" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
       - id: probe
         name: Probe GHCR for main's tools image
@@ -81,6 +93,12 @@ jobs:
         run: |
           ref="$(python3 -I python/artifact/artifact.py names "$TAG" | sed -n 's/^ref=//p')"
           python3 -I python/artifact/artifact.py probe "$ref"
+      - id: probe-p2996
+        name: Probe for main's p2996 release (and this ref's cache entry)
+        env:
+          TAG: ${{ steps.tags.outputs.p2996 }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I python/artifact/artifact.py probe "$TAG"
 
   build:
     name: build
@@ -176,10 +194,120 @@ jobs:
               -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
           done
 
+  toolchain:
+    name: toolchain (p2996)
+    needs: [tags, build]
+    # After the images: a run that builds the tools image builds the toolchain in it.
+    if: >-
+      ${{ !cancelled() && needs.tags.outputs.build_p2996 == 'true'
+      && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-26.04-arm
+    # The toolchain build's share of the merge queue's 240 minutes (D61, D159): 180 with the
+    # wait; M0 (h) built it cold in 59 minutes on this runner.
+    timeout-minutes: 170
+    permissions:
+      contents: read
+      actions: read  # the re-probe reads this ref's cache entries
+      attestations: read  # gh attestation verify of main's tools image
+      packages: read  # pull main's tools image
+    # One build of a tag at a time, across events and refs (D135): a later run waits for it.
+    concurrency:
+      group: builder-${{ needs.tags.outputs.p2996 }}
+      cancel-in-progress: false
+    env:
+      TAG: ${{ needs.tags.outputs.p2996 }}
+      TOOLS: ${{ needs.tags.outputs.tools }}
+      BUILT: ${{ needs.build.result == 'success' }}
+    outputs:
+      # Whether this job built the toolchain (false when the re-probe found it).
+      built: ${{ steps.reprobe.outputs.exists == 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # A run that waited for the builder-<tag> group may find the toolchain built meanwhile: main's
+      # release, or this ref's cache entry. Then it builds nothing.
+      - id: reprobe
+        name: Probe again after the concurrency wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I python/artifact/artifact.py probe "$TAG"
+      - uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
+        if: ${{ steps.reprobe.outputs.exists == 'false' }}
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+      - if: ${{ steps.reprobe.outputs.exists == 'false' && (needs.build.result == 'success') }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: image-${{ needs.tags.outputs.tools }}
+          path: dist/image-${{ needs.tags.outputs.tools }}/
+      - id: image
+        if: ${{ steps.reprobe.outputs.exists == 'false' }}
+        name: This commit's tools image
+        env:
+          ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$BUILT" == true ]]; then
+            # Built by this run: load it from its OCI archive.
+            skopeo copy "oci-archive:dist/image-$TOOLS/image.tar" docker-daemon:cppstd-tools:build
+            echo "image=cppstd-tools:build" >> "$GITHUB_OUTPUT"
+          else
+            # main's image: verified like image:verify, then pulled by digest (D114).
+            docker login ghcr.io --username "$ACTOR" --password-stdin <<<"$GH_TOKEN"
+            ref="$(python3 -I python/artifact/artifact.py names "$TOOLS" | sed -n 's/^ref=//p')"
+            digest="$(python3 -I python/artifact/artifact.py verify "$ref" | tail -1)"
+            docker pull "${ref%:*}@$digest"
+            echo "image=${ref%:*}@$digest" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and smoke-test the toolchain
+        if: ${{ steps.reprobe.outputs.exists == 'false' }}
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          df -h / "$GITHUB_WORKSPACE"
+          # The image's user is uid 1001, the runner's, so it writes the workspace. The work tree
+          # (about 50 GB) is on the runner's root disk, not in the container's layer.
+          docker run --rm -v "$GITHUB_WORKSPACE:/w" -w /w \
+            -e MISE_TRUSTED_CONFIG_PATHS=/w -e MISE_TASK_RUN_AUTO_INSTALL=false \
+            -e CPPSTD_BUILD_WORK=/w/.work \
+            "$IMAGE" mise run artifact:build "p2996-linux-$ARCH"
+          df -h /
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: ${{ steps.reprobe.outputs.exists == 'false' }}
+        with:
+          name: toolchain-${{ needs.tags.outputs.p2996 }}
+          path: dist/${{ needs.tags.outputs.p2996 }}/
+          if-no-files-found: error
+          retention-days: 7
+      # The staged copy of pull-request and merge-queue jobs (D91): ci.yml restores exactly this
+      # path and key on the same ref.
+      - name: Stage the toolchain for this ref's gate jobs
+        if: ${{ steps.reprobe.outputs.exists == 'false' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+        run: |
+          mkdir -p ".cache/toolchains/$TAG"
+          cp "dist/$TAG/$TAG.tar.zst" "dist/$TAG/inputs-hash.txt" ".cache/toolchains/$TAG/"
+      - if: ${{ steps.reprobe.outputs.exists == 'false' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .cache/toolchains/${{ needs.tags.outputs.p2996 }}
+          key: toolchain-${{ needs.tags.outputs.p2996 }}
+
   dispatch:
     name: dispatch
-    needs: build
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+    needs: [build, toolchain]
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main'
+      && github.event_name != 'pull_request' && github.event_name != 'merge_group'
+      && needs.build.result != 'failure' && needs.toolchain.result != 'failure'
+      && needs.build.result != 'cancelled' && needs.toolchain.result != 'cancelled'
+      && (needs.build.result == 'success' || needs.toolchain.outputs.built == 'true') }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     permissions:

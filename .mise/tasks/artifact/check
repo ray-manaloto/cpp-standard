@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-#MISE description="Wait until every Linux tag a pull request needs exists, up to 3 hours (D61, D62)"
-#USAGE arg "[tag]..." var=#true help="Tags to wait for (default: this commit's tools image for --arch)"
+#MISE description="Wait until every Linux image and toolchain tag a pull request needs exists, up to 3 hours (D61, D62)"
+#USAGE arg "[tag]..." var=#true help="Tags to wait for (default: this commit's tools image and p2996 toolchain for --arch)"
 #USAGE flag "--arch <arch>" help="Docker arch of the default tag" default="arm64" {
 #USAGE   choices "arm64" "amd64"
 #USAGE }
@@ -11,13 +11,19 @@
 # when main's image is in GHCR, or in a pull-request or merge-queue run, that run's own pr- image
 # (D54, D134); the PR number comes from GITHUB_REF. It fails after the wait naming each missing
 # tag and the builder run ($BUILDER_RUN). The tags of the base image are covered by the tools
-# image, which is built on it. Toolchain tags arrive with M1a PR 3.
+# image, which is built on it. A toolchain tag exists as main's release, or in a pull-request or
+# merge-queue run, as the builder's cache entry on this ref (M1a PR 3, D83, D91). The wait never
+# builds anything.
 set -euo pipefail
 root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
 # Artifact tags hold no spaces or quotes, so splitting on whitespace is exact.
 read -ra tags <<<"${usage_tag:-}"
 if [[ ${#tags[@]} -eq 0 ]]; then
-  tags=("$(python3 -I "$root/python/pins/pins.py" tag tools --arch "${usage_arch:-arm64}" --root "$root")")
+  arch="${usage_arch:-arm64}"
+  tags=(
+    "$(python3 -I "$root/python/pins/pins.py" tag tools --arch "$arch" --root "$root")"
+    "$(python3 -I "$root/python/pins/pins.py" tag "p2996-linux-$arch" --root "$root")"
+  )
 fi
 exec python3 -I "$root/python/artifact/artifact.py" check "${tags[@]}" \
   --timeout "${usage_timeout:-10800}" --interval "${usage_interval:-60}"

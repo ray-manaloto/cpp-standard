@@ -1,0 +1,14 @@
+# clang-p2996 with its own libc++ and compiler-rt (environment-standard.md section 2, D30, D32, D85).
+# Shared by every OS; the macOS recipe arrives with M3. Every flag lives in build.sh.
+upstream = "21.0.0-p2996"
+salt = 0
+# build.sh bootstraps with apt.llvm.org's clang-23 and lld-23 (apt.toml), so apt.toml is an input (D162).
+apt_compiler = true
+# Locked mise tools the build runs: their linux-<arch> slice of .mise/mise.lock is hashed.
+host_tools = ["cmake", "ninja"]
+
+[source]
+# bloomberg/clang-p2996, branch p2996, 2026-11-03: the commit M0 (h) built (run 43509894509).
+url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz"
+sha256 = "efd728aa175c86991bb2ab64daa14b27044eb67b9277a3d9f2ab8bcb05f90698"
+commit = "562409c7942690d59ea470762515f88f24b16e23"

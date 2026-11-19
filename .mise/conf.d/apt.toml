@@ -3,7 +3,7 @@
 [bootstrap.packages]
 # Each package is pinned to its newest version, and a daily job moves the pin (D12, D27, D152).
 # The set certified on Ubuntu 26.10 (mise.ubuntu.toml) and the build helpers: installed, not built.
-# apt.llvm.org (apt-sources.toml), the set proven in spike-m0-bj.yml (D105) and the rest of LLVM 23.
+# apt.llvm.org (apt-sources.toml), the set proven in M0 (b) and (j) (D105) and the rest of LLVM 23.
 "apt:clang-23" = { version = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96", os = [
   "linux",
 ] }

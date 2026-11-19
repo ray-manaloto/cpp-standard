@@ -346,7 +346,7 @@ MLIR, BOLT, openmp and the libc overlay need nothing more. The script is in
 | `LLVM_ENABLE_ASSERTIONS`, `LIBCXX_HARDENING_MODE`, `LLVM_INSTALL_UTILS` | `ON`, `extensive`, `ON` | As D136. |
 | `LLDB_ENABLE_PYTHON` | `ON`, Ubuntu's Python 3.14 | lldb scripting and lldb-dap. On Linux lldb uses its own `lldb-server`; no code signing. |
 | `CLANG_DEFAULT_CXX_STDLIB` | `libc++` | p2996 pairs with its own libc++ (D6). |
-| `COMPILER_RT_DEFAULT_TARGET_ONLY` and the `linux/scc.h` patch | `ON`, patch from `spikes/m0/h/patches/` | D105: compiler-rt at this commit does not build against 26.10's kernel headers without it. |
+| `COMPILER_RT_DEFAULT_TARGET_ONLY` and the `linux/scc.h` patch | `ON`, patch from `toolchains/p2996/linux/` (the M0 (h) spike's, moved by M1a PR 3) | D105: compiler-rt at this commit does not build against 26.10's kernel headers without it. |
 | `lldb-base-specifier-derived.patch` | from the dotfiles p2996 recipe | lldb at this commit does not compile against p2996's `CXXBaseSpecifier` (it takes the derived record, not a flag): `TypeSystemClang.cpp:7862: no matching constructor for initialization of 'clang::CXXBaseSpecifier'`. The Mac build carries the same patch. M0 (h) built only `clang;lld`, so it never hit this. |
 | Install prefix | `/opt/p2996` in the volume `cpp-standard-p2996-<commit12>-<inputs12>` (Appendix: p2996 build) | `research/p2996-linux.md`: a separate prefix, nothing on `PATH`. |
 
@@ -1511,7 +1511,7 @@ print("PASS")
 
 The build inputs are files in this repository, in
 [`ubuntu-p2996/`](ubuntu-p2996/): the script `build-linux.sh`, the
-`linux/scc.h` patch from `spikes/m0/h/patches/` (D105), and
+`linux/scc.h` patch, a copy of `toolchains/p2996/linux/`'s (D105), and
 `lldb-base-specifier-derived.patch`, copied from the dotfiles p2996 recipe
 (`python/toolchains/p2996/src/p2996/patches/`, last changed in dotfiles
 `9550cea`). sha256 on 2026-11-16:

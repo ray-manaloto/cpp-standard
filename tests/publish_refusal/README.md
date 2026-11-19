@@ -20,13 +20,14 @@ step of M1a PR 2, and again whenever `publish.yml` changes. Its receipt names th
    ```
 
 3. The run must fail in its `check` job, step "Check the builder run", with the line
-   `refused: run <run id> came from a pull_request event`, and its `image` jobs must not run
-   (nothing pushed, nothing attested):
+   `refused: run <run id> came from a pull_request event`, and neither its `image` jobs nor its
+   `toolchain` jobs (the only jobs with `contents: write`, which create releases) may run:
+   nothing pushed, released or attested:
 
    ```sh
    gh run view <publish run id> --repo ray-manaloto/cpp-standard --log-failed | grep 'refused: run'
    gh run view <publish run id> --repo ray-manaloto/cpp-standard --json jobs \
-     --jq '.jobs[] | select(.name | startswith("image")) | .conclusion'   # skipped, or none
+     --jq '.jobs[] | select(.name | test("^(image|toolchain)")) | .conclusion'   # skipped, or none
    ```
 
 The receipt is a comment on the ticket with the publish run's URL, the refusal line and the

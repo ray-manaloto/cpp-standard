@@ -362,6 +362,10 @@ class Validator:
             self.fail("inputs", rel, "source.sha256 is not 64 hex")
         elif "commit" in source and not HEX40.fullmatch(str(source["commit"])):
             self.fail("inputs", rel, "source.commit is not 40 hex")
+        elif "commit" in source and str(source["commit"]) not in str(source["url"]):
+            # The tarball must be the pinned commit's (#130): a bumped commit with a stale url
+            # would build other source under the new pin.
+            self.fail("inputs", rel, "source.commit is not the commit in source.url")
         self.macos(rel, data.get("macos"))
         if "apt_compiler" in data and not isinstance(data["apt_compiler"], bool):
             self.fail("inputs", rel, "apt_compiler is not true or false (D162)")
