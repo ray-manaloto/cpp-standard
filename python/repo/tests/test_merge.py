@@ -59,6 +59,8 @@ args = sys.argv[3:]
 open(log, "a").write(json.dumps(["jouet", *args]) + "\\n")
 if args[:2] != ["wait", "ci"]:
     sys.exit(2)
+if "after_checks" in scenario:
+    json.dump(scenario | scenario["after_checks"], open(sys.argv[1], "w"))
 print(scenario.get("checks_said", "checks passed"))
 sys.exit(scenario.get("checks", 0))
 """
@@ -256,15 +258,16 @@ def test_a_queue_merge_authored_by_the_agent_app_is_accepted(world: World, capsy
     assert json.loads(capsys.readouterr().out) == {"number": 7, "merge_commit": "f00d", "author_email": app}
 
 
+@pytest.mark.parametrize("gate", ["local-hk", "required-checks"])
 def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_arguments(
-    copy: Path, monkeypatch: pytest.MonkeyPatch
+    copy: Path, monkeypatch: pytest.MonkeyPatch, gate: str
 ) -> None:
     """The task hands its three arguments, full of shell syntax, whole to the real repotools in uv's tool bin folder
     (where //repo:tools-install puts main's), never the branch venv's, and nothing in them runs.
 
     The pull request on the gh stand-in carries that very title and body, so repotools passes the title and body checks
-    only if both arrived intact. The copy is this repository, whose repotools.toml sets the required-checks gate: the
-    copy's hk check, which exits 3, never runs, and the pull request is queued in the queue form (#213).
+    only if both arrived intact. With this repository's required-checks setting, the failing hk step must not run.
+    Without the file, the task must run hk, wait for the merge and report its verified author.
     """
     tools = copy.parent / "tool-bin"
     tools.mkdir()
@@ -286,17 +289,26 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
     (copy / body_file).write_text(BODY)
     for name in [name for name in os.environ if name.startswith("HK_")]:
         monkeypatch.delenv(name)
-    (copy / "hk.pkl").write_text(hk_config("exit 3"))
-    head = test_gates.commit("hk exits 3")
+    if gate == "local-hk":
+        (copy / "repotools.toml").unlink()
+    (copy / "hk.pkl").write_text(hk_config(HK_RAN if gate == "local-hk" else "exit 3"))
+    head = test_gates.commit("set up merge gate")
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head], check=True)
     shown = {"headRefOid": head, "state": "OPEN", "baseRefName": "main", "title": title, "body": BODY}
-    (copy.parent / "scenario.json").write_text(json.dumps({"pr": shown, "default": "main"}))
+    (copy.parent / "scenario.json").write_text(
+        json.dumps({"pr": shown, "default": "main", "reads": [MERGED], "email": NOREPLY})
+    )
     done = mise("//repo:pr-merge", "7", title, body_file)
     assert done.returncode == 0, done.stderr
-    queued = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
-    assert queued == [{"number": 7, "head_commit": head, "merged": False}]
+    result = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
     calls = [json.loads(line) for line in (copy.parent / "calls.jsonl").read_text().splitlines()]
-    assert [call for call in calls if call[:2] == ["pr", "merge"]] == [
-        ["pr", "merge", "7", "--match-head-commit", head]
-    ]
+    merges = [call for call in calls if call[:2] == ["pr", "merge"]]
+    if gate == "local-hk":
+        assert (copy.parent / "hk-ran").exists()
+        assert merges == [["pr", "merge", "7", "--merge", "--match-head-commit", head, "--author-email", NOREPLY]]
+        assert result == [{"number": 7, "merge_commit": "f00d", "author_email": NOREPLY}]
+    else:
+        assert merges == [["pr", "merge", "7", "--match-head-commit", head]]
+        assert result == [{"number": 7, "head_commit": head, "merged": False}]
     assert ["jouet", "wait", "ci", "7", "--sha", head] in [call[:6] for call in calls]
     assert not list(copy.parent.rglob("pwned*"))

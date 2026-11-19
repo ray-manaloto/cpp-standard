@@ -77,7 +77,9 @@ def test_required_checks_still_refuses_a_dirty_checkout(
     queued: World, repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     (repo / "notes.md").write_text("untracked\n")
-    assert "untracked files" in pr_refusal_of(capsys, "pr-merge", merge_args())
+    refusal = pr_refusal_of(capsys, "pr-merge", merge_args())
+    assert "untracked files" in refusal
+    assert "hk check --pr" not in refusal
     assert queued.calls() == []
 
 
@@ -120,16 +122,110 @@ def test_an_unknown_gate_is_refused_before_hk_and_the_merge(
 ) -> None:
     setting(world, repo, '[pr-merge]\ngate = "none"\n', pushed=True)
     said = pr_refusal_of(capsys, "pr-merge", merge_args())
-    assert said == "repotools.toml on origin/trunk sets [pr-merge] gate = 'none'; it takes local-hk or required-checks"
+    assert said == (
+        f"repotools.toml on origin/trunk ({world.head}) sets [pr-merge] gate = 'none'; "
+        "it takes local-hk or required-checks"
+    )
     assert not world.ran.exists()
     assert not world.merged()
 
 
-def test_a_default_branch_missing_from_the_clone_is_refused(world: World, capsys: pytest.CaptureFixture[str]) -> None:
-    subprocess.run(["git", "update-ref", "-d", "refs/remotes/origin/trunk"], check=True)
-    said = pr_refusal_of(capsys, "pr-merge", merge_args())
-    assert said == "origin/trunk is not in this clone, so its repotools.toml cannot be read; run git fetch origin"
+@pytest.mark.parametrize(
+    "ref_change", [["remote", "rename", "origin", "upstream"], ["update-ref", "-d", "refs/remotes/origin/trunk"]]
+)
+@pytest.mark.parametrize("extra", [[], ["--check-only"]])
+def test_missing_origin_ref_uses_local_hk(
+    world: World, capsys: pytest.CaptureFixture[str], ref_change: list[str], extra: list[str]
+) -> None:
+    subprocess.run(["git", *ref_change], check=True)
+    main(["pr-merge", *extra, *merge_args()])
+    assert capsys.readouterr().err.splitlines() == [
+        "origin/trunk is not in this clone; cannot read its repotools.toml, using local-hk"
+    ]
+    assert world.ran.exists()
+    assert world.merged() == (not extra)
+
+
+@pytest.mark.parametrize(("text", "reason"), [('pr-merge = "x"', "must be a table"), ("[pr-merge", "not valid TOML")])
+def test_invalid_setting_names_file_and_ref(
+    world: World, repo: Path, capsys: pytest.CaptureFixture[str], text: str, reason: str
+) -> None:
+    setting(world, repo, text, pushed=True)
+    with pytest.raises(SystemExit) as stopped:
+        main(["pr-merge", *merge_args()])
+    assert stopped.value.code == 1
+    (line,) = capsys.readouterr().err.splitlines()
+    refusal = json.loads(line)["error"]
+    assert "repotools.toml on origin/trunk" in refusal
+    assert reason in refusal
     assert not world.merged()
+    assert not world.ran.exists()
+
+
+def test_check_only_reports_bad_setting_beside_other_gates(
+    world: World, repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    setting(world, repo, "[pr-merge", pushed=True)
+    world.set(pr=world.pr() | {"title": "edited"})
+    with pytest.raises(SystemExit) as stopped:
+        main(["pr-merge", "--check-only", *merge_args()])
+    assert stopped.value.code == 1
+    captured = capsys.readouterr()
+    results = {item["gate"]: item["refusal"] for item in map(json.loads, captured.out.splitlines())}
+    assert list(results) == GATES
+    assert "title" in results["title"]
+    assert "not valid TOML" in results["hk"]
+    assert "2 of 8 gates refused" in captured.err
+    assert not world.ran.exists()
+    assert not world.merged()
+
+
+def test_subfolder_reads_and_names_the_default_branch_commit(
+    queued: World, repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trusted = queued.head
+    setting(queued, repo, LOCAL, pushed=False)
+    folder = repo / "subfolder"
+    folder.mkdir()
+    monkeypatch.chdir(folder)
+    main(["pr-merge", "--check-only", *merge_args()])
+    captured = capsys.readouterr()
+    assert f"origin/trunk ({trusted})" in captured.err
+    assert "required-checks" in json.loads(captured.out.splitlines()[-1])["skipped"]
+    assert not queued.ran.exists()
+
+
+@pytest.mark.parametrize("field", ["baseRefName", "title", "body"])
+def test_edit_during_checks_refuses_queue(queued: World, capsys: pytest.CaptureFixture[str], field: str) -> None:
+    queued.set(after_checks={"pr": queued.pr() | {field: "edited"}})
+    said = pr_refusal_of(capsys, "pr-merge", merge_args())
+    assert ("goes into edited" if field == "baseRefName" else field) in said
+    assert not queued.merged()
+
+
+def test_required_checks_without_queue_reports_gh_refusal(queued: World, capsys: pytest.CaptureFixture[str]) -> None:
+    # Non-interactive gh needs a merge method when the target branch has no queue.
+    reason = "--merge, --rebase, or --squash required when not running interactively"
+    queued.set(refuse=reason)
+    assert pr_refusal_of(capsys, "pr-merge", merge_args()) == f"gh failed: {reason}"
+    assert [call for call in queued.calls() if call[:2] == ["pr", "merge"]] == [queue_form(queued)]
+    assert not queued.ran.exists()
+
+
+def test_shipping_explains_when_pr_merge_returns() -> None:
+    shipping = (REPO / "AGENTS.md").read_text().split("- Shipping:")[1].split("- Worktrees:")[0]
+    assert "whose required\n" not in shipping
+    assert "returns once the pull request is queued" in shipping
+    assert "`jouet wait pr <number> --until merged` waits for the merge" in shipping
+
+
+def test_generated_claude_mods_tsconfig_does_not_dirty_checkout(repo: Path) -> None:
+    (repo / ".gitignore").write_bytes((REPO / ".gitignore").read_bytes())
+    commit()
+    package = repo / "unix/home/.local/share/claude-mods/example"
+    package.mkdir(parents=True)
+    (package / "tsconfig.json").write_text("{}")
+    assert subprocess.run(["git", "status", "--porcelain"], check=True, capture_output=True).stdout == b""
 
 
 def test_check_only_reports_hk_as_skipped_and_names_the_setting(

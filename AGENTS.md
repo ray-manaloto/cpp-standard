@@ -40,8 +40,9 @@ design is `docs/designs/environment-standard.md`. See `docs/agents/domain.md`.
   `repotools pr-create --title <title> --body-file <body file>`. The merge is
   `mise run //repo:pr-merge <number> <title> <body file>`, run alone: the local hk gate is not run (D169,
   `repotools.toml`); it checks the other gates, waits for the required checks to pass, then puts the pull request
-  in the merge queue, whose required
-  checks are the gate and which squashes it (`.github/rulesets/main.json`). Never `--admin`, never past the queue.
+  in the merge queue. The command returns once the pull request is queued. The queue's required checks gate the
+  squash merge (`.github/rulesets/main.json`). `jouet wait pr <number> --until merged` waits for the merge.
+  Never `--admin`, never past the queue.
 - Worktrees: one worktree and one branch per agent (D23). An agent works only in its own worktree, never in the
   main checkout or another agent's worktree.
 - Identity: an agent's pushes and pull requests carry the agent App, not the owner's login. On the Mac host that

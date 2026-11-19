@@ -45,7 +45,7 @@ def test_failing_gates_are_each_reported_and_every_other_gate_still_runs(
     results = {line["gate"]: line["refusal"] for line in map(json.loads, captured.out.splitlines())}
     assert list(results) == GATES
     assert results == {
-        "clean": "the checkout has changes or untracked files, so hk check --pr would not test the head alone",
+        "clean": "the checkout has changes or untracked files",
         "head": None,
         "open": None,
         "base": None,
@@ -54,7 +54,7 @@ def test_failing_gates_are_each_reported_and_every_other_gate_still_runs(
         "body": None,
         "hk": f"hk check --pr failed (exit 3) on {made.head}",
     }
-    assert json.loads(captured.err) == {"error": "check-only: 3 of 8 gates refused pull request #7"}
+    assert json.loads(captured.err.splitlines()[-1]) == {"error": "check-only: 3 of 8 gates refused pull request #7"}
     assert made.ran.exists()
     assert not made.merged()
 
@@ -79,6 +79,7 @@ def test_the_task_passes_check_only_to_the_installed_repotools(copy: Path, monke
     head = test_gates.commit("hk exits 3")
     shown = {"headRefOid": head, "state": "OPEN", "baseRefName": "main", "title": "feat: one", "body": BODY}
     (copy.parent / "scenario.json").write_text(json.dumps({"pr": shown, "default": "main"}))
+    monkeypatch.chdir(copy / "python" / "repo")
     done = mise("//repo:pr-merge", "--check-only", "7", "feat: one", "body.md")
     assert done.returncode == 0, done.stderr
     gates = [json.loads(line) for line in done.stdout.splitlines() if line.startswith('{"gate"')]
