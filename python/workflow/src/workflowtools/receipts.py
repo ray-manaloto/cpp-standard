@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from . import rounds
 from .git import git, top
@@ -17,11 +17,13 @@ from .models import (
     Check,
     CommitCheck,
     Finding,
+    GitHubCommit,
     Receipt,
     ReceiptStatus,
     Verdict,
     VerifyBegin,
     VerifyCommit,
+    VerifyReading,
     VerifyReceipt,
     WorktreeVerify,
 )
@@ -97,6 +99,10 @@ def begin() -> VerifyBegin:
     return VerifyBegin(kind="verify-begin", tree=examined)
 
 
+def is_doc(path: str) -> bool:
+    return path.lower().endswith(DOCS)
+
+
 def save(verdict: Verdict) -> BaseModel:
     """Save the verdict against the remembered tree, or say why not: no PASS for content that changed under it."""
     state = worktree()
@@ -104,7 +110,7 @@ def save(verdict: Verdict) -> BaseModel:
         return problem("no tree remembered: run workflowtools verify-receipt before /verify")
     if (examined := tree(working=True)) != state.begun:
         return problem(f"the content changed after {state.begun} was remembered: run verify-receipt and verify again")
-    if verdict is Verdict.skip and (code := [path for path in changed(examined) if not path.lower().endswith(DOCS)]):
+    if verdict is Verdict.skip and (code := [path for path in changed(examined) if not is_doc(path)]):
         return problem(f"SKIP needs a documentation-only change; PASS is required for {', '.join(code)}")
     receipt = Receipt(kind="receipt", tree=examined, verdict=verdict, at=rounds.now())
     store().mkdir(parents=True, exist_ok=True)
@@ -148,6 +154,67 @@ def commit(options: VerifyCommit) -> CommitCheck:
         verdict=verdict,
         trailer=trailer,
         detail=detail,
+    )
+
+
+def all_receipts() -> dict[str, Receipt]:
+    """Every receipt in the store keyed by tree; a store directory not created yet holds none."""
+    directory = store()
+    if not directory.exists():
+        return {}
+    found: dict[str, Receipt] = {}
+    for path in sorted(directory.iterdir()):
+        if path.suffix != ".json":
+            continue
+        try:
+            item = Receipt.model_validate_json(path.read_text())
+        except ValidationError:
+            msg = f"{path}: not a verify receipt"
+            raise ValueError(msg) from None
+        found[item.tree] = item
+    return found
+
+
+def trailer_tree(message: str) -> str | None:
+    """The verified tree from the commit's Verify-Receipt trailer, or None when absent."""
+    parsed = git("interpret-trailers", "--parse", stdin=message)
+    prefix = f"{TRAILER.lower()}:"
+    values = [line.partition(":")[2].strip() for line in parsed.splitlines() if line.lower().startswith(prefix)]
+    if not values:
+        return None
+    return values[-1].partition(" ")[0]
+
+
+def read_commit(commit: GitHubCommit, stored: dict[str, Receipt]) -> tuple[VerifyReading, str]:
+    """Read one commit against local verify receipts and its Verify-Receipt trailer, first fitting row."""
+    commit_tree = commit.commit.tree.sha
+    found = stored.get(commit_tree)
+    doc_skip = (
+        found is not None
+        and found.verdict is Verdict.skip
+        and commit.files is not None
+        and all(is_doc(file.filename) for file in commit.files)
+    )
+    if found is not None and (found.verdict is Verdict.pass_ or doc_skip):
+        return VerifyReading.verified, f"local {found.verdict} receipt for {commit_tree}"
+    claimed = trailer_tree(commit.commit.message)
+    if claimed is None:
+        return VerifyReading.unverified, "no Verify-Receipt trailer"
+    if claimed != commit_tree:
+        return (
+            VerifyReading.unverified,
+            f"changed after verification: trailer names {claimed}, commit tree is {commit_tree}",
+        )
+    if found is not None:
+        if found.verdict is Verdict.skip:
+            return (
+                VerifyReading.unverified,
+                f"local SKIP receipt for {commit_tree} is not on a documentation-only change",
+            )
+        return VerifyReading.unverified, f"local receipt for {commit_tree} is {found.verdict}"
+    return (
+        VerifyReading.unknown,
+        f"commit carries Verify-Receipt for {commit_tree}, but this machine has no receipt for it",
     )
 
 

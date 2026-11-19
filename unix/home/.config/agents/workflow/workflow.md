@@ -94,9 +94,18 @@ the installed `workflowtools`; replaying a command adds nothing.
   given twice is refused. Zero findings, or every change declined, still clears the debt. Exit 1
   means the round was never opened, is not closed yet, or a change was given twice. A replay prints
   the stored retro and ignores the new values.
-- **Check-in.** `workflowtools report` prints the open rounds, then the closed rounds owing a retro
-  with the inputs the retro starts from. Each section reads "unknown" with the reason when the store
-  cannot be read.
+- **Check-in.** `workflowtools report [--repo <owner/name> ...] [--since YYYY-MM-DD]` reads GitHub
+  read-only and prints four sections: open rounds (`open-rounds`), closed rounds owing a retro with the inputs the retro
+  starts from (`owing-retro`), merges and closed round heads without a matching verify receipt
+  (`without-receipt`), and merged pull requests in no round (`merges-in-no-round`). Per-round checks
+  compare the head commit recorded at close; per-merge checks compare the pull request's final head
+  commit. A commit reads `verified` with a local PASS receipt (or SKIP on a documentation-only change),
+  `unknown` with a reason when it carries `Verify-Receipt` for a tree with no local receipt,
+  `unverified` (changed after verification) when the trailer's tree hash differs from the commit's
+  own tree, or `unverified` when it carries no trailer. Every section reads "unknown" with the reason
+  when its store or GitHub listing cannot be read. The two merge sections list only pull requests merged on or
+  after `--since` (UTC; default 2026-11-19, when receipts and rounds came into use; `--since 2000-01-01` gives the
+  full history); a closed round's heads are checked whatever the merge date.
 
 ## Plans
 
