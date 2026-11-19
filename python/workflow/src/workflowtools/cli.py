@@ -8,7 +8,7 @@ import yaml
 from pydantic import BaseModel
 from pydantic_settings import CliApp, CliSettingsSource
 
-from . import frontmatter, rounds, settings_local, skill_table, tickets
+from . import frontmatter, receipts, rounds, settings_local, skill_table, tickets
 from .models import (
     Command,
     Failure,
@@ -22,6 +22,8 @@ from .models import (
     SettingsLocal,
     SkillTable,
     Tickets,
+    VerifyCommit,
+    VerifyReceipt,
 )
 
 OPTIONS: dict[Command, type[Options]] = {
@@ -34,6 +36,8 @@ OPTIONS: dict[Command, type[Options]] = {
     Command.round_close: RoundClose,
     Command.round_retro: RoundRetro,
     Command.report: Report,
+    Command.verify_receipt: VerifyReceipt,
+    Command.verify_commit: VerifyCommit,
 }
 
 
@@ -76,15 +80,17 @@ def run(options: Options) -> None:
             emit([result] if isinstance(result, BaseModel) else result)
         case SettingsLocal():
             emit(found := settings_local.findings())
-        case RoundOpen() | RoundPr() | RoundClose() | RoundRetro():
-            # The event written or replayed, or why none was: exit 1 on a finding, 2 when GitHub could not answer.
-            emit(lines := [rounds.run(options)])
+        case RoundOpen() | RoundPr() | RoundClose() | RoundRetro() | VerifyReceipt():
+            # The event, tree or receipt written, or why none was: exit 1 on a finding (a round event out of order,
+            # no verdict saved), 2 when GitHub could not answer.
+            emit(lines := [receipts.run(options) if isinstance(options, VerifyReceipt) else rounds.run(options)])
             if status := tickets.code(lines, require_github=False):
                 raise SystemExit(status)
             return
-        case Report():
-            # Report-only: unknown is a line in the report, never a failing exit.
-            emit(rounds.report())
+        case Report() | VerifyCommit():
+            # Report-only: an unknown report section, and a mismatch or no receipt at commit, are lines in the
+            # output, never a failing exit; the commit goes ahead.
+            emit(rounds.report() if isinstance(options, Report) else [receipts.commit(options)])
             return
         case _:
             emit(found := frontmatter.findings())

@@ -61,6 +61,20 @@ depends = ["sync"]
 dir = "{{ config_root }}/../.."
 run = "uv run --project python/workflow --locked workflowtools report"
 
+# Verify receipts (#161): the tree /verify examined, under $XDG_STATE_HOME/workflowtools/receipts/<tree>.json. Workers
+# run the installed copy (`workflowtools verify-receipt ...`) in their own worktree.
+[tasks.verify-receipt]
+description = "Before /verify: remember the working tree; after it: --verdict PASS|SKIP|FAIL|BLOCKED saves the receipt"
+depends = ["sync"]
+dir = "{{ config_root }}/../.."
+run = "uv run --project python/workflow --locked workflowtools verify-receipt"
+
+[tasks.verify-commit]
+description = "At commit: compare the staged tree with the receipts; --plan ID, --message-file adds the trailer"
+depends = ["sync"]
+dir = "{{ config_root }}/../.."
+run = "uv run --project python/workflow --locked workflowtools verify-commit"
+
 # Another repository's hk runs the installed copy (//workflow:install), so it needs no checkout of this one.
 [tasks.install]
 description = "Install this checkout's workflowtools as a uv tool, the copy other repositories' hk steps run"

@@ -4,8 +4,8 @@ import subprocess
 from pathlib import Path
 
 
-def git(*args: str) -> str:
-    return subprocess.run(["git", *args], capture_output=True, check=True, text=True).stdout
+def git(*args: str, env: dict[str, str] | None = None) -> str:
+    return subprocess.run(["git", *args], capture_output=True, check=True, text=True, env=env).stdout
 
 
 def top() -> Path:

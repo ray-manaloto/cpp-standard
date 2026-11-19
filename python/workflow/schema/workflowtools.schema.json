@@ -97,6 +97,24 @@
     },
     "retro_owed": {
       "$ref": "#/$defs/RetroOwed"
+    },
+    "verify_receipt": {
+      "$ref": "#/$defs/VerifyReceipt"
+    },
+    "verify_commit": {
+      "$ref": "#/$defs/VerifyCommit"
+    },
+    "verify_begin": {
+      "$ref": "#/$defs/VerifyBegin"
+    },
+    "receipt": {
+      "$ref": "#/$defs/Receipt"
+    },
+    "worktree_verify": {
+      "$ref": "#/$defs/WorktreeVerify"
+    },
+    "commit_check": {
+      "$ref": "#/$defs/CommitCheck"
     }
   },
   "$defs": {
@@ -112,7 +130,9 @@
         "round-pr",
         "round-close",
         "round-retro",
-        "report"
+        "report",
+        "verify-receipt",
+        "verify-commit"
       ]
     },
     "RoundId": {
@@ -637,6 +657,211 @@
       ],
       "additionalProperties": false
     },
+    "Tree": {
+      "description": "A git tree object's hash.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    },
+    "Verdict": {
+      "description": "A /verify verdict. SKIP is valid only when every changed path is documentation.",
+      "type": "string",
+      "enum": [
+        "PASS",
+        "SKIP",
+        "FAIL",
+        "BLOCKED"
+      ]
+    },
+    "VerifyReceipt": {
+      "description": "Before /verify, remember the tree of the working changes; after it, --verdict saves the verdict for it.",
+      "type": "object",
+      "properties": {
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Verdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "After /verify: save this verdict, only if the content is still the remembered tree"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VerifyCommit": {
+      "description": "At commit, compare the staged tree with the receipts and print the trailer; a mismatch never stops the commit.",
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "The plan or round ID the trailer names; an ID, never a path"
+        },
+        "message_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A commit message file to add the trailer to"
+        }
+      },
+      "required": [
+        "plan"
+      ],
+      "additionalProperties": false
+    },
+    "VerifyBegin": {
+      "description": "The tree remembered before /verify.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "verify-begin"
+        },
+        "tree": {
+          "$ref": "#/$defs/Tree"
+        }
+      },
+      "required": [
+        "kind",
+        "tree"
+      ],
+      "additionalProperties": false
+    },
+    "Receipt": {
+      "description": "A saved verdict, one file per tree in the state store.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "receipt"
+        },
+        "tree": {
+          "$ref": "#/$defs/Tree"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "at": {
+          "type": "string",
+          "description": "UTC time written, ISO 8601"
+        }
+      },
+      "required": [
+        "kind",
+        "tree",
+        "verdict",
+        "at"
+      ],
+      "additionalProperties": false
+    },
+    "WorktreeVerify": {
+      "description": "A worktree's verify state, in its git dir: the tree remembered and the last tree given a verdict.",
+      "type": "object",
+      "properties": {
+        "begun": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tree"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "saved": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tree"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReceiptStatus": {
+      "description": "How the staged tree compares with the receipts.",
+      "type": "string",
+      "enum": [
+        "match",
+        "mismatch",
+        "no-receipt"
+      ]
+    },
+    "CommitCheck": {
+      "description": "verify-commit's line: the staged tree, how it compares, the receipt's verdict and the trailer.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "verify-commit"
+        },
+        "status": {
+          "$ref": "#/$defs/ReceiptStatus"
+        },
+        "staged": {
+          "$ref": "#/$defs/Tree"
+        },
+        "verified": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tree"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tree the receipt is for; null with no receipt"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Verdict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trailer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Verify-Receipt: <verified tree> <plan or round ID>; null with no receipt"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "status",
+        "staged",
+        "verified",
+        "verdict",
+        "trailer",
+        "detail"
+      ],
+      "additionalProperties": false
+    },
     "Frontmatter": {
       "description": "Check every SKILL.md and okf concept file's frontmatter, and that every YAML file parses, as the index has them.",
       "type": "object",
@@ -748,6 +973,12 @@
         },
         {
           "$ref": "#/$defs/Report"
+        },
+        {
+          "$ref": "#/$defs/VerifyReceipt"
+        },
+        {
+          "$ref": "#/$defs/VerifyCommit"
         }
       ]
     },
@@ -759,7 +990,8 @@
         "skill-table",
         "tickets",
         "settings-local",
-        "rounds"
+        "rounds",
+        "verify"
       ]
     },
     "Finding": {

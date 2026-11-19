@@ -109,6 +109,41 @@ def test_pr_create_sends_the_text_to_gh(
     assert capfd.readouterr().out == GH_URL + "\n"
 
 
+@pytest.mark.parametrize(
+    ("evidence", "warned"),
+    [
+        ("", True),
+        ("/verify: PASS\n", False),
+        ("- Verify: SKIP, documentation only\n", False),
+        ("/verify: SKIP\n", True),
+        ("Tests PASS\n", True),
+        ("- Verify: SKIP\n\n## Merge danger\n", True),
+        ("/verify: FAIL (tests pass locally)\n", True),
+        ("Did not verify; will skip the slow path\n", True),
+        ("Evidence: /verify PASS on the staged tree\n", False),
+    ],
+    ids=[
+        "none",
+        "pass",
+        "skip-with-reason",
+        "skip-without-reason",
+        "pass-without-verify",
+        "skip-reason-not-on-its-line",
+        "fail",
+        "prose",
+        "pass-after-text",
+    ],
+)
+def test_a_body_without_a_verdict_line_is_warned_about_and_still_sent(
+    repo: Path, capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, evidence: str, *, warned: bool
+) -> None:
+    record = fake_gh(repo, monkeypatch)
+    origin(repo)
+    main(["pr-create", *pr(body_file=body(BODY + evidence))])
+    assert json.loads(record.read_text())["body"] == BODY + evidence
+    assert ("no /verify verdict line" in capfd.readouterr().err) is warned
+
+
 def test_a_crlf_body_is_sent_as_its_bytes(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     crlf = Path(body()).with_name("crlf.md")
     crlf.write_bytes(b"## Summary\r\n\r\nOne change.\r\n")
