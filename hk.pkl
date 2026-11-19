@@ -13,8 +13,15 @@ min_hk_version = "2.13.0"
 // Locks and the lock sidecars mise generates are not hand-written, and
 // vendored upstream patches must stay byte-exact for git apply. A toolchain's recorded
 // build inputs (toolchains/*/macos/*-inputs.json) must stay byte-exact: their sha256 is the
-// build id.
-exclude = List("**/*.lock", "**/.mise/locks/**", "**/*.patch", "toolchains/*/macos/*-inputs.json")
+// build id. The image verify test's fixture is signed bytes: the manifest's sha256 is the image digest.
+exclude =
+  List(
+    "**/*.lock",
+    "**/.mise/locks/**",
+    "**/*.patch",
+    "toolchains/*/macos/*-inputs.json",
+    "tests/image_verify/branch-signed/**",
+  )
 
 // dotfiles' files, copied byte for byte by M1 of docs/designs/level-1/machine-bootstrap-migration.md
 // (D150) so that mise.mac.toml's sources stay dotfiles' own. The style steps below skip them; every
