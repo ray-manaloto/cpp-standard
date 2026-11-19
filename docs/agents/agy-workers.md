@@ -77,6 +77,19 @@ refusal names it; whether the IDE is what drops the scope is not proven yet. `mi
 check from the newest log without running agy (`python/agents/agy_worker.py --health`). Neither reads a token or
 login file, only log text.
 
+## Antigravity.app and agy share one sign-in
+
+Antigravity.app (`com.google.antigravity`, 2.33.0) and agy keep one keychain entry, so a running app can overwrite
+agy's sign-in. `agents:agy-worker` therefore refuses to launch while it runs, with "Antigravity.app is running and
+shares agy's sign-in; run `mise run agy:ide-stop` (owner OK) and retry." Three repo tasks, run from anywhere with
+`mise -C <cpp-standard checkout> run <task>` (repo tasks, not global ones, because the live global mise config still
+links into dotfiles until cutover): `agy:ide-status` (the app and any `language_server` left over; exit 0 only when
+both are gone), `agy:ide-stop` (quits the app, waits until it and its `language_server` are gone, fails with a clear
+message on `--timeout`) and `agy:ide-start` (`open -g -b`). `--app ide` takes `Antigravity IDE.app`
+(`com.google.antigravity-ide`, 2.1.1) instead. Stop closes the owner's open windows, so nothing runs it
+automatically: only the owner or an explicit task run does. Whether the older IDE app shares the entry is not known,
+so the launch guard and the doctor line look at Antigravity.app only.
+
 ## One launcher for every project
 
 `agents:agy-worker` is the one way to start an agy worker, for cpp-standard and for kb. kb today runs

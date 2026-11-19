@@ -14,8 +14,8 @@ update needed" or "not signed in" stops the launch and names the fix. The rules 
 The banner "Sign-in update needed" is a TUI warning that `agy -p` never prints, so the preflight also reads agy's own
 log: a launch whose stored sign-in lacks the aicode scope logs "OAuth token lacks .../auth/aicode" (aicode_scope.go).
 Both the guard (after the probe, on the log the probe just wrote) and `--health` (the newest log, no agy run; the
-doctor line) use it. Never reads a token or login file, only the log text. The Antigravity IDE app shares agy's one
-keychain entry (upstream antigravity-cli #1610), so a running IDE is named in the refusal and the health line.
+doctor line) use it. Never reads a token or login file, only the log text. Antigravity.app shares agy's one
+keychain entry (upstream antigravity-cli #1610), so the launch refuses while it runs (`agy:ide-stop`) and the health line says so.
 """
 
 import argparse
@@ -29,6 +29,9 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import agy_ide
+
 SETTINGS = HERE.parent.parent / ".agents" / "agy-worker-settings.json"
 WORKTREES = "cpp-standard.worktrees"
 PLANS = "cpp-standard.plans"
@@ -37,7 +40,6 @@ PROBE = "Reply with only the word ok. Do not run any tool."
 REFUSED = 3
 LOG_DIR = Path.home() / ".gemini" / "antigravity-cli" / "log"
 LACKS = re.compile(r"OAuth token lacks \S*/auth/aicode")
-IDE_PATTERN = "Antigravity.app/Contents/MacOS/Antigravity"
 # Markers from the ticket and the owner's rules; no capture of print mode's own wording exists yet.
 STALE = ("sign-in update needed",)
 SIGNED_OUT = ("not signed in",)
@@ -98,21 +100,19 @@ def scope_state(log: Path | None) -> str:
 
 
 def ide_running() -> bool:
-    """True while the Antigravity IDE app runs; it shares agy's keychain sign-in."""
-    try:
-        done = subprocess.run(
-            ["pgrep", "-f", IDE_PATTERN], check=False, capture_output=True
-        )
-    except FileNotFoundError:
-        return False
-    return done.returncode == 0
+    """True while Antigravity.app runs; it shares agy's keychain sign-in."""
+    return agy_ide.app_running(agy_ide.APPS["antigravity"])
+
+
+IDE_REFUSAL = (
+    "Antigravity.app is running and shares agy's sign-in; "
+    "run `mise run agy:ide-stop` (owner OK) and retry."
+)
 
 
 def scope_refusal() -> str:
     """The refusal for a sign-in that lacks the aicode scope: the owner step, and the IDE when it is running."""
     msg = "owner: run /logout in any agy tab, then sign in with Google again (tick every permission box)"
-    if ide_running():
-        msg += "; the Antigravity IDE is running and shares agy's sign-in, so quit it first"
     return f"agy's sign-in lacks the aicode scope; {msg}"
 
 
@@ -120,7 +120,7 @@ def health() -> tuple[int, str]:
     """The doctor line: exit code and text, from the newest agy log; runs no agy."""
     state = scope_state(newest_log())
     ide = (
-        " (the Antigravity IDE is running and shares agy's sign-in)"
+        " (Antigravity.app is running and shares agy's sign-in; run `mise run agy:ide-stop`, owner OK)"
         if ide_running()
         else ""
     )
@@ -225,6 +225,8 @@ def main(argv: list[str]) -> int:
         if args.dry_run:
             print(shlex.join(cmd))
             return 0
+        if ide_running():
+            raise RefusedError(IDE_REFUSAL)
         msg = refusal_for(preflight())
         if msg:
             raise RefusedError(msg)
