@@ -9,6 +9,12 @@ hosts = ["github.com", "apt.llvm.org", "ftp.gnu.org"]
 tools = ["cmake", "hk"]
 apt = ["g++-16", "clang-23"]
 other_fragments = []
+[apt_sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 '''
 "mise.toml" = '''
 min_version = "2026.11.9"
@@ -222,6 +228,11 @@ host_tools = ["cmake", "ninja"]
 source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
 '''
 
+# Section 3: image/base.inputs.toml is checked when present; a tree without it still passes.
+[[vector]]
+name = "no image/base.inputs.toml passes"
+remove = ["image/base.inputs.toml"]
+
 [[vector]]
 name = "image/base.inputs.toml with an extra key"
 reject = "inputs"
@@ -262,6 +273,22 @@ key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
 fingerprint = "15CF4D18AF4F7421"
 '''
 
+# The source must equal the allowlist's [apt_sources.<name>]: here a well-formed
+# fingerprint of another key.
+[[vector]]
+name = "an apt source fingerprint that differs from the allowlist"
+reject = "source"
+
+[vector.change]
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "0000000000000000000000000000000000000000"
+'''
+
 # A fragment that is neither a pin fragment nor listed as another fragment.
 [[vector]]
 name = "an unlisted conf.d fragment"
@@ -282,6 +309,12 @@ hosts = ["github.com", "apt.llvm.org", "ftp.gnu.org"]
 tools = ["cmake", "hk"]
 apt = ["g++-16", "clang-23"]
 other_fragments = ["extra.toml"]
+[apt_sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 '''
 ".mise/conf.d/extra.toml" = '''
 [env]
@@ -552,6 +585,12 @@ hosts = ["github.com", "apt.llvm.org", "ftp.gnu.org"]
 tools = ["cmake", "hk"]
 apt = ["g++-16", "clang-23"]
 other_fragments = ["extra.toml"]
+[apt_sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 '''
 ".mise/conf.d/extra.toml" = '''
 [env]

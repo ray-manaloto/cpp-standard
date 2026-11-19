@@ -1,0 +1,12 @@
+# The exact-version tools of the tools image and the Mac (section 3, D74): the tools image installs
+# them with `mise install --system --locked`, and their linux-<arch> slice of .mise/mise.lock is a
+# tools-image hash input (D90). Moved here from build.toml, which pinned them for macOS only.
+[tools]
+cmake = "4.5.0"
+ninja = "1.13.2"
+# gcovr installs from its uv lock (.mise/locks/pypi-gcovr) into a uv environment on this pinned
+# Python; mise needs uv 0.12.10 or later for that, and `mise lock` needs uv to write the sidecar.
+python = "3.14.8"
+# After changing uv's pin, run `mise run uv:cache-warm`: a new uv can rename its cache buckets (#184).
+uv = "0.13.9"
+"pypi:gcovr" = { version = "8.8", python = "3.14.8" }

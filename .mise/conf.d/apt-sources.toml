@@ -1,0 +1,9 @@
+# apt.llvm.org's resolute-23 suite (Ubuntu 26.04), used on 26.10, which apt.llvm.org does not
+# publish yet; clang 23.1.6 from it ran on ubuntu:26.10 (D25, spikes/m0/README.md (f)). A base and
+# toolchain hash input (D90). The base image's first build re-checks it (D104).
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"

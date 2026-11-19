@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#MISE description="Verify a main image's attestation (publish.yml on refs/heads/main) and print its digest (D114, D116)"
+#USAGE arg "<image>" help="<image>@sha256:<digest>, or <image>:<tag> to look up, e.g. ghcr.io/ray-manaloto/cpp-standard/tools:arm64-<hash>"
+#
+# The image:verify row of the file plan: gh attestation verify oci://<image>@<digest> with the
+# repository, publish.yml as the signer workflow and refs/heads/main as the source ref, before
+# any use of a main image. A tag existing proves nothing (section 2 step 5). Needs gh logged in
+# to GitHub and, for a private package, to ghcr.io. The refusal test is tests/image_verify/.
+set -euo pipefail
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+exec python3 -I "$root/python/artifact/artifact.py" verify "${usage_image:?}"

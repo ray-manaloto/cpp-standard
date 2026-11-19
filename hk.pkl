@@ -125,6 +125,11 @@ local gateSteps = new Mapping<String, Step> {
   }
 
   // Config and docs.
+  // Every Dockerfile in the repository (D102). The builtin matches Dockerfile* only, and the
+  // layers and playbook images are <name>.Dockerfile.
+  ["hadolint"] = (Builtins.hadolint) {
+    glob = List("**/Dockerfile*", "**/*.Dockerfile")
+  }
   ["mise"] = (Builtins.mise) {
     glob = List("mise.toml", "mise.ci.toml", ".mise/conf.d/*.toml", "spikes/**/mise.toml")
   }

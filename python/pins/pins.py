@@ -143,6 +143,7 @@ class Validator:
         self.tool_names = set(allow.get("tools", []))
         self.apt_names = set(allow.get("apt", []))
         self.other_fragments = set(allow.get("other_fragments", []))
+        self.apt_sources = allow.get("apt_sources", {})
         self.toolchains = sorted(
             p.parent.name for p in (self.root / "toolchains").glob("*/pins.toml")
         )
@@ -225,6 +226,7 @@ class Validator:
                         self.fail(
                             "section", rel, f"[bootstrap.apt.{sub}] is not allowed"
                         )
+                before = len(self.problems)
                 for name, src in sources.get("sources", {}).items():
                     if not set(src) <= APT_SOURCE_KEYS:
                         self.fail("schema", rel, f"source {name} holds unknown keys")
@@ -233,6 +235,17 @@ class Validator:
                             "schema", rel, f"source {name} fingerprint is not 40 hex"
                         )
                 self.urls(rel, data)
+                # Each source must equal the allowlist's [apt_sources.<name>] in all five keys; a
+                # source the allowlist does not name differs. Checked once the file passes the
+                # shape checks above, so a failing file names one rule and still fails.
+                if len(self.problems) == before:
+                    for name, src in sources.get("sources", {}).items():
+                        if src != self.apt_sources.get(name):
+                            self.fail(
+                                "source",
+                                rel,
+                                f"source {name} differs from [apt_sources.{name}] in {ALLOWLIST}",
+                            )
             elif path.name in self.other_fragments:
                 # Host fragments (D161): not pins, but every URL still comes from
                 # an allowlisted https host.
@@ -520,6 +533,10 @@ def _add_slice(
 
 
 def base_tag(tree: GitTree, arch: str) -> str:
+    return f"base-{arch}-{inputs_hash(base_lines(tree))}"
+
+
+def base_lines(tree: GitTree) -> dict[str, str]:
     lines: dict[str, str] = {}
     _add_files(
         tree,
@@ -533,10 +550,14 @@ def base_tag(tree: GitTree, arch: str) -> str:
             BUILD_TASK,
         ],
     )
-    return f"base-{arch}-{inputs_hash(lines)}"
+    return lines
 
 
 def tools_tag(tree: GitTree, arch: str) -> str:
+    return f"tools-{arch}-{inputs_hash(tools_lines(tree, arch))}"
+
+
+def tools_lines(tree: GitTree, arch: str) -> dict[str, str]:
     platform = f"linux-{LOCK_ARCH[arch]}"
     lines: dict[str, str] = {"base-tag": base_tag(tree, arch)}
     _add_files(
@@ -560,12 +581,29 @@ def tools_tag(tree: GitTree, arch: str) -> str:
                         f"sidecar .mise/{sidecar} of {tool} is not in the commit"
                     )
                 _add_files(tree, lines, files)
-    return f"tools-{arch}-{inputs_hash(lines)}"
+    return lines
+
+
+def image_inputs(tree: GitTree, name: str, arch: str) -> list[str]:
+    """The repository files an image's hash covers, which are all its Docker build may read
+    (artifact:build puts only these in the build context). A lock slice brings in the whole
+    .mise/mise.lock; the base tag line names no file."""
+    if name == "base":
+        lines = base_lines(tree)
+    elif name == "tools":
+        lines = tools_lines(tree, arch)
+    else:
+        raise TagError(f"{name} is not an image built by artifact:build: base or tools")
+    return sorted({key.split("#", 1)[0] for key in lines if key != "base-tag"})
 
 
 def toolchain_tag(tree: GitTree, name: str, os_name: str, arch: str) -> str:
     """The Linux and macOS toolchain rows of the hash-input table (section 2)."""
     base = f"toolchains/{name}"
+    if not tree.has(f"{base}/pins.toml"):
+        raise TagError(
+            f"no toolchain {name}: {base}/pins.toml is not in commit {tree.commit}"
+        )
     pins = _toml(tree, f"{base}/pins.toml")
     apt_compiler = pins.get(APT_COMPILER_KEY)
     if not isinstance(apt_compiler, bool):
@@ -712,12 +750,22 @@ def run_tag_vectors(spec: dict[str, Any]) -> list[str]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _materialize(root, _vector_files(spec, vector))
+            tree = _commit(root)
+            arch = vector.get("arch", "arm64")
             try:
-                got = artifact_tag(
-                    _commit(root), vector["artifact"], vector.get("arch", "arm64")
-                )
+                got = artifact_tag(tree, vector["artifact"], arch)
             except TagError as e:
                 got = f"error: {e}"
+            # `inputs`: the files artifact:build puts in an image's build context.
+            if "inputs" in vector:
+                try:
+                    files = image_inputs(tree, vector["artifact"], arch)
+                except TagError as e:
+                    files = [f"error: {e}"]
+                if files != vector["inputs"]:
+                    failures.append(
+                        f"{vector['name']}: want inputs {vector['inputs']}, got {files}"
+                    )
         by_name[vector["name"]] = got
         key = f"{vector['artifact']}/{vector.get('arch', 'arm64')}"
         if got != vector["tag"]:
@@ -749,6 +797,11 @@ def main(argv: list[str]) -> int:
     t.add_argument("--arch", choices=sorted(LOCK_ARCH), default="arm64")
     t.add_argument("--commit", default="HEAD")
     t.add_argument("--root", type=Path, default=Path.cwd())
+    t.add_argument(
+        "--inputs",
+        action="store_true",
+        help="print the files of a base or tools build context instead of the tag",
+    )
     g = sub.add_parser("vectors")
     g.add_argument("kind", choices=["pins", "tags"])
     g.add_argument("file", type=Path)
@@ -766,10 +819,13 @@ def main(argv: list[str]) -> int:
         return 1 if problems else 0
     if args.cmd == "tag":
         try:
-            print(artifact_tag(GitTree(args.root, args.commit), args.name, args.arch))
+            out = (image_inputs if args.inputs else artifact_tag)(
+                GitTree(args.root, args.commit), args.name, args.arch
+            )
         except TagError as e:
             print(f"FAIL: {e}", file=sys.stderr)
             return 1
+        print(out if isinstance(out, str) else "\n".join(out))
         return 0
     spec = _load(args.file)
     if not isinstance(spec.get("vector"), list) or not spec["vector"]:

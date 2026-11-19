@@ -33,6 +33,8 @@ ENV container=docker \
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Layer 1: the bare minimum, mise by digest, then the toolchain module of this repository.
+# The bare-minimum bootstrap packages; the pinned set comes from mise.ubuntu.toml below.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && case "$TARGETARCH" in amd64) a=x64 h="$MISE_SHA256_AMD64" ;; arm64) a=arm64 h="$MISE_SHA256_ARM64" ;; *) exit 1 ;; esac \
     && curl -fsSLo /tmp/mise.tar.gz \
@@ -48,11 +50,15 @@ RUN mise -E ubuntu bootstrap --from "https://github.com/ray-manaloto/cpp-standar
 RUN if id -u ubuntu >/dev/null 2>&1; then usermod -l dev -d /home/dev -m ubuntu && groupmod -n dev ubuntu; \
     else useradd -m -u 1000 -s /bin/bash dev; fi \
     && mkdir -p /workspace && chown -R dev:dev /opt/mise /opt/cpp-standard /workspace
+# The dev user is created by name above; agents and volume paths refer to it by name.
+# hadolint ignore=DL3066
 USER dev
 WORKDIR /home/dev
 ENV PATH=/home/dev/.local/bin:/home/dev/.opencode/bin:$PATH \
     CLAUDE_CONFIG_DIR=/home/dev/.claude
 # Every volume mount point exists, owned by dev: Docker creates a missing one as root.
+# The single quotes are deliberate: the text is written literally, not expanded at build time.
+# hadolint ignore=SC2016
 RUN mkdir -p .claude .codex .gemini .config/gh .config/opencode .local/share/opencode .local/state/opencode \
     && printf '%s\n' '{' '  "$schema": "https://opencode.ai/config.json",' \
          '  "model": "opencode/deepseek-v4.1-flash-free",' \
@@ -72,9 +78,11 @@ RUN export PATH=/home/dev/.local/bin:/home/dev/.opencode/bin:/usr/local/bin:/usr
     && curl -fsSL https://opencode.ai/v2/install | bash -s -- --no-modify-path \
     && { echo "claude $(claude --version)"; echo "codex $(codex --version)"; echo "agy $(agy --version)"; \
          echo "opencode $(opencode --version)"; } | tee /home/dev/.agent-versions
-# MISE_ENV=ci adds the Linux Python and uv that the repository's own checks need (the pctools
-# gate); `mise -E ubuntu bootstrap` leaves them out on purpose (mise.ci.toml).
+# MISE_ENV=ci selects the Linux Python and uv pins that the repository's own checks need (the
+# pctools gate), over tools.toml's that `mise -E ubuntu bootstrap` installs (mise.ci.toml).
 ENV MISE_ENV=ci
+# The cd is scoped to this one RUN; WORKDIR would change the image's default directory.
+# hadolint ignore=DL3003
 RUN cd /opt/cpp-standard && mise install
 # gh for pushing and pull requests (D153). Ubuntu 26.10's apt has only gh 2.46, so mise installs
 # the current release for the dev user.
@@ -93,9 +101,13 @@ COPY --chmod=644 agent-auth/profile.sh /etc/profile.d/agent-secrets.sh
 # The token service itself, which the Mac runs as a container of this image (agents:up --host mac); the PC runs the
 # same script as a user service.
 COPY --chmod=755 agent-auth/agent-secrets.bash /usr/local/bin/agent-secrets
+# root only for the system git config below; the name is the image's own user.
+# hadolint ignore=DL3066
 USER root
 RUN git config --system credential.https://github.com.helper /usr/local/bin/git-credential-agent \
     && printf '\n. /etc/profile.d/agent-secrets.sh\n' >> /etc/bash.bashrc
+# Back to the named user created above; the agent tooling expects its name.
+# hadolint ignore=DL3066
 USER dev
 COPY --chmod=755 agent-plugins /usr/local/bin/agent-plugins
 RUN PATH=/home/dev/.local/bin:/home/dev/.opencode/bin:/usr/local/bin:/usr/bin:/bin agent-plugins install

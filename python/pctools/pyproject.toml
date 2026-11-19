@@ -2,7 +2,7 @@
 name = "pctools"
 version = "0.1.0"
 description = "The PC's setup checks: pc:doctor reads the PC over ssh and changes nothing"
-# The repository's Python pin (.mise/conf.d/build.toml, mise.ci.toml).
+# The repository's Python pin (.mise/conf.d/tools.toml, mise.ci.toml).
 requires-python = ">=3.14"
 dependencies = ["pydantic", "pyyaml"]
 

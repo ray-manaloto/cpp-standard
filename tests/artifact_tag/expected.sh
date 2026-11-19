@@ -98,6 +98,10 @@ add_dir() {
 toolchain() { # <name> <os> <arch>
   local t="toolchains/$1" f host apt platform
   lines=""
+  if [[ ! -f "$dir/$t/pins.toml" ]]; then
+    echo "error: no toolchain $1: $t/pins.toml is not in commit HEAD"
+    return
+  fi
   apt="$(yq -p toml -o json '.apt_compiler' "$dir/$t/pins.toml" | jq -r 'if type == "boolean" then . else "invalid" end')"
   if [[ $apt == invalid ]]; then
     echo "error: $t/pins.toml: apt_compiler is not true or false"

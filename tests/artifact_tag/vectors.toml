@@ -4,7 +4,8 @@
 # hash-input table; its tag must differ from the baseline vector of the same artifact and arch
 # (or, with `same = true`, equal it). `against` names another vector to compare with instead.
 # The expected tags were computed outside pins.py with git hash-object, jq and shasum
-# (tests/artifact_tag/expected.sh).
+# (tests/artifact_tag/expected.sh). `inputs`, where given, lists the files `pins.py tag --inputs` puts in
+# an image's build context: every hashed file, the whole lock for a slice.
 
 [tree]
 "image/base.Dockerfile" = '''
@@ -136,6 +137,14 @@ disk = 120
 name = "base arm64"
 artifact = "base"
 tag = "base-arm64-909497c37754de11"
+inputs = [
+  ".mise/conf.d/apt-sources.toml",
+  ".mise/conf.d/apt-toolchain-host.toml",
+  ".mise/conf.d/apt.toml",
+  ".mise/tasks/artifact/build",
+  "image/base.Dockerfile",
+  "image/base.inputs.toml",
+]
 
 [[vector]]
 name = "base: Dockerfile"
@@ -230,6 +239,14 @@ cmake = "4.5.0"
 name = "tools arm64"
 artifact = "tools"
 tag = "tools-arm64-ed28e447e439914d"
+inputs = [
+  ".mise/conf.d/tools.toml",
+  ".mise/locks/pypi-gcovr/8.8~abc/pyproject.toml",
+  ".mise/locks/pypi-gcovr/8.8~abc/uv.lock",
+  ".mise/mise.lock",
+  ".mise/tasks/artifact/build",
+  "image/tools.Dockerfile",
+]
 
 [[vector]]
 name = "tools amd64"
@@ -1072,3 +1089,11 @@ tag = "p2996-macos-arm64-b23f8803620f6e20"
 "image/runner.inputs.toml" = '''
 version = "2.331.0"
 '''
+
+# --- a toolchain name with no pins file ------------------------------------------------------
+
+[[vector]]
+name = "gcc16-linux-arm64: no toolchains/gcc16/pins.toml"
+artifact = "gcc16-linux-arm64"
+tag = "error: no toolchain gcc16: toolchains/gcc16/pins.toml is not in commit HEAD"
+inputs = ["error: gcc16-linux-arm64 is not an image built by artifact:build: base or tools"]
