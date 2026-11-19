@@ -548,16 +548,16 @@ def remote_start(command: str) -> bool:
 
 def guard_command(command: str, env: dict[str, str]) -> None:
     """Refuse a shell command that starts container work without the live grant of the host it is aimed at, or
-    under too high a load there. Rule 1: a command naming ssh that starts heavy docker (docker as a command word,
-    or heavy docker after the ssh word) needs the pc grant; its Mac part is the shim's. Rule 2: main's split, each
-    heavy segment needing the grant of the host it is aimed at."""
+    under too high a load there. Rule 1: heavy docker after an ssh word needs the pc grant; a Mac start in the same
+    command is the shim's. Rule 2: main's split, each heavy segment needing the grant of the host it is aimed at.
+    A docker start before the ssh word (`docker build . && ssh pc docker pull i`) is read by rule 2, as on main."""
     if not DOCKER.search(command) or not HEAVY.search(command):
         return
-    started = [segment for segment in SEGMENTS.split(command) if heavy(segment)]
-    if (started and SSH_WORD.search(command)) or remote_start(command):
+    if remote_start(command):
         no_privileged_on_pc(command)
         check("pc")
         return
+    started = [segment for segment in SEGMENTS.split(command) if heavy(segment)]
     aimed = [segment for segment in started if segment_reason(segment, env)]
     for segment in aimed:
         no_privileged_on_pc(segment)
