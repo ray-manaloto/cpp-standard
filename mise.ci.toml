@@ -14,7 +14,7 @@ python = [
 ]
 "pipx:datamodel-code-generator" = { version = "0.89.0", os = ["linux"] }
 # After changing uv's pin, run `mise run uv:cache-warm`: a new uv can rename its cache buckets (#184).
-uv = { version = "0.13.8", os = ["linux"] }
+uv = { version = "0.13.9", os = ["linux"] }
 # //repo:lint's rule tests and scan; the Mac takes it from the owner's global config.
 "github:ast-grep/ast-grep" = { version = "0.51.3", os = ["linux"] }
 # repotools' shell:apply tests start a login zsh; the hosted runner has none (#181). conda-forge's build, as for doxygen.
