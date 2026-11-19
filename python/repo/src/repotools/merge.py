@@ -11,6 +11,7 @@
 # No review is required (owner ruling, 2026-11-17).
 
 import json
+import re
 import subprocess
 import sys
 import time
@@ -36,6 +37,10 @@ BOT_CLOSE = "<!-- end of auto-generated comment: release notes by coderabbit.ai 
 SETTINGS = "repotools.toml"
 LOCAL_HK = "local-hk"
 REQUIRED_CHECKS = "required-checks"
+# A body's /verify verdict line: PASS, or SKIP followed by its reason (#161, owner ruling 2026-11-18, report-only).
+# A line naming verify (any case), then PASS or SKIP in capitals; SKIP's reason is on the same line.
+VERDICT = re.compile(r"^.*?\b(?i:verify)\b.*?\b(?:PASS\b|SKIP\b[^\w\n]*\w)", re.MULTILINE)
+NO_VERDICT = "repotools pr-create: warning: the body has no /verify verdict line (PASS, or SKIP with its reason)\n"
 
 
 class Clock:
@@ -83,6 +88,9 @@ def create(text: PrText) -> None:
     done = process.run(command, body, capture_stdout=False)
     # The helper always captures stderr; only stdout may be None.
     sys.stderr.write(cast("bytes", done.stderr).decode(errors="replace"))
+    # Report-only: the pull request is open either way; a refusal waits for the pilot's count of false alarms.
+    if not VERDICT.search(body.decode(errors="replace")):
+        sys.stderr.write(NO_VERDICT)
 
 
 def view(number: int, fields: str) -> dict[str, Any]:

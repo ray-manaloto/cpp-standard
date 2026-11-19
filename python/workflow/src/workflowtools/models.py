@@ -20,6 +20,8 @@ class Command(StrEnum):
     round_close = "round-close"
     round_retro = "round-retro"
     report = "report"
+    verify_receipt = "verify-receipt"
+    verify_commit = "verify-commit"
 
 
 type RoundId = Annotated[str, Field(pattern="^[a-z0-9][a-z0-9-]*-[0-9]{8}-[a-z0-9][a-z0-9-]*$")]
@@ -383,6 +385,135 @@ class ReportSection(BaseModel):
     """
 
 
+type Tree = Annotated[str, Field(pattern="^[0-9a-f]{40}([0-9a-f]{24})?$")]
+"""
+A git tree object's hash.
+"""
+
+
+class Verdict(StrEnum):
+    """
+    A /verify verdict. SKIP is valid only when every changed path is documentation.
+    """
+
+    pass_ = "PASS"
+    skip = "SKIP"
+    fail = "FAIL"
+    blocked = "BLOCKED"
+
+
+class VerifyReceipt(BaseModel):
+    """
+    Before /verify, remember the tree of the working changes; after it, --verdict saves the verdict for it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    verdict: Verdict | None = None
+    """
+    After /verify: save this verdict, only if the content is still the remembered tree
+    """
+
+
+class VerifyCommit(BaseModel):
+    """
+    At commit, compare the staged tree with the receipts and print the trailer; a mismatch never stops the commit.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    plan: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]*$")]
+    """
+    The plan or round ID the trailer names; an ID, never a path
+    """
+    message_file: str | None = None
+    """
+    A commit message file to add the trailer to
+    """
+
+
+class VerifyBegin(BaseModel):
+    """
+    The tree remembered before /verify.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    kind: Literal["verify-begin"]
+    tree: Tree
+
+
+class Receipt(BaseModel):
+    """
+    A saved verdict, one file per tree in the state store.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    kind: Literal["receipt"]
+    tree: Tree
+    verdict: Verdict
+    at: str
+    """
+    UTC time written, ISO 8601
+    """
+
+
+class WorktreeVerify(BaseModel):
+    """
+    A worktree's verify state, in its git dir: the tree remembered and the last tree given a verdict.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    begun: Tree | None = None
+    saved: Tree | None = None
+
+
+class ReceiptStatus(StrEnum):
+    """
+    How the staged tree compares with the receipts.
+    """
+
+    match = "match"
+    mismatch = "mismatch"
+    no_receipt = "no-receipt"
+
+
+class CommitCheck(BaseModel):
+    """
+    verify-commit's line: the staged tree, how it compares, the receipt's verdict and the trailer.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    kind: Literal["verify-commit"]
+    status: ReceiptStatus
+    staged: Tree
+    verified: Tree | None
+    """
+    The tree the receipt is for; null with no receipt
+    """
+    verdict: Verdict | None
+    trailer: str | None
+    """
+    Verify-Receipt: <verified tree> <plan or round ID>; null with no receipt
+    """
+    detail: str
+
+
 class Frontmatter(BaseModel):
     """
     Check every SKILL.md and okf concept file's frontmatter, and that every YAML file parses, as the index has them.
@@ -460,7 +591,17 @@ class SettingsLocal(BaseModel):
 
 
 type Options = (
-    Frontmatter | SkillTable | Tickets | SettingsLocal | RoundOpen | RoundPr | RoundClose | RoundRetro | Report
+    Frontmatter
+    | SkillTable
+    | Tickets
+    | SettingsLocal
+    | RoundOpen
+    | RoundPr
+    | RoundClose
+    | RoundRetro
+    | Report
+    | VerifyReceipt
+    | VerifyCommit
 )
 """
 What a workflowtools command parses from its arguments.
@@ -477,6 +618,7 @@ class Check(StrEnum):
     tickets = "tickets"
     settings_local = "settings-local"
     rounds = "rounds"
+    verify = "verify"
 
 
 class Finding(BaseModel):
@@ -733,3 +875,9 @@ class Workflowtools(BaseModel):
     report_section: ReportSection | None = None
     round_retro: RoundRetro | None = None
     retro_owed: RetroOwed | None = None
+    verify_receipt: VerifyReceipt | None = None
+    verify_commit: VerifyCommit | None = None
+    verify_begin: VerifyBegin | None = None
+    receipt: Receipt | None = None
+    worktree_verify: WorktreeVerify | None = None
+    commit_check: CommitCheck | None = None

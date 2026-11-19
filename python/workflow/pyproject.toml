@@ -22,8 +22,8 @@ ignore = ["D", "CPY001", "TC001", "TC002", "TC003", "COM812", "S603", "S607"]
 # S101: pytest asserts with assert. PLR2004: a test states the exit code or value it expects.
 "tests/**" = ["S101", "PLR2004"]
 # Generated (DL-762): datamodel-codegen orders its imports its own way, and its --validators adapter
-# types the value as Any (ANN401); every other rule applies.
-"src/workflowtools/models.py" = ["I001", "ANN401"]
+# types the value as Any (ANN401), and the Verdict enum's pass_ = "PASS" is no password (S105); every other rule applies.
+"src/workflowtools/models.py" = ["I001", "ANN401", "S105"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=workflowtools --cov-branch --cov-report=term-missing --cov-fail-under=100"

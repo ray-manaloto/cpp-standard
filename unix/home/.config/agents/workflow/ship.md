@@ -16,11 +16,23 @@ tags: [workflow, commit, pull-request]
 2. **Simplify.** One pass of built-in `/simplify` in the worker's tab. It may only touch files
    already in the change, and it changes either code or tests in one pass, never both. Re-run the
    same tests afterwards.
-3. **Verify.** `/verify` over the working changes, the branch diff and the untracked files. It must
-   end PASS, or SKIP for documentation only. FAIL and BLOCKED stop the ticket.
+3. **Verify.** Run `workflowtools verify-receipt` first: it remembers the git tree of the working
+   changes and every untracked, non-ignored file, without touching the index. Then `/verify` over
+   the working changes, the branch diff and the untracked files. Then save the verdict with
+   `workflowtools verify-receipt --verdict <PASS|SKIP|FAIL|BLOCKED>`; if the content changed after
+   the first run, no verdict is saved and both steps run again. SKIP is valid only when every path
+   changed since the branch left the default branch (HEAD when no default is known) is
+   documentation (`.md`, `.mdx`, `.markdown`, `.rst`, `.adoc`, in any case); a test-only or mixed
+   change needs PASS. FAIL and BLOCKED stop the ticket. Keep scratch and message files
+   outside the worktree: an untracked file there is part of the tree.
 4. **Stage.** The coordinator or owner stages everything.
-5. **Commit.** Write the message to a file and run `git commit -F <message file>`. No review is
-   required, for a commit or a pull request (owner ruling, 2026-11-17).
+5. **Commit.** Write the message to a file, run `workflowtools verify-commit --plan <plan or round
+   ID> --message-file <message file>`, then `git commit -F <message file>`. `verify-commit` compares
+   the staged tree with the receipts and reports match, mismatch or no receipt; with a PASS or SKIP
+   receipt it adds the trailer `Verify-Receipt: <verified tree> <ID>`, never a file path. On a
+   mismatch it still adds that trailer, naming the last tree this worktree verified with PASS or
+   SKIP, so the commit shows it changed after verification; the mismatch does not stop the commit.
+   No review is required, for a commit or a pull request (owner ruling, 2026-11-17).
 
 The worker stops at steps 1-3 with its changes in the worktree and a proposed message file. Staging
 and the commit belong to the coordinator or the owner.
@@ -28,7 +40,9 @@ and the commit belong to the coordinator or the owner.
 ## The pull request
 
 1. `/pr` writes the title and body to a file: summary, evidence (how it was tested), merge danger
-   (one-way or two-way door, and how to undo it) and blast radius.
+   (one-way or two-way door, and how to undo it) and blast radius. The evidence holds the `/verify`
+   verdict line: PASS, or SKIP with its reason. `repotools pr-create` warns when the body has none,
+   and opens the pull request anyway.
 2. Run the home-path scan on the title and body, and read the diff, every commit message and the
    text for private project content, claude.ai session links and home paths. A clean scan is not
    that check.

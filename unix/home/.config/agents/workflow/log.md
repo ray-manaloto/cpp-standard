@@ -10,6 +10,11 @@
   word a brief's limits so the pane's read-only shell stays allowed.
 
 ## 2026-11-18
+* **Changed**: ship.md's Verify and Commit steps (#161). `workflowtools verify-receipt` remembers the
+  tree before `/verify` and `--verdict` saves the verdict against it; `workflowtools verify-commit`
+  compares the staged tree at commit and adds the `Verify-Receipt` trailer. SKIP needs a change that
+  is documentation only since the branch left the default branch. The pull request step names the
+  verdict line that `repotools pr-create` warns about when it is missing.
 * **Added**: retro debt (#160). A closed round owes a retro until `workflowtools round-retro` records
   one, with the sources read, the finding count (zero is valid), where the findings live and one
   disposition per proposed change. `workflowtools report` gains its second section, closed rounds
