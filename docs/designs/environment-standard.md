@@ -1,12 +1,14 @@
 # cpp-standard: the C++ environment and project standard (Level 1)
 
 - **Author:** ray-manaloto
-- **Status:** Goldfish-reviewed through D135 (the review of D99-D135,
-  Stages 5-9, 2026-11-13). D136 to D155 await one Goldfish review. The text
-  written for them on 2026-11-18 has not been reviewed either: the D149
-  rewrite of every passage that described D108's code-owner review (§6,
-  §7, §10, the risk table, the setup steps and the file plan), the D148
-  part of §7, §11, §12 and the closed open questions.
+- **Status:** Goldfish-reviewed through D155: D99-D135 in Stages 5-9
+  (2026-11-13), and D136 to D155 in one review whose findings and
+  dispositions are in
+  [consolidated_review_report.md](level-1/consolidated_review_report.md).
+  Ticket #142 changed this text for those findings and added D170 to D172
+  and D174; six findings it covered in part are left to #247.
+  That changed text has not had a Goldfish review, and neither has any
+  decision after D155.
 - **Date:** 2026-11-18
 
 --------------------------------------------------------------------------------
@@ -73,11 +75,11 @@ owner confirmed these three differences; the decisions log records the rest:
 | Term | Meaning |
 |---|---|
 | **EGM** | The Elephant-Goldfish Model, the design process used here. One drafting agent (the "Elephant") writes the design. Fresh-context reviewers (the "Goldfish") review it in stages. `/egm-drift-report` later compares a design with the code and lists where they differ. |
-| **Milestones** | **M0**: the spike, throwaway pass/fail experiments (a)-(j), split into M0-Linux, which blocks M1a and ends 2026-11-16, and M0-Mac, which runs in parallel and feeds M3 (§10, D84). The runner tests are not in M0; they form the [M2 entry gate](#m2-entry-gate) (D77). **M1a**: the critical path. **M1b**: work around it that can be cut. **M2**: amd64 and the PC runner; M2 entry turns on packslip signing (D111). The code-owner review D108 planned for M2 entry was dropped (D149). **M3**: the Mac VM, runner and toolchains. **M4**: the canary. **M5**: tier-2 tools and the perf task (the digest moved to M1b, D84). |
+| **Milestones** | **M0**: the spike, throwaway pass/fail experiments (a)-(j), split into M0-Linux, which blocks M1a (planned end 2026-11-16; its exit review was held on 2026-11-17), and M0-Mac, which runs in parallel and feeds M3 (§10, D84). The runner tests are not in M0; they form the [M2 entry gate](#m2-entry-gate) (D77). **M1a**: the critical path. **M1b**: work around it that can be cut. **M2**: amd64 and the PC runner; M2 entry turns on packslip signing (D111). The code-owner review D108 planned for M2 entry was dropped (D149). **M3**: the Mac VM, runner and toolchains. **M4**: the canary. **M5**: tier-2 tools and the perf task (the digest moved to M1b, D84). |
 | **Level 1 / Level 2** | Level 1 is this environment standard, ending 2026-11-27. Level 2 is the glaze FIX project built on it. |
 | **The gate** | `mise run ci` and nothing else (§5). "The post-merge macOS run" is `mac-gate.yml`; the Linux run after merge is `post-merge.yml`. |
-| **Agent session** | One live Claude or Codex session working in this repository. The cap on them is in `review/cap.toml` and starts at 3 (§9). |
-| **the setup agent** | The owner's agent session that manages the dotfiles repository. It is the only session that installs or changes software and credentials on the owner's machines (Mac, PC), so every install step in this plan goes through it. Since D139 and D150 cpp-standard owns the machines' setup and takes over dotfiles by a planned migration (§11); until a migration step moves a piece, dotfiles keeps running it. |
+| **Agent session** | One live session of a participating agent (Claude Code, Codex, OpenCode or the Antigravity CLI) working in this repository. The cap on them is in `review/cap.toml` and starts at 3 (§9). |
+| **the setup agent** | The owner's agent session that manages the dotfiles repository. It was the only session that installed or changed software and credentials on the owner's machines (Mac, PC). That role ends piece by piece: since D139 and D150 cpp-standard owns the machines' setup and takes over dotfiles by a planned migration (§11), and each phase of [machine-bootstrap-migration.md](level-1/machine-bootstrap-migration.md) names the pieces it moves. Until a phase moves a piece, dotfiles keeps running it, and an install step in this plan that names the setup agent means whoever runs that piece at the time. |
 | **Abbreviations** | **CUJ**: critical user journey. **CLT**: Apple's Command Line Tools. **SOH**: the FIX field separator, byte `0x01`. **GHCR**: GitHub Container Registry. **P2996** / **P3394**: the C++ proposals for static reflection and for annotations. |
 | **Two-VM rule** | Apple's licence lets a Mac run at most two macOS VMs at once. The dev VM and one runner or golden-build VM share that limit (D68). |
 
@@ -97,7 +99,7 @@ owner confirmed these three differences; the decisions log records the rest:
 | **Toolchain pins** | `toolchains/<name>/pins.toml`, one file per toolchain shared by every OS: version or commit, source URL and sha256, `salt` and `host_tools`. Each OS adds its own host inputs to the hash (D85). |
 | **Fetch rule** | How `toolchain:fetch` gets a toolchain in any job: `main`'s verified release for the hash, else the job's staged PR or merge-group copy, else a rebuild (§2 step 5). |
 | **Leaf bump** | An update to an input that only the tools image or a single tool depends on, such as a new cmake. It is the opposite of a compiler or base-image change. |
-| **The fence** | Self-hosted runners run only `main` code (§6 The fence, D48, D58). |
+| **The fence** | Self-hosted runners run only `main` code (§6 The fence, D48, D58). It is the rule for cpp-standard's own runners, which start at M2. The PC's iptables rules around the CI runner slots (`gha-fence`, §11) are a different thing and are called the slot network rules here. |
 | **ut** | Boost.ext ut (`bext-ut`), the header-only C++ unit-test framework. |
 | **Prior repositories** | A private prototype ("the prototype"), glaze-build-setup, cpp-core and the cpp-utilities catalogue each had their own build-preset setup. symphony-cpp built hash-tagged toolchains. dotfiles is the owner's current machine setup; dotfiles-legacy is its older version. cpp-core is a separate project, developed by agents on low-cost models. |
 
@@ -126,7 +128,7 @@ owner confirmed these three differences; the decisions log records the rest:
 | Term | Meaning |
 |---|---|
 | **Owner's personal account** | The owner's personal GitHub account. |
-| **Agent App** | A new GitHub App, `cpp-standard-agents`, that agents push and open PRs as (§6 Identities, D71, D134). |
+| **Agent App** | A GitHub App, `cpp-standard-agents`, that agents on the Mac host push and open PRs as (§6 Identities, D71, D134). Agents in a project container use a second App, `ray-manaloto-agents` (the container agent App, §12, D155). "The agent App" alone means `cpp-standard-agents`; what the merge rule and the accepted risks say an agent PR can do holds for both, since both can push and queue a PR here. |
 | **PC runner App** | An existing org App whose only permission is registering self-hosted runners; it registers the M2 runners instead of an Administration-write PAT (D82, D117). |
 | **Org-admin App** | An existing GitHub App with wide org-admin rights. It is not used here. |
 | **Commit review** | Gone. It was a separate agent session's approval of each agent commit, a convention and never a guard (D120); D149 ended it, so `main` code is code merged after the required checks (D107). |
@@ -163,9 +165,13 @@ and then used, not grown.
 
 - **G1. One pinned environment from one configuration, kept current.** A single mise bootstrap project builds a Tart macOS VM and
   Ubuntu 26.10 arm64 and amd64 images (D13, D25, D45).
-  - Every input is pinned by version, hash or digest, and a daily job
+  - Every input of the toolchains, the tools and the CI and runner images
+    is pinned by version, hash or digest, and a daily job
     bumps it: Renovate, or `mise run pins:apt-bump` for apt pins (§7, D165).
     Images and toolchains are tagged by a hash of their inputs (D49).
+  - Outside this goal by choice: the project agent image takes the agent
+    CLIs and their plugins at the latest release on every build, with no
+    pins (§12, D152). #228 carries what that leaves open.
   - Measure: the tags computed from a commit's inputs resolve to the same
     toolchain versions while their releases exist, so an old commit is
     reproduced by pulling, not rebuilding (a deleted release returns after
@@ -257,6 +263,9 @@ and then used, not grown.
   - *Closed:* rosetta lists no license, so it is built for testing and not
     redistributed (D20; the M4 `canary/pins.toml` row).
   - Check the FIX Orchestra license before glaze FIX goes public.
+  - Widen the scrub to `docs/standard/**` and add a check that keeps it
+    clean (#223). The names found there by the review of D136 to D155 are
+    already removed.
 - **Q2. The mise and Renovate upstream posts.** The three drafts are ready
   and verified on 26.10. When, if at all, to post them is the owner's call.
 - **Q3. License.** Closed: the owner chose MIT, committed as `LICENSE` in
@@ -277,6 +286,11 @@ and then used, not grown.
   confirmed at the M0-Linux exit review, D149).
 - **Q8. How the older owner-review rules read after D101.** Closed:
   "reviewed" means merged after the required checks (D107, D149).
+- **Q9. Spack's container probe** (D142). Before the first Spack image, a
+  probe in a throwaway container on the PC decides which apt packages that
+  mise now supplies (git, xz-utils, python3) can leave the base. D144 closed
+  the other half of D142's question, how Spack's Python finds clingo. No
+  ticket owns the probe yet (§11 Spack).
 
 Settled questions are at the end of the Technical Plan
 ([Settled questions](#settled-questions)).
@@ -620,7 +634,10 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
   gives the same lock whenever it runs (M0 (i)), bumped with the pins, and
   `lockfile = true`; a pins PR that needs a release newer than the cutoff
   also moves the cutoff in this owned file, which D101 allows (the checks,
-  not the owner, gate it); M1b's Renovate config does this;
+  not the owner, gate it); M1b's Renovate config does this. D148 decided to
+  change the cutoff to `0s`. That is not applied: the M0 (i) check has not
+  been rerun without a cutoff, and until it is this fixed cutoff is the
+  value in force (#222);
 - **`[hooks] postinstall`:** `hk install --mise` outside CI, so the hk git
   hooks (D102) are installed with the pinned tools;
 - **`min_version`**, a floor, not a pin: it changes only when the config
@@ -860,6 +877,13 @@ review that D108 planned for them from M2, and accepted the risk. Before M2 agen
 (accepted, D127); from M2 they run in the dev VM or as a separate macOS user
 that cannot (an M2 entry condition, D127).
 
+Since D137, D143 and D155 that plan is incomplete. Agents on the Mac host
+start the certification containers on the PC's Docker (D137), and agents
+also run in project containers on the PC and the Mac (§12). Who starts
+containers and certification once agents are isolated, where agents then
+run, and what each may read is an M2 entry decision that has not been made
+(#219).
+
 #### Branches and PRs do run before `main`
 
 Every PR and merge group runs the full Linux gate on hosted runners.
@@ -916,14 +940,51 @@ with no tailnet route.
 GitHub warns against self-hosted runners on public repositories, because a
 fork's PR could run on them. Fork-PR workflows need approval for every
 outside contributor (setup step 4), no self-hosted runner is registered
-until M2, and the D58 hook refuses every non-`main` job either way.
+for cpp-standard until M2, and the D58 hook refuses every non-`main` job
+either way.
+
+**A second runner path already runs on the PC (D141).** The PC runs CI
+runner slots that serve other repositories, defined in
+`docs/standard/gha-runner/` and installed by `mise.pc.toml`. Each job gets
+a single-use JIT runner in a new `--rm` container with no Docker socket and
+no sudo, on a network the launcher closes off with iptables rules (the slot
+network rules, `gha-fence`). The slots do not use the PC runner App: they
+register through their own App, whose key is a plain root-owned file on
+the PC. That App has no Administration permission (owner, 2026-11-18): it
+registers organization runners in the organization's Default runner group,
+which runs jobs only for the repositories it allows. The slots are not
+gha-outrunner VMs, and they have no D58 admission control: nothing on the
+runner checks which workflow and ref may run. Runner labels are not access
+control. The only rule is a convention: a slot workflow runs on `push`,
+`workflow_dispatch` or `schedule`, never on `pull_request_target`.
+
+Present exposure: any repository the runner group allows can send a job to
+any slot by naming its label. Each slot's compiler cache is writable and is
+kept across jobs until it is seven days old (the default), so one such job
+can leave bad cache objects for the next. A project container bound to an
+allowed repository holds a token with workflows write on it (§12), so it
+can push a branch whose workflow runs on a slot. A container bound to a
+repository the group does not allow cannot.
+
+**cpp-standard gets no slot** until runner-side admission, D58 or an equal
+per-repository allowlist of ref and workflow, is in place and proven
+(D174; #218). That holds back the migration step that would
+give cpp-standard a slot.
 
 #### Identities (D40, D52, D71)
 
-- Agents push and open PRs as the agent App. It has contents,
+- Agents on the Mac host push and open PRs as the agent App,
+  `cpp-standard-agents`. It has contents,
   pull_requests and workflows write, on cpp-standard only. It had actions
   write until D134; the owner removes it in M1a, since `linux:run` now
   opens draft PRs (D130).
+- Agents in a project container push and open PRs as the container agent
+  App, `ray-manaloto-agents` (D155). The organization owns it, and it is
+  installed on all of the organization's repositories, with workflows
+  write; each container gets a one-hour installation token narrowed to its
+  own repository (§12).
+  Container agents working on cpp-standard therefore push here as
+  `ray-manaloto-agents[bot]`.
 - gha-outrunner registers runners at the org level with the PC runner App,
   which has `organization_self_hosted_runners: write` and no repository
   Administration (D117, D131). The org has 20 public repositories, so the
@@ -951,6 +1012,15 @@ which no App here is, can add a bypass actor (D131).
   and gh credential helper that mints a one-hour App token (D71, D80, D84).
   From M3 a host job passes the token into the dev VM; the key never enters
   it (file plan, `runner/mac/agent-token.plist`).
+- **The container agent App key** is in the Doppler project
+  `agent-containers` (D155). A Doppler service token that can fetch it is
+  on both hosts: a file the `agent-secrets` service reads on the PC
+  (`mise run agents:pc-doppler` writes it), and the Mac's own copy for its
+  `agent-secrets` container. The service turns the key into the per-container
+  tokens under `/run/agent-secrets`; the key is not mounted into a project
+  container.
+- **The slot App's key** is a plain root-owned file on the PC (Public
+  repository and self-hosted runners, above).
 - **The PC runner App's private key** stays on the hosts: an encrypted
   systemd credential on the PC, and a Keychain item on the Mac. The owner's
   setup agent sets it up from Doppler (D65, D117).
@@ -1002,11 +1072,28 @@ and Mac runners, merges with no human look before merge. Wider trust
 roots, and any stronger guard for them, are the M2 design's work
 ([m2-trust-backlog.md](level-1/m2-trust-backlog.md), D134).
 
-Renovate's weekly Action SHA batch touches trust-root workflows. Before
-M2 it merges on the checks like any PR (D107). From M2, D118 has it wait
-for the owner through the code-owner review that D149 dropped, and D149
-does not name D118; whether the owner still looks before merge is open for
-the Goldfish review of D136 to D155.
+**The inputs that configure the hosts are not in this list.** They are
+`mise.pc.toml`, `mise.mac.toml`, the files they install
+(`docs/standard/gha-runner/**`, `docs/standard/agent-auth/**`) and the
+agents image, which on the Mac also runs the credential service (§12). A
+merge deploys none of them: the next apply on that host installs what
+`main` then holds, and the design does not yet say who runs that apply for
+each input, or as which identity. D149's accepted risk holds for them as
+well: a merged change reaches a host with no human look before merge. #227
+carries whether they join the trust roots and who applies each.
+
+**Residual risk (D149).** With no human look before merge, the post-merge
+run is not an independent backstop: a merged pull request can change the
+post-merge workflow itself. A new check counts as a guard only with
+evidence that the merge queue enforces which workflow produced it.
+
+Renovate's Action SHA updates touch trust-root workflows. They merge on
+the required checks like any PR, before M2 and from M2 (D107, D170). D118
+had them wait for the owner from M2 through the code-owner review that
+D149 dropped; D170 supersedes D118 and accepts the risk that a changed
+Action runs in trust-root workflows with no human read before merge. This
+repository has no Renovate configuration yet, so who queues these updates,
+and whether they stay a weekly batch, is not decided (#222).
 
 From M1a PR 6, only `GITHUB_TOKEN` and the owner can dispatch workflows:
 the agent App has no `actions: write` (D134), and `builder.yml` takes no ref or SHA input.
@@ -1049,7 +1136,11 @@ never fails because one was added. It fails if:
 - immutable releases or the toolchain tag ruleset are off (from M1b);
 - a required workflow is disabled.
 
-Phase `m2` checks no code-owner setting (D149).
+Phase `m2` checks no code-owner setting (D149). The task has no `m2`
+phase yet, and this design names nothing that the phase would add. The
+stale-approvals check above guards nothing while no approval is required.
+Issue #220 decides both: what `m2` adds or that the phase goes, and whether
+that check stays.
 
 From M1a PR 6, the agent App has no `actions: write`, so it cannot disable
 these checks (D134).
@@ -1092,11 +1183,12 @@ fails if the queue stops being required.
     `.mise/mise.lock` (D74). D148 changes the fixed `minimum_release_age`
     cutoff in `mise.toml` to `0s` (not yet applied there), so an update PR opens as soon as a
     release is out; whether the cutoff's lock-reproducibility reason (M0
-    (i)) still holds with exact pins was not checked (D148).
-  - Action SHAs live in `.github/**` and are batched weekly. Before M2
-    the batch merges on the checks (D107); whether it still waits for the
-    owner from M2 (D118) is open, since D149 dropped the review that wait
-    used (§6 Trust roots).
+    (i)) still holds with exact pins was not checked (D148). Until that
+    check is rerun the fixed cutoff stays (§3, #222).
+  - Action SHAs live in `.github/**`. Their updates merge on the checks at
+    every milestone (D107, D170, which supersedes D118's owner wait from
+    M2; §6 Trust roots). Whether they stay a weekly batch or come daily
+    with the other updates is not decided (D170, #222).
 - **Shared update configuration (D148, D152).** cpp-standard builds three
   public repositories, trimmed copies of risu729's (MIT, credited):
   `ray-manaloto/renovate-config` (one Renovate preset: GitHub's native
@@ -1110,7 +1202,13 @@ fails if the queue stops being required.
   `CI Check` job that a ruleset requires, because auto-merge waits only for
   required checks; that job runs on GitHub-hosted runners. Updates come
   daily with no release cooldown (D152). Agent plugins stay outside
-  Renovate (§12). Renovate's identity is still Q6.
+  Renovate (§12); of the agents in a project container, only Claude Code
+  gets the skills marketplace (D171). Renovate's identity is still Q6.
+  None of this is applied to cpp-standard yet. Its ruleset requires six
+  jobs (`lint`, `pins-validate`, `artifact-check`, `resolve`,
+  `gate-linux-arm64`, `must-fail`) and a merge queue, and how `CI Check` and
+  native auto-merge fit them is not designed; nor is how the owner-held
+  updates below stay out of auto-merge. #222 carries that.
 - **Merge rule (D50, D56, D101, D128).** This is the one statement of it;
   other sections point here.
   - **Every PR merges through the merge queue once the required checks
@@ -1133,7 +1231,9 @@ fails if the queue stops being required.
     post-merge macOS build, which the owner fixes or reverts.
 - **Base upgrades (D36, D47).** In Level 1 this is a written process only:
   - build a new Ubuntu or Tart base next to the current one;
-  - the owner merges the switch PR; Renovate does not merge it (D107);
+  - the owner merges the switch PR; Renovate does not merge it (D107).
+    This is a convention: no setting enforces it, and D148's auto-merge
+    has to leave it out (#222);
   - the old base is kept 30 days.
 
 ### 8. Performance metrics (D35, D46)
@@ -1149,6 +1249,12 @@ This table is the standard. In Level 1 only the first row has a task:
 | perf hardware counters, wall-clock time | PC on bare metal, owner-run, never on a runner | no | 2 |
 | xctrace, samply | macOS VM | no, VM only | 2 |
 
+The counters that the certification container reads on the PC (D137, D140)
+belong to the certification checklist of §11, not to this table. On the
+Xcode Tart base (D136) the weekly CUJ 1 run does not start from a vanilla
+image. §4 and the `mac-gate.yml` row still say vanilla; the M3 PR that adds
+`vm/inputs.toml` restates them and what that run proves.
+
 ### 9. Agents, collisions and the daily digest
 
 - **Isolation.** Each agent works in its own worktree and branch (D23), and
@@ -1158,7 +1264,9 @@ This table is the standard. In Level 1 only the first row has a task:
   count as the agent App to a pinned `digest` issue.
 - **Agent tooling (D41)** is project skills, codebase-memory and Context7, fnox
   placeholders, and jouet's hooks and `gate-guard` rules (D64). Plugins are
-  added only with the owner's approval. How the agents in a project
+  added only with the owner's approval. That approval is for adding a
+  plugin, not for each later change to its content: updates arrive
+  unreviewed (D152, #228). How the agents in a project
   container get their plugins and skills is §12 (D143, D147, D152).
 - **Daily digest.** `mise run review:digest` runs in Actions and calls no
   model. This is the one list of what it reports:
@@ -1242,7 +1350,7 @@ date trigger if it is not green by then:
 #### M0 results
 
 M0 (D24, D53) is split in two (D84). **M0-Linux** ((b), (c), (f), (g), (h),
-(i), (j)) blocks M1a and ends on 2026-11-16. **M0-Mac** ((a), (d), (e)) runs
+(i), (j)) blocks M1a; its planned end was 2026-11-16, and its exit review was held on 2026-11-17. **M0-Mac** ((a), (d), (e)) runs
 in parallel, does not block M1a, and feeds M3. The evidence for each is in
 `spikes/m0/README.md`; the M0 file plan lists each spike's files.
 
@@ -1307,12 +1415,20 @@ the conditions for turning on self-hosted runners:
   reviewed (D134);
 - agent sessions cannot read the PC SSH key, the runner App key, the
   Org-admin App key, the Docker context, or any fnox or Doppler profile that
-  can fetch them (D127);
+  can fetch them (D127). D127 predates the container agent App: whether the
+  list also takes that App's key and the Doppler token that fetches it,
+  which the hosts hold today (§6 Credential storage), is part of the M2
+  entry decision of #219;
 - the owner reads `git log -p <setup commit>..HEAD` for the trust-root paths
   once (D131), and `repo:rulesets --phase m2` is applied with `repo-verify`
   passing at `m2` (D135). The `m2` phase turns no code-owner review on
-  (D149); whether the one-time read still earns its place is for the
-  Goldfish review of D136 to D155.
+  (D149), and #220 decides what it adds. The read stays (review of D136 to
+  D155, finding F9). Its baseline is the setup commit of setup step 1, the
+  repository's first commit (`bfd7da2`).
+  The owner records the SHA range read in `spikes/m2/README.md`. For the
+  self-hosted workflows and `runner/**`, which first run at M2, the read
+  comes before execution. For the host files the PC already applies
+  (`mise.pc.toml` and what it installs) it can only come after the fact.
 
 #### M0-Linux exit review
 
@@ -1325,7 +1441,7 @@ cut-order item early.
 cpp-standard sets up the machines themselves, not only its project
 environments: macOS, Ubuntu amd64 and arm64, and the PC (D139). All of the
 PC moves, including the CI runner slots that serve other repositories, the
-job fence, ufw, CDI and the PC parts of `pc:doctor`; the PC's private
+slot network rules (`gha-fence`), ufw, CDI and the PC parts of `pc:doctor`; the PC's private
 values come from a PC-only Doppler config; `spotlight:check`,
 `herdr:doctor` and the nightly check stay in dotfiles (D141). D150 widens
 the move to all of dotfiles. The order, the check and the undo of each step
@@ -1336,7 +1452,9 @@ running it.
 - **Machine configs.** `mise.pc.toml` holds the PC's configuration, checked
   by `mise run pc:doctor`, and `mise.mac.toml` the Mac's global config
   (D150, migration step M1). Machine-to-machine access uses tailnet names,
-  never LAN addresses (D150).
+  never LAN addresses (D150). One exception: `mise.mac.toml` keeps a
+  break-glass SSH alias for the PC's LAN address, for when the tailnet is
+  down.
 - **Certification playbooks.** What a host must have to be a valid C++
   environment is a checklist with a probe and a PASS/FAIL rule per check:
   [macos.md](../standard/macos.md) for the Mac host and the Tart VM
@@ -1344,22 +1462,40 @@ running it.
   for Ubuntu 26.10 in a container on the PC (amd64) and on the Mac (arm64)
   (`mise run certify:ubuntu`, D137). D136 also moved the Tart base to
   `macos-golden-gate-xcode:27.2`; the design's vanilla references change in
-  the M3 PR that adds `vm/inputs.toml`.
+  the M3 PR that adds `vm/inputs.toml`. The p2996 that the certified hosts
+  carry is a separate install with D136's wider project and runtime list
+  (`docs/standard/ubuntu-p2996/build-linux.sh` on Ubuntu). The CI toolchain
+  of §2 keeps the set that M0 (h) proved. Whether the two become flag sets
+  of one `build.sh` is #226. A certification run prints a report, kept
+  under `docs/standard/reports/`; it is not a result of the gate (§4).
+  The macOS report's P10 failure, a p2996 program linked with
+  `-fuse-ld=lld`, is accepted as a known upstream failure and blocks
+  nothing (D172).
 - **Containers on the PC** never run `--privileged`. The certification
   container gets `--cap-add PERFMON` and the seccomp profile
-  `docs/standard/ubuntu-seccomp.json` instead (D140).
+  `docs/standard/ubuntu-seccomp.json` instead (D140). The rest of its
+  launch contract is in `certify:ubuntu` and ubuntu.md V2: it starts with
+  `-e container=docker`, it gets the NVIDIA compute device nodes one by one
+  rather than a CDI device, and the task warns when the host's Docker
+  release differs from the one the seccomp profile was copied from.
 - **apt cache.** `mise.ubuntu-cache.toml`, used only with
   `-E ubuntu,ubuntu-cache`, sends the apt sources through an
   apt-cacher-ultra proxy named by `CPP_STANDARD_APT_CACHE`; CI and the
-  image never use it (D138).
+  image never use it (D138). The certified Ubuntu environment's apt pins
+  are in `mise.ubuntu.toml`.
 - **Spack** runs only in throwaway containers on the PC's Docker. Below it
   sit apt (the certified toolchain plus `gfortran-16`) or the macOS Command
   Line Tools, then the tools mise pins (D142). clingo goes into the Python
   environment that runs Spack (D144), which `SPACK_PYTHON` names (D145).
-  Open: D142's container probe, which decides which apt packages mise now
-  supplies, runs before the first Spack image.
-- **mise pin.** The image, CI and `min_version` pin mise 2026.11.9, the PC
-  host's release (D146).
+  This layering is planned, not built: no Spack image exists. D142's
+  container probe comes first (open question Q9).
+- **mise version.** `image/base.inputs.toml` and the `MISE_VER` argument of
+  `docs/standard/agents.Dockerfile` and `docs/standard/ubuntu-cert.Dockerfile`
+  pin mise 2026.11.9, the PC host's release (D146). `min_version` in
+  `mise.toml` is a floor, not a pin. The slot runner image's Dockerfile in
+  `mise.pc.toml` names an older release, outside D146's list, and the
+  `jdx/mise-action` steps of `ci.yml` name 2026.11.9 again. With no Renovate
+  configuration yet, nothing bumps these copies together.
 
 ### 12. Project agent containers (D143, D147, D155)
 
@@ -1373,10 +1509,15 @@ on the Mac, D155).
   marketplaces and plugins; there is no sync code, seed volume or plugin
   clone of our own (D147, which replaces the `agents:sync` volume of D143
   and of its amendments D144 and D145). The one list, with its install and
-  refresh steps, is `docs/standard/agent-plugins`. The shared skills folder
-  is a real `~/.agents/skills`, which Codex and OpenCode read and Claude
-  Code reads through a link (D145). Open: how the Antigravity CLI's
-  plugins come back in a new container (D147).
+  refresh steps, is the script `docs/standard/agent-plugins`: it runs each
+  agent's own plugin commands, `install` at image build and `refresh` in a
+  running container, and no tracked config file is replayed there (D171,
+  which amends D147). Claude Code gets the egm and `ray-manaloto/skills`
+  marketplaces, Codex and the Antigravity CLI get egm only, and OpenCode
+  gets neither. The Antigravity CLI's plugins come back because the script
+  installs them again at build and at refresh. The image makes no
+  `~/.agents/skills`, so in a container a skill reaches an agent only
+  through a plugin; D145's shared folder exists on the Mac host only.
 - **Updates.** The agent CLIs and their plugins have no pins: they come at
   the latest release on every image build and every
   `mise run agents:refresh`, and each build records the versions it got
@@ -1390,7 +1531,12 @@ on the Mac, D155).
   git, Claude Code and OpenCode then need no login. `mise run
   agents:app-create` made the App and `mise run agents:pc-doppler` the
   Doppler token. This supersedes D151's Claude Code login and D153's
-  per-container `gh auth login`.
+  per-container `gh auth login`. Three things here are open. On the Mac
+  the service runs from the agents image, so choosing another project image
+  also replaces the service, and registration can report success with a
+  stale token (review findings F7 and F40, #221). `agents:pc-doppler` still
+  requires and copies a `GEMINI_API_KEY` that nothing uses; retiring it is
+  #224.
 - **Subscriptions, not API keys (D151, D155).** Codex keeps a device login
   per project per machine on that project's volume, never a copied
   `auth.json`. The Antigravity CLI keeps the owner's Google login, made
@@ -1583,7 +1729,9 @@ otherwise. Each names the section it relates to and the deciding decision.
 - **`linux:run` dispatching `ci.yml` on a branch** (§3, D130). A branch
   dispatch is outside the PR rules; a draft PR keeps one path.
 - **Agents using the PC's Docker over SSH** (§3, D70). Docker access is
-  root on the PC.
+  root on the PC. Amended by D137: agents on the Mac host do start the
+  certification containers on the PC's Docker, and what replaces that after
+  M2's isolation is open (#219).
 - **Runner VM controllers other than gha-outrunner** (§6, D65): incuse
   (early and Linux-only), runscaler (no libvirt), microvm-github-runners
   (NixOS only), our own on `actions/scaleset` (code to own), Actuated (paid,
@@ -1596,7 +1744,7 @@ otherwise. Each names the section it relates to and the deciding decision.
 - **Publishing the Mac golden image to GHCR** (§3, D49). Its only consumer
   is the Mac, and pushing it needs a token there or a multi-GB transfer.
 - **Trust roots under code-owner review, from M1a or from M2** (§6, D108,
-  D149). Before M2 no self-hosted runner exists; at the M0-Linux exit
+  D149). Before M2 no self-hosted runner exists for cpp-standard; at the M0-Linux exit
   review the owner dropped the M2 review as well, so that the owner is
   never a bottleneck, and accepted the risk (D149).
 - **A required check that the agent's commit review happened** (moot
@@ -1605,6 +1753,32 @@ otherwise. Each names the section it relates to and the deciding decision.
 - **The inputs hash as the release's prerelease part** (`16.2.0-h.<hex>`)
   (§2, D89). Hash order is random, so a newer build could sort below an
   older one; in M1a the git tag is the artifact tag instead (D134).
+- **For the apt cache: a plain HTTP proxy, TLS interception, or a fallback
+  to direct** (§11, D138). Both upstreams are HTTPS only, so a plain proxy
+  caches nothing; interception makes every client trust the cache's CA; the
+  rewritten sources work only through a proxy, so the bootstrap stops
+  instead of falling back.
+- **For the certification container: `seccomp=unconfined`, or the CDI GPU
+  device** (§11, D140). The first leaves no syscall filter; the CDI spec
+  mounts the libraries at the host distribution's paths, untested in the
+  Ubuntu image.
+- **A seed volume of plugins filled by `agents:sync`** (§12, D143, D144,
+  D145). D147 replaced it with each agent's own install commands.
+- **A login step by a person in each project container** (§12, D151,
+  D153). D155 replaced the Claude Code and `gh` logins with tokens the
+  `agent-secrets` service provides, so a new container needs no human step.
+- **For running agents apart from the host: Docker Sandboxes** (§12, D151).
+  Considered and not taken; D151 gives the reason.
+- **For the container agents' GitHub identity: the skills-sync App** (§12,
+  D155). Its key also lives in the skills repository's Actions, so widening
+  it would let a compromised skills workflow mint tokens for every
+  repository. D155 also dropped a branch guard that refuses repositories
+  without rules, a token broker and client-side push hooks.
+- **For machine setup: keeping it in dotfiles** (§11, D139). That was the
+  recommendation put to the owner, who chose cpp-standard instead; D139
+  records the choice and not a reason against the other option.
+
+This list is not complete for D136 to D155.
 
 ## Risks & Mitigations
 
@@ -1642,7 +1816,7 @@ otherwise. Each names the section it relates to and the deciding decision.
 | jouet's edit-time rules can be bypassed | accepted | an agent edits jouet's config, or uses a harness without hooks | The gate's policy check is the enforcement; `/etc/jouet/rules` is an optional later owner step | D64 |
 | Undetected compiler changes merge without review | accepted | codegen or new diagnostics with an unchanged capability lock | `-Werror` and the tests | D56 |
 | Merge-queue input combinations stall the queue | limit | two input-changing PRs queued together | The builder runs on `merge_group`; tool bumps are grouped | D61 |
-| Hosted concurrency (about 20 jobs, GitHub's Free-plan limit; to be checked at M1a), Renovate PR volume | scale | many PRs at once | One grouped tools PR a day; Action SHAs weekly | D31, D61 |
+| Hosted concurrency (about 20 jobs, GitHub's Free-plan limit; to be checked at M1a), Renovate PR volume | scale | many PRs at once | One grouped tools PR a day; Action SHAs weekly for now (#222) | D31, D61 |
 | Apple's limit of two macOS VMs, and the Mac disk | scale | golden build while the dev VM and a runner VM run | Golden builds take the runner slot; about 150 GB budget; retention keeps 2 local images | D68, D79 |
 | GHCR and release storage grows | scale | daily builds | PR caches and images are deleted with their PR and artifacts expire after 7 days; `main`'s storage grows by design and is free for public packages | D53, D79 |
 | The `main` ruleset is changed or weakened | accepted | daily `repo:rulesets --verify` | The failed run shows it, and the digest does from M1b; a disabled check shows only as a missing digest (§6) | D53, D63 |
@@ -1650,6 +1824,13 @@ otherwise. Each names the section it relates to and the deciding decision.
 | A merged pin or tool change swaps the source of a signed toolchain or image | accepted | a PR changes a toolchain commit or adds a tool within the allowlist | Pins merge on green (D101) within the host allowlist, and the change is visible in the digest; stronger source checks are M2 design work (D134) | D101, D134 |
 | Agents on the Mac host can reach the PC SSH key, the Docker context and the App keys | accepted | before M2 | From M2 agents run in the dev VM or as a separate macOS user without them (D127, an M2 entry condition) | D70, D127 |
 | A new PR job named like a required check satisfies it | accepted | a same-repo PR adds a workflow | The job can only fake a PR or queue result; nothing it makes is trusted by `main`, and the post-merge run on `main` catches a faked result; pinning a check to one workflow needs Enterprise Cloud | D54, D134 |
+| Renovate's Action SHA updates merge with no human read | accepted | an update changes an Action used by a trust-root workflow | The full-SHA pin and the required checks; the owner's look, if any, comes after merge (D170) | D107, D149, D170 |
+| The post-merge run is not an independent backstop | accepted | a merged PR changes the post-merge workflow | None before merge; the owner's D131 read at M2 entry covers what merged before M2 (§6 Trust roots) | D131, D149 |
+| An upstream plugin or skill change steers an agent that holds workflows write | open | the agent image takes the latest agent CLIs and plugins at every build, and the skills marketplace follows its latest commit | None yet: the owner approves adding a plugin, not its later content (§9); #228 | D41, D148, D152, D155 |
+| The container agent App can push to every repository it is installed on | accepted | the App is installed on all of the organization's repositories, and the free plan's rules do not protect the private ones | A container holds only a one-hour token narrowed to its own repository; the App's key stays with the `agent-secrets` service on the host (§12) | D155 |
+| A process in a project container copies the long-lived `CLAUDE_CODE_OAUTH_TOKEN` | accepted | any code the agent runs | None; the owner accepted it (§12) | D155 |
+| The shared Renovate preset and hk-config are one point of compromise for every project | open | a bad change lands in either repository | Projects import them at a tag; how tag updates are held or checked is part of #222 | D148 |
+| A PC runner slot runs a job from any repository its runner group allows, with a writable cache | open | a workflow in an allowed repository names a slot's label | One-job containers, the slot network rules and a cache wiped after seven days (`docs/standard/gha-runner/README.md`); no decision accepts this for the repositories that use slots; cpp-standard gets no slot until runner-side admission is proven (#218) | D141 |
 | Ubuntu 26.10 is an interim release, supported to about July 2027, and the archive drops superseded exact versions | dependency | end of support, or a pinned package version leaves the archive | The daily apt bump moves each pin to the newest version, and a daily check fails when a pinned version is gone (§7); old bases are reproduced only by pulling their images; the move to the next release is a base upgrade (§7) | D27, D36, D165 |
 
 ## Detailed Implementation
@@ -1676,7 +1857,8 @@ Free plan, and a public repository exposes every pushed branch and its
 history. So nothing unscrubbed is ever pushed.
 
 1. **The first commit.** An empty root commit on `main`, reviewed by a
-   separate agent session (the commit review) and pushed. Done when `git ls-remote origin main` shows it.
+   separate agent session (the commit review) and pushed. That review is
+   history: D149 ended the commit review on 2026-11-17. Done when `git ls-remote origin main` shows it.
 2. **Q1 scrub and Q3 licence, locally (D97).** `docs/designs/**` is scrubbed
    of local paths, user names, session ids, private repository names and
    internal tool names, and private working notes are removed. The pattern
@@ -1712,7 +1894,10 @@ history. So nothing unscrubbed is ever pushed.
    `repo:rulesets --verify --phase bootstrap` passes; that phase skips the
    required-check list and the M1b and M2 settings.
 6. **The agent App** (D40, D52, D71), through GitHub's App-manifest flow
-   (`docs/runbooks/agent-app.md`).
+   (`docs/runbooks/agent-app.md`). This step makes `cpp-standard-agents`.
+   The container agent App, `ray-manaloto-agents`, was made later and
+   outside these steps, by `mise run agents:app-create` and
+   `mise run agents:pc-doppler` (§12, D155).
    - **First, CODEOWNERS (D100),** by a PR from the owner's login, allowed
      because code-owner review is off (D101, D149; §6 Trust roots). It is in
      place when `gh api repos/{repo}/codeowners/errors` reports no errors.
@@ -1756,14 +1941,16 @@ history. So nothing unscrubbed is ever pushed.
     --phase m1a` with `GITHUB_TOKEN`.
 
 **Tart on the Mac** runs in parallel with steps 1-10, because M0-Mac (a)
-needs it. Installing Tart is the owner's setup agent's prerequisite, because
-it is the only session that installs software on the owner's machines; it
-is not part of this plan. This plan's part: the implementing agent pulls
-`macos-golden-gate-xcode:27.2` by digest (D136). The owner is needed only if
+needs it. Installing Tart was the owner's setup agent's prerequisite
+(Glossary, setup agent); it is not part of this plan. This plan's part: the implementing agent pulls
+`ghcr.io/cirruslabs/macos-golden-gate-xcode:27.2` by digest (D136): on
+2026-11-14 that was
+`sha256:d7641b1d985fd53fbac071c663bf249007b9b387e16b7d576144588acb1d93f9`
+([macos.md](../standard/macos.md)). The owner is needed only if
 macOS shows a permission prompt. Done when `tart list` shows the digest.
 
-Runner setup comes later: the PC in M2, the Mac in M3. Until M2, every job
-runs on hosted runners.
+Runner setup comes later: the PC in M2, the Mac in M3. Until M2, every
+cpp-standard job runs on hosted runners.
 
 ### M0: spike files (on `main`, results go into M1a)
 
@@ -1865,7 +2052,7 @@ is green, or cut at its §10 cut date.
 | File | PR | What and why |
 |---|---|---|
 | `README.md` | PR 6, new | What cpp-standard is (the Overview in five lines), with CUJ 1 and CUJ 2 as copy-paste steps, and links to `docs/standard/`. |
-| `AGENTS.md` | PR 6, change | Today it holds only the EGM notes. PR 6 adds a `## Workflow facts` section: the build, test and lint commands (`mise run ci`, `mise run ci:fast`), one worktree per agent (D23), the agent App identity, the owned-roots list (D51), and the fence (D48). |
+| `AGENTS.md` | PR 6, change | The `## Workflow facts` section is already on `main` (ticket #126), ahead of PR 6. It holds: the build, test and lint commands (`mise run ci`, `mise run ci:fast`), one worktree per agent (D23), the agent App identity, the owned-roots list (D51), and the fence (D48). |
 | `LICENSE` | setup step 3 | Chosen by the owner (Q3); already on `main`. |
 | `mise.toml` **(O)** | PR 1, change | `min_version`, `[settings]` (`minimum_release_age`, `lockfile`) and the `[hooks] postinstall` that installs the hk hooks (§3, D69, D102). Never names a toolchain version (D72). Tasks are file tasks only, under `.mise/tasks/` (D93). |
 | `.mise/conf.d/apt-sources.toml` **(P)** | PR 1, new | `[bootstrap.apt.sources.llvm]` only: `uris = "https://apt.llvm.org/resolute/"`, `suites = "llvm-toolchain-resolute-23"`, `components = "main"`, the key URL and fingerprint `6084F3CF814B57C1CF12EFD515CF4D18AF4F7421`. A base and toolchain hash input (D90). |
@@ -1931,7 +2118,7 @@ is green, or cut at its §10 cut date.
 # mise.toml (O)
 min_version = "<floor>"   # oldest mise that can read this file; not a pin (D86)
 [settings]
-minimum_release_age = "<date>"   # fixed cutoff, bumped with the pins (M0 (i))
+minimum_release_age = "<date>"   # fixed cutoff, bumped with the pins (M0 (i)); D148's 0s is not applied (#222)
 lockfile = true
 [hooks]
 postinstall = '[ -n "${CI:-}" ] || hk install --mise'   # skipped in CI (D102)
@@ -1999,7 +2186,7 @@ salt = 0                        # bumped only to republish a deleted release (D7
 
 | File | What and why |
 |---|---|
-| `renovate.json5` **(O)** | Daily (D31). Automerge follows §7. Tool bumps grouped (D61). Action SHAs are batched weekly. Custom regex managers cover `image/base.inputs.toml` (Ubuntu digest, mise version, packslip digest; D86), the `toolchains/*/pins.toml` refs and tarballs (one PR for every OS; D85), the `ubuntu:YY.MM` tag and the canary refs. A `mise.managerFilePatterns` entry that matches `.mise/conf.d/*.toml` (the exact regex is in `spikes/m0/README.md`, (f)) lets the mise manager find the `conf.d` fragments; without it the manager finds no files (M0 (f), D104). Which identity runs Renovate is open question Q6 (D124), due before M1b. No `postUpgradeTasks` (D75). Renovate does not bump the apt pins, because Renovate 44.251.0 cannot verify Ubuntu 26.10's indexes (SHA512 only); `mise run pins:apt-bump` moves them (D165). |
+| `renovate.json5` **(O)** | Daily (D31). Automerge follows §7. Tool bumps grouped (D61). Action SHA updates merge on the checks (D170); weekly or daily is open (#222). The file does not exist yet. Custom regex managers cover `image/base.inputs.toml` (Ubuntu digest, mise version, packslip digest; D86), the `toolchains/*/pins.toml` refs and tarballs (one PR for every OS; D85), the `ubuntu:YY.MM` tag and the canary refs. A `mise.managerFilePatterns` entry that matches `.mise/conf.d/*.toml` (the exact regex is in `spikes/m0/README.md`, (f)) lets the mise manager find the `conf.d` fragments; without it the manager finds no files (M0 (f), D104). Which identity runs Renovate is open question Q6 (D124), due before M1b. No `postUpgradeTasks` (D75). Renovate does not bump the apt pins, because Renovate 44.251.0 cannot verify Ubuntu 26.10's indexes (SHA512 only); `mise run pins:apt-bump` moves them (D165). |
 | `.mise/tasks/review/digest` **(O)** + `.github/workflows/digest.yml` **(O)** | The no-model daily digest (§9), moved from M5 to M1b with cut position 3 (D84). The cadence is a workflow input (D14). |
 | `.github/workflows/retention.yml` **(O)** | Daily: for each PR closed (merged or not) more than 1 day ago and not reopened, deletes its `pr-<n>-` GHCR versions (`DELETE /orgs/ray-manaloto/packages/container/<pkg>/versions/<id>`, `packages: write`, needed since PR images use `pr-` tags again, D134) and its caches (`gh cache delete --ref refs/pull/<n>/merge`, `actions: write`). PR builder artifacts expire on their own (`retention-days: 7`). Never deletes anything `main`'s history references. Test: a dry-run mode lists what it would delete, checked against a fixture PR (D79). |
 | `.github/rulesets/toolchain-tags.json` **(O)** | The tag ruleset that blocks deleting or moving toolchain tags; applied with immutable releases by `repo:rulesets` (D59, D77). |
@@ -2012,7 +2199,7 @@ salt = 0                        # bumped only to republish a deleted release (D7
 
 | File | What and why |
 |---|---|
-| `spikes/m2/README.md` | The M2 entry gate (§10, D77): the runner-hook negative tests, one positive test (a `main` `builder.yml` job is accepted), the gha-outrunner one-job VM test, the PC runner App registering runners in place of the PAT (D117), `packslip install --identity` for `publish.yml` and the merge-group `run-id` leg (D111, D114), `repo:rulesets --phase m2` applied with `repo-verify` green at `m2` (D135), the M2 trust design, written from `docs/designs/level-1/m2-trust-backlog.md`, reviewed (D134), and agents running in the dev VM or as a separate macOS user, with no read access to the host keys and profiles (D127). M2 starts only when all of these pass. |
+| `spikes/m2/README.md` | The M2 entry gate (§10, D77): the runner-hook negative tests, one positive test (a `main` `builder.yml` job is accepted), the gha-outrunner one-job VM test, the PC runner App registering runners in place of the PAT (D117), `packslip install --identity` for `publish.yml` and the merge-group `run-id` leg (D111, D114), `repo:rulesets --phase m2` applied with `repo-verify` green at `m2` (D135; #220 decides what the phase adds), the SHA range of the owner's D131 read, the M2 trust design, written from `docs/designs/level-1/m2-trust-backlog.md`, reviewed (D134), and agents running in the dev VM or as a separate macOS user, with no read access to the host keys and profiles (D127). M2 starts only when all of these pass. |
 | `.github/workflows/builder.yml` **(O)** | Adds amd64 images and toolchains. |
 | `runner/hook/job-started.sh` **(O)** | The D58 job-start hook, baked read-only into every runner image. |
 | `runner/pc/outrunner.yaml` **(O)** | gha-outrunner configuration for the PC: libvirt provisioner, the golden qcow2 image under a stable alias, labels, `max_runners: 2`. It registers runners with the PC runner App's credential, not a PAT (D117). gha-outrunner reads only a PAT today (`main.go:115`), so the M2 gate proves App credentials work, through gha-outrunner or `actions/scaleset`; if neither accepts them, M2 waits and the owner decides (D117). The systemd unit passes the credential with `LoadCredentialEncrypted=github-token:<path>`, and gha-outrunner reads `$CREDENTIALS_DIRECTORY/github-token` itself, with no wrapper (`config.go:150-170`) (D65, D96). |
@@ -2063,6 +2250,12 @@ salt = 0                        # bumped only to republish a deleted release (D7
   (§11).
 - Optional, owner's call: jouet's enforced rules in `/etc/jouet/rules`, which
   needs root (D64).
+- The machine and agent-container files of §11 and §12 (`mise.pc.toml`,
+  `mise.mac.toml`, `mise.ubuntu.toml`, `mise.ubuntu-cache.toml`,
+  `docs/standard/**`, the `certify:*` and `agents:*` tasks) and the three
+  shared repositories of §7 have no rows in this file plan. They are
+  outside M1a (D156), and this design does not place them against the
+  Level 1 date (2026-11-27, D21).
 
 --------------------------------------------------------------------------------
 
