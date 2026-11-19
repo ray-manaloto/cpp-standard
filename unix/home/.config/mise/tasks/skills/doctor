@@ -47,7 +47,6 @@ HERDR_CORE = "herdr-core"
 DESKTOP = ("agent-desktop", "agent-desktop-macos", "agent-desktop-ffi", "jev-desktop")
 DESKTOP_TOOL = "github:vercel-labs/agent-desktop"
 HERDR_REPO = "herdrdev/herdr"
-JOUET = ("<!-- jouet:start -->", "<!-- jouet:end -->")  # hometools/opencode.py START and END
 
 failed: list[str] = []
 
@@ -139,23 +138,25 @@ def herdr_gone(skills: dict[str, dict[str, object]]) -> None:
         fail(f"herdr's own skills are still installed: {', '.join(left)}", POST_TOOLS)
 
 
-def opencode_jouet() -> None:
-    config = os.environ.get("XDG_CONFIG_HOME") or HOME / ".config"
-    path = Path(config) / "opencode/AGENTS.md"
-    text = path.read_text() if path.is_file() else ""
-    if any(text.count(marker) != 1 for marker in JOUET):
-        fail(f"{path} has no single jouet block", POST_TOOLS)
+def opencode_bridge() -> None:
+    """Whether OpenCode gets jouet's skill and hooks: agents:opencode-bridge --check judges it, and its failures
+    are this task's."""
+    done = run(str(CHECKOUT / "unix/home/.config/mise/tasks/agents/opencode-bridge"), "--check")
+    for line in done.stderr.splitlines():
+        fail(line.removeprefix("agents:opencode-bridge: "), "mise run agents:opencode-bridge")
+    if done.returncode and not done.stderr.strip():
+        fail(f"agents:opencode-bridge --check exited {done.returncode}", "mise run agents:opencode-bridge")
 
 
 def jouet_claude() -> None:
-    """What `jouet setup claude --global --no-context-budget` writes (its Claude hooks in settings.json), judged by
+    """What `jouet setup claude --global --no-context-budget --skill` writes (its Claude hooks in settings.json), judged by
     jouet itself: its dry run prints `unchanged <file>` for each file it would leave as it is."""
-    done = run("jouet", "setup", "claude", "--global", "--no-context-budget", "--dry-run")
+    done = run("jouet", "setup", "claude", "--global", "--no-context-budget", "--skill", "--dry-run")
     heads = [line for line in done.stdout.splitlines() if line and line[0] not in "+-@ \\"]  # its diff lines
     changed = [line for line in heads if not line.startswith("unchanged ")]
     if done.returncode or changed or not heads:
         what = "; ".join(changed) or done.stderr.strip()
-        fail(f"jouet setup would change: {what}", "jouet setup claude --global --no-context-budget")
+        fail(f"jouet setup would change: {what}", "jouet setup claude --global --no-context-budget --skill")
 
 
 def main() -> None:
@@ -165,7 +166,7 @@ def main() -> None:
     herdr_core()
     agent_desktop(skills)
     herdr_gone(skills)
-    opencode_jouet()
+    opencode_bridge()
     for line in failed:
         print(line, file=sys.stderr)
     if failed:
