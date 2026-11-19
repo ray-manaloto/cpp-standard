@@ -273,7 +273,12 @@
       "properties": {
         "number": { "type": "integer", "description": "The pull request number" },
         "merge_commit": { "type": "string", "description": "The merge commit GitHub made" },
-        "author_email": { "type": "string", "description": "The merge commit's author email" }
+        "author_email": { "type": "string", "description": "The merge commit's author email" },
+        "other_checks": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Under required-checks: each check on the head that is not required, with its state when last read; never waited on"
+        }
       },
       "required": ["number", "merge_commit", "author_email"],
       "additionalProperties": false

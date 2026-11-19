@@ -69,14 +69,14 @@ mise run agents:agy-worker <worktree> <brief> [--plan <PLAN_ID>] [--model <model
 
 Before it starts the worker, the task runs agy in a scratch folder with the prompt "Reply with only the word ok. Do
 not run any tool." and reads the reply. It refuses to launch when agy shows "Sign-in update needed", says it is not
-signed in, or does not answer ok. The fix: type `/logout` in agy, then sign in with Google again. The owner does any
-password, passkey or 2FA step. `agents:agy-login --step status` is not this check: it only sees that a login file
+signed in, or does not answer ok. The fix: type `/logout` in agy, then quit and restart agy; it opens the Google sign-in. The owner ticks every
+permission box and does any password, passkey or 2FA step. `agents:agy-login --step status` is not this check: it only sees that a login file
 exists.
 
 The banner "Sign-in update needed" is a TUI warning that `agy -p` never prints, so the probe's reply cannot show it.
 The task therefore also reads the log the probe just wrote (`~/.gemini/antigravity-cli/log/cli-*.log`) and refuses
-when it holds `OAuth token lacks .../auth/aicode`: `owner: run /logout in any agy tab, then sign in with Google
-again`. The Antigravity IDE app shares agy's one keychain entry (upstream antigravity-cli #1610), so when it runs the
+when it holds `OAuth token lacks .../auth/aicode`: `owner: type /logout in agy, then quit and restart agy; it opens the
+Google sign-in`. The Antigravity IDE app shares agy's one keychain entry (upstream antigravity-cli #1610), so when it runs the
 refusal names it; whether the IDE is what drops the scope is not proven yet. `mise run doctor` prints the same
 check from the newest log without running agy (`python/agents/agy_worker.py --health`). Neither reads a token or
 login file, only log text.

@@ -1,12 +1,13 @@
 """PreToolUse guard for a live-test Claude tab: only the run's listed tools, and SendMessage only to the run's own tabs.
 
-  python -I testguard.py <log.jsonl> --tools <A,B,...> <allowed-name> [<allowed-name> ...]
+  python -I testguard.py <log.jsonl> --tools <A,B,...> [--allow-monitor CMD] <allowed-name> [<allowed-name> ...]
 
 testtab.py installs it as the tab's first PreToolUse hook (matcher "*"). Any tool not in --tools is denied (Bash,
 Monitor, MCP tools, ...), so a test tab cannot reach another session through a shell, sockets or scripts. A listed
 SendMessage may go only to an allowed name, or to a uds:<dir>/<pid>.sock whose process was started with
 `-n <allowed-name>`. A shell tool is refused even if listed. Any error denies, and so does a log that cannot be
-written. The guard still exits 0 with the deny: it fails closed. testtab.py also sets "onFailure": "block" on the
+written. With --allow-monitor CMD, the one exception to Monitor's refusal is a Monitor call whose command is exactly
+CMD (no WebSocket watch); Bash and PowerShell stay refused. The guard still exits 0 with the deny: it fails closed. testtab.py also sets "onFailure": "block" on the
 hook, for the failures the script cannot catch (it cannot start, or times out).
 """
 
@@ -39,11 +40,18 @@ def name_of_pid(pid: str) -> str | None:
     return None
 
 
-def decide(payload: dict, tools: set[str], names: set[str]) -> tuple[bool, str]:
+def decide(
+    payload: dict, tools: set[str], names: set[str], monitor: str | None = None
+) -> tuple[bool, str]:
     """Allow or deny one tool call, with the reason."""
     tool = payload.get("tool_name")
     if not isinstance(tool, str) or not tool:
         return False, "no tool name"
+    if tool == "Monitor" and monitor is not None:
+        tool_input = payload.get("tool_input") or {}
+        if tool_input.get("command") == monitor and "ws" not in tool_input:
+            return True, "the run's allowed Monitor command"
+        return False, "Monitor is allowed here only for the run's exact command"
     if tool in NEVER:
         return False, f"{tool} is never allowed in a test tab"
     if tool not in tools:
@@ -76,9 +84,16 @@ def main() -> None:
             msg = "usage: <log> --tools A,B <names...>"
             raise ValueError(msg)
         tools = {t for t in rest[1].split(",") if t}
-        names = set(rest[2:])
+        rest = rest[2:]
+        monitor = None
+        if rest[:1] == ["--allow-monitor"]:
+            if len(rest) < 2 or not rest[1]:
+                msg = "--allow-monitor needs a command"
+                raise ValueError(msg)
+            monitor, rest = rest[1], rest[2:]
+        names = set(rest)
         payload = json.load(sys.stdin)
-        ok, why = decide(payload, tools, names)
+        ok, why = decide(payload, tools, names, monitor)
     except Exception as error:  # noqa: BLE001 (any error denies)
         ok, why = False, f"guard error: {error!r}"
     try:

@@ -18,14 +18,20 @@
 # - HTTP hooks off: with them on, an empty httpAllowlist allows any host. Prompt hooks stay off (they spend tokens).
 # - A short timeout: the default is 600 s. jouet's own hooks set 10 s in settings.json.
 # - OpenCode V2's `plugins` list (V1's `plugin` list has no trust prompt and no reliable failure hook).
+# - The skill: `jouet setup --skill` writes ~/.claude/skills/jouet, but OpenCode v2.3.2 run as the plain binary scans
+#   ~/.agents/skills, not ~/.claude/skills (only `opencode --standalone` finds that). The task links
+#   ~/.agents/skills/jouet to it, and --check has OpenCode itself load the skill. The server notices a new or removed
+#   link after a short lag, so a check right after the link can still fail once.
 # The package is not pinned: the bridge follows the daily updates like every other plugin (owner, 2026-11-17).
 
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 PACKAGE = "@hamzaabili/opencode-claude-hooks"
@@ -42,6 +48,8 @@ CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "opencode
 TRUST_STORE = HOME / ".config/opencode/claude-hooks-trust.json"
 SETTINGS = HOME / ".claude/settings.json"
 SKILL = HOME / ".claude/skills/jouet/SKILL.md"
+AGENTS_LINK = HOME / ".agents/skills/jouet"
+FREE_MODEL = "opencode/deepseek-v4.1-flash-free"
 # One jouet handler as `jouet setup` writes it and the bridge's doctor prints it (label, then command).
 JOUET = re.compile(r"^user: \.claude/settings\.json: sh -c 'jouet --version >/dev/null 2>&1 \|\| exit 0; exec jouet hook claude [a-z-]+'$")
 JOUET_COMMAND = re.compile(r"^sh -c 'jouet --version >/dev/null 2>&1 \|\| exit 0; exec jouet hook claude [a-z-]+'$")
@@ -120,6 +128,63 @@ def apply_entry() -> None:
         print(f"agents:opencode-bridge: unchanged {path}")
 
 
+def link_skill() -> None:
+    """OpenCode v2.3.2 scans ~/.agents/skills, not ~/.claude/skills (scratch test, #287): link jouet's skill there.
+    A link of our own is left alone by `mise skills sync --prune` (it removes only links into mise's installs) and by
+    the skills CLI (it touches only skills in its lock file)."""
+    if not SKILL.is_file():
+        print(f"agents:opencode-bridge: {SKILL} is missing; run: jouet setup claude --global --no-context-budget --skill", file=sys.stderr)
+        return
+    if AGENTS_LINK.is_symlink() and AGENTS_LINK.resolve() == SKILL.parent.resolve():
+        print(f"agents:opencode-bridge: unchanged {AGENTS_LINK}")
+        return
+    if AGENTS_LINK.exists() or AGENTS_LINK.is_symlink():
+        print(f"agents:opencode-bridge: {AGENTS_LINK} exists and is not the link to {SKILL.parent}; left as it is", file=sys.stderr)
+        return
+    AGENTS_LINK.parent.mkdir(parents=True, exist_ok=True)
+    AGENTS_LINK.symlink_to("../../.claude/skills/jouet")
+    print(f"agents:opencode-bridge: linked {AGENTS_LINK}")
+
+
+def opencode_loads_skill() -> str | None:
+    """None when OpenCode itself loads the jouet skill, else why not. A headless run in a scratch repo with a free
+    model calls the skill tool (OpenCode has no skill listing: `opencode debug` has agents, config, paths only). A run
+    that never reached the tool (no binary, no network, the model did not call it) is reported as unproven."""
+    # The plain binary, as a tab without mise's wrappers runs it. The wrapper adds --standalone, which also finds
+    # ~/.claude/skills, so it would pass without the link.
+    binary = str(HOME / ".opencode/bin/opencode")
+    if not Path(binary).is_file():
+        binary = shutil.which("opencode") or binary
+    prompt = "Call your skill tool with id jouet. Reply with one word, LOADED or FAILED."
+    problem = ""
+    for attempt in range(3):
+        if attempt and "could not load" in problem:
+            # The server notices a new link after a lag of up to 15 s; ask again once or twice. The probe is a model
+            # call, so `jouet wait cmd` would only wrap this same loop.
+            time.sleep(12)
+        with tempfile.TemporaryDirectory() as scratch:
+            run(["git", "init", "-q"], cwd=scratch)
+            try:
+                done = run([binary, "run", "--model", FREE_MODEL, "--format", "json", prompt], cwd=scratch)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                return f"could not run OpenCode to prove the skill loads: {error}"
+        for line in done.stdout.splitlines():
+            try:
+                part = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            part = part.get("part", part) if isinstance(part, dict) else {}
+            state = part.get("state") or {}
+            if part.get("type") == "tool" and (state.get("input") or {}).get("id") == "jouet":
+                if state.get("status") == "completed":
+                    return None
+                problem = "OpenCode's skill tool could not load jouet (it scans ~/.agents/skills); run: mise run agents:opencode-bridge"
+                break
+        else:
+            problem = f"could not prove the skill loads: the {FREE_MODEL} run never called the skill tool"
+    return problem
+
+
 def drop_jouet_block() -> None:
     """Remove the old hometools block between jouet's markers: only a well-formed one (each marker alone on its own
     line, one pair, start first), and only those lines, so every neighbouring byte stays."""
@@ -154,6 +219,8 @@ def check() -> list[str]:
     # 2. the skill
     if not SKILL.is_file():
         failed.append(f"{SKILL} is missing; run: jouet setup claude --global --no-context-budget --skill")
+    elif (why := opencode_loads_skill()) is not None:
+        failed.append(why)
     # 3. a live `git add -A` is refused with jouet's reason, by the handlers the bridge runs
     try:
         settings = json.loads(SETTINGS.read_text())
@@ -230,6 +297,7 @@ def main() -> int:
             print("agents:opencode-bridge: jouet's skill and hooks reach OpenCode, and only jouet's handlers are trusted")
         return 1 if failed else 0
     apply_entry()
+    link_skill()
     drop_jouet_block()
     return 0
 
