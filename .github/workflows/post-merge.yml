@@ -1,0 +1,280 @@
+# The post-merge gate run (D119, #133). On every push to main and once a day it runs
+# the gate (`mise run ci`) and the must-fail fixtures (`mise run ci-must-fail`) on
+# each M1a preset in the tools image on the hosted arm64 runners — free for a public
+# repository (G8); ci.yml stays PR- and merge-group-only (D130). Its jobs copy
+# ci.yml's shapes; a main run takes only main's attested image and toolchain release,
+# never a rebuild (D116). The checklist job collects what each check's outcome was
+# into the results JSON (D119): one entry per gate-items.toml item, passed / failed /
+# not run — an item whose check did not run is "not run" and fails the run, never
+# passed (spec #133) — and uploads it as the gate-results artifact; until
+# review:digest exists, the run summary shows the table (D119). The daily schedule is
+# also the daily fixture run (D119). A trust root (D108).
+name: post-merge
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '43 2 * * *'
+
+permissions: {}
+
+# Keep the push and scheduled evidence for each commit independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Copied from ci.yml's job of the same name (D61, D62, D134): waits until main's
+  # tools image and p2996 toolchain for this commit exist, for at most 180 minutes,
+  # and runs the wait's, resolve's and toolchain:fetch's unit tests. A push or
+  # schedule run has no pr- image and no staged copy; the wait never builds.
+  artifact-check:
+    name: artifact-check
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 190
+    permissions:
+      contents: read
+      actions: read  # the builder run's artifacts and caches (section 6, D135)
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.9
+          install: false
+      - name: Publisher and artifact:names agree; the wait and resolve cases
+        run: python3 -I tests/artifact/test_artifact.py
+      - name: The source table of toolchain:fetch; the recipe's patch step
+        run: |
+          python3 -I tests/toolchain/test_fetch.py
+          python3 -I tests/toolchain/test_build_patch.py
+      - name: Wait for this commit's tools image and p2996 toolchain
+        timeout-minutes: 181
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILDER_RUN: the builder.yml run for ${{ github.sha }}
+        run: mise run artifact:check --timeout 10800 --interval 60
+
+  # Copied from ci.yml's job of the same name (D54, D98, D134): verifies main's
+  # attested image and outputs it as <image>@sha256:<digest>, which the container
+  # jobs below run in by digest. The branch-signed refusal test runs in every run
+  # (spec #122 Testing Decisions).
+  resolve:
+    name: resolve
+    needs: artifact-check
+    if: ${{ needs.artifact-check.result == 'success' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read  # gh attestation verify
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+      source: ${{ steps.resolve.outputs.source }}
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.9
+          install: false
+      - name: Log in to GHCR for gh attestation verify
+        env:
+          ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: docker login ghcr.io --username "$ACTOR" --password-stdin <<<"$GH_TOKEN"
+      - name: An image attested from a branch is refused
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tests/image_verify/run.sh
+      - id: resolve
+        name: Resolve the tools image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise run image:resolve --arch arm64
+
+  # Copied from ci.yml's job of the same name (#125, #132), one leg per M1a preset
+  # (D119) so each preset's gate result is reported on its own: toolchain:fetch, the
+  # vcpkg baseline, then `mise run ci` for that preset. A main run takes only main's
+  # attested release (--release-only, D116); ci.yml's staged-copy restore (D91) is a
+  # pull-request and merge-group case this run never has.
+  gate-linux-arm64:
+    name: gate-linux-arm64
+    needs: [artifact-check, resolve]
+    if: ${{ needs.artifact-check.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The gate presets (.mise/tasks/ci/_default). A later PR takes the list
+        # from the capability lock.
+        preset: [gcc16-coverage, clang23-coverage, p2996-coverage]
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      attestations: read  # gh attestation verify of the toolchain release
+    container:
+      # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
+      image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    env:
+      # The tools image holds the tools of .mise/conf.d/tools.toml; the hk lint tools are not
+      # in it and the gate does not need them.
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+    steps:
+      - name: The image resolve verified
+        env:
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          SOURCE: ${{ needs.resolve.outputs.source }}
+        run: |
+          echo "Running in $IMAGE ($SOURCE: main is attested and verified, pr is this run's own)"
+          id
+          mise --version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trust the checkout's mise config
+        run: mise trust "$GITHUB_WORKSPACE"
+      - id: fetch
+        name: Fetch the p2996 toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # fetch.py allows the staged copy only on a hosted runner. RUNNER_* names are the
+          # runner's own and a workflow cannot set them (GitHub's default-variables docs), and a
+          # job container may not see the runner's, so the value comes under our own name.
+          CPPSTD_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          # A main run takes only the release (D116): never a staged copy, never a rebuild.
+          MODE: --release-only
+        run: mise run toolchain:fetch "$MODE"
+      - name: Bootstrap vcpkg at the pinned baseline
+        timeout-minutes: 15
+        run: mise run vcpkg:bootstrap
+      - id: gate
+        name: Run the gate
+        env:
+          # The p2996 preset builds with this toolchain (cmake/toolchains/p2996.cmake).
+          CPPSTD_P2996_PREFIX: ${{ steps.fetch.outputs.prefix }}
+          # Each check in this preset writes its own report line.
+          CPPSTD_GATE_PRESETS: ${{ matrix.preset }}
+          CPPSTD_GATE_REPORT: ${{ github.workspace }}/results/gate-linux-arm64-${{ matrix.preset }}.txt
+        run: |
+          mkdir -p "$(dirname "$CPPSTD_GATE_REPORT")"
+          mise run ci
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: results-gate-linux-arm64-${{ matrix.preset }}
+          path: results/gate-linux-arm64-${{ matrix.preset }}.txt
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # Copied from ci.yml's job of the same name (#130), the daily fixture run (D119):
+  # `mise run ci-must-fail` in the same tools image. Its runner's own test runs
+  # first: a fixture that goes green fails the job.
+  must-fail:
+    name: must-fail
+    needs: [artifact-check, resolve]
+    if: ${{ needs.artifact-check.result == 'success' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      attestations: read  # gh attestation verify in the toolchain fixtures
+    container:
+      # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
+      image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trust the checkout's mise config
+        run: mise trust "$GITHUB_WORKSPACE"
+      - id: fetch
+        name: Fetch the p2996 toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CPPSTD_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          # A main run takes only the release (D116): never a staged copy, never a rebuild.
+          MODE: --release-only
+        run: mise run toolchain:fetch "$MODE"
+      - name: A fixture that goes green fails the run
+        run: python3 -I tests/must_fail/test_ci_must_fail.py
+      - id: fixtures
+        name: Run the must-fail fixtures
+        env:
+          CPPSTD_P2996_PREFIX: ${{ steps.fetch.outputs.prefix }}
+          GH_TOKEN: ${{ github.token }}
+          CPPSTD_GATE_REPORT: ${{ github.workspace }}/results/must-fail.txt
+        run: |
+          mkdir -p "$(dirname "$CPPSTD_GATE_REPORT")"
+          mise run ci-must-fail
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: results-must-fail
+          path: results/must-fail.txt
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # D119: writes the results JSON that ticks gate-items.toml — one entry per item,
+  # passed / failed / not run, from the report lines the jobs above uploaded. Only a check
+  # with an outcome reports, so a skipped check has no line and its item comes out not run; any item not passed fails the run (spec #133). The JSON uploads
+  # either way, and the run summary shows the table until review:digest exists
+  # (D119).
+  checklist:
+    name: checklist
+    needs: [gate-linux-arm64, must-fail]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read  # the report-line fragments of this run
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # No fragment is the normal case when the jobs above were all skipped (an
+      # artifact-check failure, say): the checker then reports every item not run.
+      # A download failure for any other reason leaves an empty results file, which
+      # fails the run the same way, so the JSON still uploads and the digest still
+      # finds a result for this run.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        continue-on-error: true
+        with:
+          pattern: results-*
+          path: fragments
+          merge-multiple: true
+      - name: Collect the report lines
+        run: |
+          mkdir -p fragments
+          # A run whose checks all skipped has no fragment: an empty results file,
+          # so every item comes out not run.
+          cat fragments/*.txt > results.txt 2>/dev/null || true
+      - name: Write the results JSON and the run summary
+        run: python3 -I python/gate/checklist.py gate-items.toml results.txt gate-results.json --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: gate-results
+          path: gate-results.json
+          if-no-files-found: error
+          retention-days: 30

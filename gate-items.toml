@@ -1,0 +1,119 @@
+# The Level 1 gate checklist (D119; environment-standard.md G7 and the file plan's
+# gate-items.toml row). Each entry is one gate item: what it is, the environment whose
+# workflow ticks it, and the check that proves it. post-merge.yml runs on every push to
+# main and once a day and ticks the linux items: an item is ticked (passed in the results
+# JSON) only when its check was green in the newest completed main run (D119). An item
+# whose check did not run is reported "not run" and fails the run, never passed
+# (spec #133). A macOS item (D46) belongs to mac-gate.yml. Later tickets add their checks
+# and fixtures to this file in the pull request that creates them (spec #133).
+#
+# Fields: what — the item in one line; environment — linux or macos; job — the
+# post-merge.yml job that reports it; preset — the gate preset, on the gate items;
+# fixture — the fixtures/must-fail directory, on the fixture items; check — the check
+# that proves it: a mise task (ci, ci:coverage), or, on the fixture items, the check
+# expected.toml names for that fixture.
+
+[items.build-gcc16-coverage]
+what = "gcc16-coverage configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-coverage"
+check = "ci"
+
+[items.tests-gcc16-coverage]
+what = "gcc16-coverage's ctest passes"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-coverage"
+check = "ci"
+
+[items.coverage-gcc16-coverage]
+what = "gcc16-coverage measures 100% line coverage of src/"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-coverage"
+check = "ci:coverage"
+
+[items.build-clang23-coverage]
+what = "clang23-coverage configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-coverage"
+check = "ci"
+
+[items.tests-clang23-coverage]
+what = "clang23-coverage's ctest passes"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-coverage"
+check = "ci"
+
+[items.coverage-clang23-coverage]
+what = "clang23-coverage measures 100% line coverage of src/"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-coverage"
+check = "ci:coverage"
+
+[items.build-p2996-coverage]
+what = "p2996-coverage configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-coverage"
+check = "ci"
+
+[items.tests-p2996-coverage]
+what = "p2996-coverage's ctest passes"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-coverage"
+check = "ci"
+
+[items.coverage-p2996-coverage]
+what = "p2996-coverage measures 100% line coverage of src/"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-coverage"
+check = "ci:coverage"
+
+[items.must-fail-toolchain-unattested]
+what = "toolchain:fetch refuses an unattested release"
+environment = "linux"
+job = "must-fail"
+fixture = "toolchain-unattested"
+check = "toolchain:fetch"
+
+[items.must-fail-uncovered-line-gcc16]
+what = "ci:coverage refuses one uncovered line, measured with gcc16's gcov"
+environment = "linux"
+job = "must-fail"
+fixture = "uncovered-line-gcc16"
+check = "ci:coverage"
+
+[items.must-fail-uncovered-line-clang23]
+what = "ci:coverage refuses one uncovered line, measured with clang23's llvm-cov gcov"
+environment = "linux"
+job = "must-fail"
+fixture = "uncovered-line-clang23"
+check = "ci:coverage"
+
+[items.must-fail-uncovered-line-p2996]
+what = "ci:coverage refuses one uncovered line, measured with the p2996 toolchain's llvm-cov gcov"
+environment = "linux"
+job = "must-fail"
+fixture = "uncovered-line-p2996"
+check = "ci:coverage"
+
+[items.must-fail-vcpkg-baseline]
+what = "vcpkg:bootstrap refuses a checkout at another commit than the pinned baseline"
+environment = "linux"
+job = "must-fail"
+fixture = "vcpkg-baseline"
+check = "vcpkg:bootstrap"
+
+[items.must-fail-toolchain-wrong-hash]
+what = "toolchain:fetch refuses an attested archive whose inputs-hash.txt differs from its tag's hash"
+environment = "linux"
+job = "must-fail"
+fixture = "toolchain-wrong-hash"
+check = "toolchain:fetch"

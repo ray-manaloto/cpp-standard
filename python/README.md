@@ -14,4 +14,5 @@ rises. A change that lowers it says why in its commit message and pull request.
 | `suites` | `mise run suites:cov` (the `suites-cov` hk step) | floor in `suites/pyproject.toml` |
 | `artifact` | `mise run artifact:cov` (the `artifact-cov` hk step) | floor in `artifact/pyproject.toml` |
 | `toolchain` | `mise run toolchain:cov` (the `toolchain-cov` hk step) | floor in `toolchain/pyproject.toml` |
+| `gate` | `mise run gate:cov` (the `gate-cov` hk step) | floor in `gate/pyproject.toml` |
 | `guards` | none here | No floor: a byte-for-byte copy of dotfiles' `python/guards`, gated at 100% there. |
