@@ -5,9 +5,11 @@
   python -I herdrtab.py close --id TAB_ID
 
 `tab` finds the space whose tabs list $HC_TERMINAL_ID in `herdr-app ls`, opens the tab there with `tab.new` (Codex as
-`codex-hc`, Claude as `claude`, the task as the last argv word), and reads the new terminal with `hc read` until the
-start of the task text is on its screen. It prints one JSON line {"name","space","tab","terminal"} and, as the last
-line, `name (terminal)`. Exit 0: the task arrived. Exit 2: usage, or `herdr-app` failed, or no space lists this
+`codex-hc`, Claude as `claude`, the task as the last argv word and, for Claude, `-n <name>` before it), and reads the
+new terminal with `hc read` until the start of the task text is on its screen. The name is `<N>-<stamp>` (#303), the
+stamp of tabname.stamp() at launch, unless `N` already carries one: the same string names the tab and, for Claude,
+the session. It prints one JSON line {"name","space","tab","terminal"} and, as the last line, `name (terminal)`.
+Exit 0: the task arrived. Exit 2: usage, or `herdr-app` failed, or no space lists this
 terminal; nothing opened and `hc run` is never the fallback. Exit 4: a tab opened but a trust dialog is open or the
 task never appeared; the screen is named on stderr, nothing more is sent to the tab, and the tab stays open for the
 owner. `close` closes a tab of the current space and refuses (exit 2) one that is in another space or is unknown.
@@ -19,6 +21,12 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))  # python -I leaves the script's directory off sys.path
+import tabname
 
 USAGE, HANDOFF = 2, 4
 # Markers taken from captured screens of Claude Code 2.1.3xx tabs, and Codex's own directory-trust prompt.
@@ -146,13 +154,25 @@ def tab_cmd(args: argparse.Namespace) -> int:
         raise TabError(msg)
     space = find_space()
     folder = os.path.realpath(args.folder)
-    reply = open_tab(space, args.name, folder, [AGENTS[args.agent], args.task])
+    now = datetime.now().astimezone()
+    name = (
+        args.name
+        if tabname.is_stamped(args.name)
+        else tabname.make_name(args.name, now)
+    )
+    argv = [AGENTS[args.agent]]
+    if args.agent == "claude":
+        argv += [
+            "-n",
+            name,
+        ]  # #303: the session starts under the tab's own stamped name
+    reply = open_tab(space, name, folder, [*argv, args.task])
     terminal = reply["terminal"]
     ok, why = watch(terminal, args.wait, task=args.task)
     sys.stdout.write(
         json.dumps(
             {
-                "name": args.name,
+                "name": name,
                 "space": space,
                 "tab": reply["tab"],
                 "terminal": terminal,
@@ -162,11 +182,11 @@ def tab_cmd(args: argparse.Namespace) -> int:
     )
     if not ok:
         sys.stderr.write(
-            f"herdrtab: {args.name} ({terminal}): {why}; nothing more is sent to it, "
+            f"herdrtab: {name} ({terminal}): {why}; nothing more is sent to it, "
             f"the tab stays open (close it: herdrtab close --id {reply['tab']})\n"
         )
         return HANDOFF
-    sys.stdout.write(f"{args.name} ({terminal})\n")
+    sys.stdout.write(f"{name} ({terminal})\n")
     return 0
 
 

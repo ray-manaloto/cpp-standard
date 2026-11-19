@@ -1,9 +1,10 @@
-"""Check herdrtab.py against #200's acceptance lines, offline: stand-in herdr-app and hc executables on PATH, never a
-real herdr tab. Prints one line per case and exits 1 when any fails.
+"""Check herdrtab.py against #200's and #303's acceptance lines, offline: stand-in herdr-app and hc executables on
+PATH, never a real herdr tab. Prints one line per case and exits 1 when any fails.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -84,6 +85,16 @@ def tab_new(calls: list[list[str]]) -> list[list[str]]:
     return [c for c in calls if c[:3] == ["herdr-app", "do", "tab.new"]]
 
 
+# The stamp #303 puts on a tab name, after the base ("w1"): the D61 shape with its offset cut to the hour.
+STAMP = re.compile(r"\d{8}T\d{6}\.\d{9}[+-]\d{2}$")
+
+
+def new_name(calls: list[list[str]]) -> str:
+    """The --name the one tab.new call carried."""
+    (new,) = tab_new(calls)
+    return new[new.index("--name") + 1]
+
+
 def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
     def tab(agent: str, task: str = TASK, screen: str | None = None) -> tuple:
         return call(
@@ -97,12 +108,45 @@ def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
         (new,) = tab_new(calls)
         lines = out.splitlines()
         info = json.loads(lines[0])
+        name = new[new.index("--name") + 1]
         return (
             code == 0
             and new[new.index("--space") + 1] == "sp2"
-            and json.loads(new[-1]) == [first, TASK]
-            and lines[-1] == "w1 (t9)"
+            and name.startswith("w1-")
+            and STAMP.fullmatch(name.removeprefix("w1-")) is not None
+            and json.loads(new[-1])
+            == ([first, "-n", name, TASK] if agent == "claude" else [first, TASK])
+            and lines[-1] == f"{name} (t9)"
+            and info["name"] == name
             and info["tab"] == "tbnew"
+        )
+
+    def stamped_kept() -> bool:
+        fixed = "w1-20261119T120850.005365000-06"
+        code, out, _, calls = call(
+            root,
+            [
+                "tab",
+                "--agent",
+                "claude",
+                "--name",
+                fixed,
+                "--task",
+                TASK,
+                "--wait",
+                "1",
+            ],
+            screen=TASK,
+        )
+        (new,) = tab_new(calls)
+        lines = out.splitlines()
+        info = json.loads(lines[0])
+        return (
+            code == 0
+            and new[new.index("--name") + 1] == fixed
+            and json.loads(new[-1]) == ["claude", "-n", fixed, TASK]
+            and lines[-1] == f"{fixed} (t9)"
+            and info["name"] == fixed
         )
 
     def no_space(ls_fail: bool, spaces: object) -> bool:
@@ -122,11 +166,12 @@ def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
 
     def not_arrived(screen: str, reason: str) -> bool:
         code, out, err, calls = tab("claude", screen=screen)
+        name = new_name(calls)
         sends = [c for c in calls if c[0] == "hc" and c[1] != "read"]
         return (
             code != 0
             and reason in err
-            and "w1 (t9)" in err
+            and f"{name} (t9)" in err
             and not sends
             and out.count("\n") == 1
         )
@@ -161,6 +206,7 @@ def cases(root: Path) -> list[tuple[str, Callable[[], bool]]]:
             lambda: opens("claude", "claude"),
         ),
         ("codex tab starts codex-hc", lambda: opens("codex", "codex-hc")),
+        ("an already stamped --name is used as is", stamped_kept),
         (
             "herdr-app ls fails: nothing opened, no hc run",
             lambda: no_space(True, SPACES),
