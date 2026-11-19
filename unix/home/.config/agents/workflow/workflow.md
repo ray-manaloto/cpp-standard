@@ -68,6 +68,27 @@ Before the first ticket in a repository, `/work` runs setup once: `setup-matt-po
 `triage` is for issues other people filed; `diagnosing-bugs` replaces step 1 for a bug;
 `wayfinder` comes before step 2 when the work spans many sessions.
 
+## Rounds
+
+A round is one queue item the coordinator hands to a lead: a ticket, a spec, a tool round, a wiki
+build or a fix series. Its ID is `<repo-or-lane>-<yyyymmdd>-<slug>`. The coordinator records it with
+the installed `workflowtools`; replaying a command adds nothing.
+
+- **Hand-off.** In the same step as the lead's brief: `workflowtools round-open --round <ID>`, and
+  the ID goes in the brief. When a pull request belongs to the round:
+  `workflowtools round-pr --round <ID> --repo <owner/name> --number <N>`. It reads the pull request
+  from GitHub first and adds nothing when GitHub cannot (exit 2), so a wrong number never enters the
+  round. A round may have none, and one pull request may belong to several rounds.
+- **Close.** When the lead reports the round finished (see the close-out in [ship](ship.md)):
+  `workflowtools round-close --round <ID> --session <session> [--session <session> ...] --plan <plan or lane page>`.
+  It records each pull request's head commit at that moment. Exit 2 means GitHub did not answer
+  and nothing was written: run it again, and if the same pull request keeps failing (its repository
+  is no longer readable), hand it to the owner. Exit 1 means the round was never opened
+  or is already closed. A replay prints the stored close and ignores new `--session` and `--plan`
+  values.
+- **Check-in.** `workflowtools report` prints the open rounds, or "unknown" with the reason when the
+  store cannot be read.
+
 ## Plans
 
 The roadmap lives in the main checkout; ticket plans live in a sibling `<repo>.plans/` folder,

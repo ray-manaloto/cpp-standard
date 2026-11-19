@@ -15,8 +15,8 @@ BLOCKERS = re.compile(r"— blocked by ([^;(]*)")
 GOAL = re.compile(r"^Implement https://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)\b", re.MULTILINE)
 
 
-def problem(path: str, detail: str) -> Finding:
-    return Finding(path=path, check=Check.tickets, detail=detail)
+def problem(path: str, detail: str, check: Check = Check.tickets) -> Finding:
+    return Finding(path=path, check=check, detail=detail)
 
 
 def sections(text: str) -> Iterator[tuple[int, list[tuple[int, str]]]]:
