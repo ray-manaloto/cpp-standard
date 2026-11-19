@@ -1402,8 +1402,8 @@ image. §4 and the `mac-gate.yml` row still say vanilla; the M3 PR that adds
   and refuses an untrusted, unknown or non-git folder (exit 3); if a trust
   dialog appears or no ready prompt shows within `--wait` (default 20 s),
   it hands the tab to the owner without sending keys (exit 4). A test tab
-  runs only in `default` or `plan` mode (refusing `auto`,
-  `bypassPermissions` and `dontAsk`), with `--strict-mcp-config`,
+  refuses the `auto`, `bypassPermissions` and `dontAsk` permission
+  modes. It runs with `--strict-mcp-config`,
   `--no-chrome` and stripped `CLAUDE_CODE_*` variables, and `testguard.py`
   (its first, fail-closed `PreToolUse` hook) allows only the run's listed
   `--tools`, never allows shell tools (`Bash`, `Monitor`, `PowerShell`),
@@ -2576,7 +2576,7 @@ and workflow tooling (§13). None is a C++ Level 1 gate item.
 | `mise.ci.toml`, `mise.ci.lock`, `.mise/locks/mise.ci/pipx-datamodel-code-generator/0.89.0/` | Linux-only tools loaded under `MISE_ENV=ci` by CI's `lint` job: Python 3.14.8 and 3.15.2, `datamodel-code-generator` 0.89.0 (with uv lock sidecar), `uv` 0.13.9, `ast-grep` 0.51.3 and `conda:zsh` 5.9.2 (§13, D163, D168). |
 | `.mise/tasks/privacy/scan` **(O)** | `privacy:scan [--outgoing]`: runs `repotools privacy-scan` with runtime `$HOME` and `$USER` patterns (§13). |
 | `.mise/tasks/uv/cache-warm` **(O)** | `uv:cache-warm`: warms uv's cache online into a temporary directory for `repotools`' offline tests; run in CI's `lint` job and after any `uv` pin bump (§13, D168). |
-| `.github/workflows/author-email.yml` **(O)** | Advisory push-to-`main` check (`permissions: {}`, no checkout or token): refuses any pushed commit whose author or committer email is not a GitHub noreply address (§6, §13, D169). |
+| `.github/workflows/author-email.yml` **(O)** | Advisory push-to-`main` check (`permissions: {}`, no checkout or token): after the push, its job fails when a pushed commit's author or committer email is not a GitHub noreply address; it blocks nothing (§6, §13, D169). |
 | `docs/agents/{domain,issue-tracker,triage-labels}.md` | Project conventions read by agent skills, linked from `AGENTS.md` (§13). |
 | `python/README.md`, `.mise/tasks/{agents,artifact,pins,suites}/cov` **(O)**, `.mise/tasks/pctools/{check,codegen,lock,sync,test}` **(O)** | Per-package Python coverage floors (`python/README.md`), coverage tasks for standard-library scripts, and `pctools`' own lint/codegen/test gate (§5). |
 | `python/suites/{record,record_check}.py`, `.mise/tasks/test/times` **(O)** | Standard-library suite timing recorder wrapping `repo`, `workflow` and `pctools` pytest suites, and `test:times [--markdown]` reader (§5). |
