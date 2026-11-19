@@ -26,7 +26,10 @@ elif name == "ssh" and sys.argv[-1] == "cat /proc/loadavg; nproc":
     print(f"0.50 {{os.environ.get('STUB_PC_LOAD', '1.00')}} 0.40 2/900 4242")
     print(os.environ.get("STUB_PC_CORES", "16"))
 elif name == "docker" and sys.argv[1:3] == ["context", "inspect"]:
-    print({{"pcctx": "ssh://dev@pc", "localctx": "unix:///var/run/docker.sock"}}.get(sys.argv[3], ""))
+    known = {{"pcctx": "ssh://dev@pc", "localctx": "unix:///var/run/docker.sock"}}
+    if sys.argv[3] not in known:
+        sys.exit(1)
+    print(known[sys.argv[3]])
 else:
     sys.exit(97)
 """
@@ -498,12 +501,12 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             "hook: a target set by an earlier command is seen",
             lambda: aims(
                 there,
-                "export DOCKER_HOST=ssh://pc && docker run x",
                 "export DOCKER_HOST=ssh://pc; docker run x",
                 "export DOCKER_HOST=ssh://pc\ndocker run x",
                 "DOCKER_HOST=ssh://pc; docker run x",
-                "export DOCKER_CONTEXT=pcctx && docker build .",
-                "docker context use pcctx && docker run x",
+                "export DOCKER_CONTEXT=pcctx; docker build .",
+                "docker context use pcctx; docker run x",
+                "DOCKER_HOST=ssh://pc docker run x | tee log",
             ),
         ),
         (
@@ -628,9 +631,210 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
                 hook(nobody, command)[0] == 0
                 for command in (
                     "git commit -F - <<'EOF'\ndocker run x\nEOF",
-                    "bash script.sh <<EOF\ndocker run x\nEOF",
+                    "gh issue create --body-file - <<'EOF'\ndocker run x\nEOF",
+                    "git commit -m \"$(cat <<'EOF'\nit's 5\" wide\ndocker run x\nEOF\n)\"",
                 )
             ),
+        ),
+        (
+            "hook: a substitution inside a docker or ssh call does not cut it",
+            lambda: (
+                aims(
+                    here,
+                    "docker compose -f $(pwd)/compose.yml up -d",
+                    "docker compose -f `pwd`/compose.yml up -d",
+                    "docker compose -f <(cat a.yml) up -d",
+                    "docker --log-level $(echo debug) run x",
+                    'docker compose -f "$(pwd)/compose.yml" up -d',
+                    "n=$(( $(docker run --rm img nproc) * 2 ))",
+                )
+                and aims(
+                    there,
+                    "docker -H ssh://pc compose -f $(pwd)/compose.yml up -d",
+                    "ssh -i $(pwd)/key pc docker run x",
+                    "ssh -o ProxyCommand=$(pwd)/px pc docker run x",
+                    "ssh $(whoami)@pc docker run x",
+                    "n=$(( $(ssh pc docker run --rm img nproc) * 2 ))",
+                )
+                and aims(
+                    there,
+                    "docker compose -f $(pwd)/compose.yml up -d",
+                    extra=at_pc,
+                )
+            ),
+        ),
+        (
+            "hook: a docker or ssh target made by a substitution: blocked, both grants held",
+            lambda: all(
+                (also("mac"), also("pc"), blocked(me, command, "not expanded"))[2]
+                for command in (
+                    "ssh $(cat pchost) docker run x",
+                    "docker -H $(cat pchost) run x",
+                    "docker --context `cat ctxname` run x",
+                    "ssh ~pc docker run x",
+                )
+            ),
+        ),
+        (
+            "hook: a here-document is read as commands whatever receives it",
+            lambda: (
+                aims(
+                    here,
+                    "bash -euo pipefail <<'EOF'\ndocker run x\nEOF",
+                    "bash -s -- a <<'EOF'\ndocker run x\nEOF",
+                    "bash /dev/stdin <<'EOF'\ndocker run x\nEOF",
+                    "sudo -s <<'EOF'\ndocker run x\nEOF",
+                    "su - dev <<'EOF'\ndocker run x\nEOF",
+                    "fish <<'EOF'\ndocker run x\nEOF",
+                    "at now <<'EOF'\nit's time\ndocker run x\nEOF",
+                    "bash -euo pipefail -c 'docker run x'",
+                    "echo -e 'docker run x' | bash",
+                )
+                and aims(
+                    there,
+                    "sshpass -p x ssh pc bash <<'EOF'\ndocker run x\nEOF",
+                    "autossh -M 0 pc <<'EOF'\ndocker run x\nEOF",
+                    "mosh pc -- bash <<'EOF'\ndocker run x\nEOF",
+                    "ssh pc bash -euo pipefail -s -- a <<'EOF'\ndocker run x\nEOF",
+                    "sudo -s <<'EOF'\nssh pc docker run x\nEOF",
+                )
+                and aims(
+                    there,
+                    "bash -euo pipefail <<'EOF'\ndocker run x\nEOF",
+                    "sudo -s <<'EOF'\ndocker run x\nEOF",
+                    extra=at_pc,
+                )
+            ),
+        ),
+        (
+            "hook: wrappers and a redirection before the command word",
+            lambda: (
+                aims(
+                    here,
+                    ">log docker run x",
+                    "2>/dev/null docker run x",
+                    "< in.txt docker run -i x",
+                    "sudo -iu root docker run x",
+                    "flock /tmp/l docker run x",
+                    "fnox exec -- docker run x",
+                    "true |& docker run -i x",
+                )
+                and aims(there, "</dev/null ssh pc docker run x")
+            ),
+        ),
+        (
+            "hook: a start only the plain reading finds needs the grant, the PC's too when the PC is named",
+            lambda: (
+                aim("trap 'cleanup; docker run x' EXIT")[:2] == [2, 0]
+                and aim("trap 'cleanup; ssh pc docker run x' EXIT") == [2, 2, 2, 0]
+            ),
+        ),
+        (
+            "hook: docker --config names the folder whose current context is read",
+            lambda: (
+                (pcdir := Path(env["DOCKER_CONFIG"]).parent / "docker-pc").mkdir(
+                    exist_ok=True
+                ),
+                (pcdir / "config.json").write_text('{"currentContext": "pcctx"}'),
+                aims(there, f"docker --config {pcdir} run x"),
+            )[2],
+        ),
+        (
+            "hook: arithmetic and let are not here-documents",
+            lambda: all(
+                hook(nobody, command)[0] == 0
+                for command in (
+                    "(( n = 1 << 3 )); docker ps",
+                    "let n=1<<3; docker ps",
+                    "echo $[1<<2]; docker ps",
+                )
+            ),
+        ),
+        (
+            "hook: a here-document open at the end of the command: blocked",
+            lambda: (
+                also("mac"),
+                also("pc"),
+                blocked(me, "docker run x; cat <<EOF", "cannot read"),
+            )[2],
+        ),
+        (
+            "hook: a target moved off the PC in a subshell or after && needs both grants",
+            lambda: aims(
+                [2, 2, 2, 0],
+                "(unset DOCKER_HOST); docker run x",
+                "false && unset DOCKER_HOST; docker run x",
+                extra=at_pc,
+            ),
+        ),
+        (
+            "hook: a named buildx builder needs both grants, the default one only the Mac's",
+            lambda: (
+                aims(
+                    [2, 2, 2, 0],
+                    "docker buildx build --builder pcbuilder .",
+                    "BUILDX_BUILDER=pcbuilder docker build .",
+                )
+                and aims(
+                    [2, 2, 2, 0],
+                    "docker build .",
+                    extra={"BUILDX_BUILDER": "pcbuilder"},
+                )
+                and aims(here, "docker buildx build --builder default .")
+                and aims(there, "docker buildx bake", extra=at_pc)
+                and aims(here, "docker buildx bake")
+            ),
+        ),
+        (
+            "hook: a docker context that cannot be inspected: blocked, both grants held",
+            lambda: (
+                also("mac"),
+                also("pc"),
+                blocked(me, "docker --context nosuchctx run x", "cannot be inspected"),
+            )[2],
+        ),
+        (
+            "hook: a target change outside a flat list needs both grants",
+            lambda: (
+                aims(
+                    [2, 2, 2, 0],
+                    "unset DOCKER_HOST & docker run x",
+                    "unset DOCKER_HOST | true; docker run x",
+                    "function f { unset DOCKER_HOST; }; docker run x",
+                    "for i in; do unset DOCKER_HOST; done; docker run x",
+                    extra=at_pc,
+                )
+                and aims(
+                    [2, 2, 2, 0],
+                    "export DOCKER_HOST=ssh://pc; (unset DOCKER_HOST); docker run x",
+                    "(export DOCKER_HOST=ssh://pc); docker run x",
+                    "export DOCKER_HOST=ssh://pc && docker run x",
+                    "export DOCKER_CONTEXT=pcctx && docker build .",
+                    "docker context use pcctx && docker run x",
+                    "docker buildx use pcbuilder; docker build .",
+                )
+                and aims(here, "unset DOCKER_HOST; docker run x", extra=at_pc)
+                and aims(there, "ssh pc 'export A=1 && docker run x | tee log'")
+                and aims(
+                    here,
+                    "bash -c 'cd /x && docker build .' arg0",
+                    "docker run --rm img sh -c 'cd /x && make'",
+                    "echo img | xargs sh -c 'docker run \"$1\"' _",
+                )
+                and aims(there, "bash -c 'true && docker -c pcctx run x'")
+            ),
+        ),
+        (
+            "hook: an unknown context in the environment blocks, whatever the command names",
+            lambda: (
+                also("mac"),
+                also("pc"),
+                blocked(
+                    me | {"DOCKER_CONTEXT": "nosuchctx"},
+                    "docker run x",
+                    "cannot be inspected",
+                ),
+            )[2],
         ),
         (
             "hook: lines after a here-document or a shift are still read",

@@ -52,7 +52,7 @@ PAUSE_LINE = 11.0
 # Container work that starts something heavy: run, create, build (also buildx, image build), compose up (global
 # options such as --context may come before compose).
 HEAVY = re.compile(
-    r"\bdocker(?:\s+\S+)*?\s+(?:run|create|build|buildx\s+build|image\s+build)\b"
+    r"\bdocker(?:\s+\S+)*?\s+(?:run|create|build|buildx\s+(?:build|bake)|image\s+build)\b"
     r"|\bdocker(?:-compose\b|(?:\s+\S+)*?\s+compose\b)(?:\s+\S+)*?\s+up\b",
 )
 PRIVILEGED = re.compile(
@@ -308,7 +308,11 @@ def context_host(name: str) -> str | None:
         timeout=10,
         check=False,
     )
-    return host_of(done.stdout.strip()) if done.returncode == 0 else None
+    if done.returncode != 0:
+        # Docker would not start anything in a context it cannot find; neither grant fits it.
+        msg = f"the docker context {name} cannot be inspected"
+        raise ValueError(msg)
+    return host_of(done.stdout.strip())
 
 
 def is_pc(host: str | None) -> bool:
@@ -330,6 +334,82 @@ def ssh_call(words: list[str], body: str = "") -> tuple[str | None, str]:
     return host_of(rest[i]) if "://" in rest[i] else rest[i].rsplit("@", 1)[-1], remote
 
 
+SPAN = ("$(", "<(", ">(", "`", "$[")
+# What a substitution leaves in its word: no spaces, so the word stays one word, and a $ so a target made of it is
+# refused as unexpanded.
+HOLE = "$()"
+
+
+def quote_end(command: str, i: int) -> int:
+    """The index after the double quote that opens at i, past any substitution inside it."""
+    j = i + 1
+    while j < len(command):
+        if command[j] == "\\":
+            j += 2
+        elif command[j] == '"':
+            return j + 1
+        elif command.startswith(("$(", "`"), j):
+            j = span_end(command, j)
+        else:
+            j += 1
+    raise ValueError('a " quote never closes')
+
+
+def span_end(command: str, i: int) -> int:
+    """The index after the substitution that opens at i: $(...), <(...), >(...), `...`, $((...)) or $[...].
+    Quotes, nested substitutions and here-documents inside it are stepped over whole, so a ) or a quote in a
+    commit message's here-document does not end it early."""
+    size = len(command)
+    if command[i] == "`":
+        j = i + 1
+        while j < size and command[j] != "`":
+            j += 2 if command[j] == "\\" else 1
+        if j >= size:
+            raise ValueError("a ` never closes")
+        return j + 1
+    if command.startswith("$[", i):
+        return command.index("]", i) + 1 if "]" in command[i:] else size
+    arithmetic = command.startswith(("$((", "(("), i)
+    j = command.index("(", i) + 1
+    depth = 1
+    waiting: list[tuple[str, bool]] = []
+    while j < size:
+        char = command[j]
+        if char == "\\":
+            j += 2
+        elif char == "'":
+            if "'" not in command[j + 1 :]:
+                raise ValueError("a ' quote never closes")
+            j = command.index("'", j + 1) + 1
+        elif char == '"':
+            j = quote_end(command, j)
+        elif command.startswith(SPAN, j):
+            j = span_end(command, j)
+        elif not arithmetic and command.startswith("<<<", j):
+            j += 3
+        elif not arithmetic and (found := HEREDOC.match(command, j)):
+            waiting.append((found.group(3).replace("\\", ""), bool(found.group(1))))
+            j = found.end()
+        elif char == "\n" and waiting:
+            for word, tabs in waiting:
+                closed = False
+                while j < size and not closed:
+                    end = command.find("\n", j + 1)
+                    end = size if end < 0 else end
+                    line = command[j + 1 : end]
+                    closed = (line.lstrip("\t") if tabs else line) == word
+                    j = end
+                if not closed:
+                    raise ValueError(UNCLOSED.format(word))
+            waiting.clear()
+        else:
+            depth += (char == "(") - (char == ")")
+            j += 1
+            if not depth:
+                return j
+    raise ValueError("a ( never closes")
+
+
 def segments(command: str) -> list[tuple[str, str, bool]]:
     """The command's simple commands in order, each with the here-document text sent to it and whether it reads
     the command before it through a pipe. Separators (&& || ;
@@ -341,12 +421,27 @@ def segments(command: str) -> list[tuple[str, str, bool]]:
         tuple[str, bool, list[str]]
     ] = []  # delimiter, whether <<-, the owning command's body
     quote = ""
+    inside: list[tuple[str, str, bool]] = []  # the commands inside substitutions
     i, size = 0, len(command)
     while i < size:
         char = command[i]
         text = out[-1][0]
         step = 1
-        if quote:
+        if (quote == '"' and command.startswith(("$(", "`"), i)) or (
+            not quote and command.startswith(SPAN, i)
+        ):
+            # A substitution is part of the word it stands in; its own commands are read after this one.
+            step = span_end(command, i) - i
+            if not command.startswith("$[", i):
+                opened = 1 if char == "`" else 2
+                within = command[i + opened : i + step - 1]
+                if command.startswith("$((", i):
+                    # Arithmetic, or a subshell inside a substitution: a << in it is a shift, and a
+                    # substitution inside it still runs.
+                    within = within.replace("<<", "  ")
+                inside += segments(within)
+            text.append(HOLE)
+        elif quote:
             if char == "\\" and quote == '"' and i + 1 < size:
                 text.append(command[i : i + 2])
                 step = 2
@@ -363,14 +458,15 @@ def segments(command: str) -> list[tuple[str, str, bool]]:
             text.append(char)
         elif char == "#" and (not text or text[-1].isspace()):
             step = (command.find("\n", i) if "\n" in command[i:] else size) - i
-        elif command.startswith("$((", i) and "))" in command[i:]:
-            # Arithmetic: its << is a shift, not a here-document.
-            step = command.index("))", i) + 2 - i
-            text.append(command[i : i + step])
+        elif command.startswith("((", i) and not "".join(text).strip():
+            # An arithmetic command: its << is a shift, not a here-document.
+            step = span_end(command, i) - i
         elif command.startswith("<<<", i):
             text.append("<<<")
             step = 3
-        elif found := HEREDOC.match(command, i):
+        elif (found := HEREDOC.match(command, i)) and "".join(text).split()[:1] != [
+            "let"
+        ]:
             word = found.group(3).replace("\\", "")
             waiting.append((word, bool(found.group(1)), out[-1][1]))
             step = found.end() - i
@@ -409,7 +505,7 @@ def segments(command: str) -> list[tuple[str, str, bool]]:
         ("".join(text), "\n".join(body), piped)
         for text, body, piped in out
         if "".join(text).strip()
-    ]
+    ] + inside
 
 
 UNCLOSED = "the here-document {} never closes"
@@ -434,12 +530,29 @@ WRAPPERS: dict[str, frozenset[str]] = {
     "xargs": frozenset(
         {"-I", "-n", "-P", "-L", "-s", "-E", "-d", "-a", "-R", "-S", "-J"}
     ),
+    "sshpass": frozenset({"-p", "-f", "-d", "-P"}),
+    "flock": frozenset({"-w", "--timeout", "-E", "--conflict-exit-code"}),
+    "arch": frozenset({"-arch", "-e"}),
 }
+# Wrappers whose first plain word is their own (a duration, a lock file), not the command.
+OWN_WORD = frozenset({"timeout", "flock"})
+# Launchers that run the words after their `--`.
+LAUNCHERS = frozenset({"mise", "fnox"})
+REDIRECT = re.compile(r"\d*(?:>>?|<|&>>?)&?(.*)", re.DOTALL)
 # Builtins that set a variable for the commands after them, as export does.
 DECLARES = frozenset({"export", "declare", "typeset", "readonly", "local"})
 # Commands whose words or here-document go down a pipe to the command after them.
 PRINTS = frozenset({"echo", "printf", "cat", "tee"})
-UNEXPANDED = "the docker target {} holds a variable, which is not expanded here"
+UNEXPANDED = "the docker target {} holds a variable or a ~, which is not expanded here"
+# Commands whose here-document is handled by their own rule (a shell or ssh runs it, docker and the printers pass
+# it on as data); every other command's here-document is read as commands.
+# Commands that take a here-document as text and run none of it: a commit message, an issue body.
+TEXT_ONLY = frozenset({"git", "gh"})
+READS_BODY = (
+    [["eval"], ["ssh"], ["docker"], ["docker-compose"]]
+    + [[name] for name in sorted(PRINTS | TEXT_ONLY)]
+    + [[name] for name in ("bash", "sh", "zsh", "dash", "ksh")]
+)
 # Shells that run the text given after -c, or a here-document sent to them.
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 # Shell words that come before a command without being one: `do docker run x`, `then docker run x`, `{ docker ...`.
@@ -483,10 +596,12 @@ def wrapped(name: str, words: list[str], assigned: dict[str, str]) -> list[str]:
             assigned[word.partition("=")[2]] = ""
         elif name == "env" and word in {"-", "-i", "--ignore-environment"}:
             assigned.update(DOCKER_HOST="", DOCKER_CONTEXT="")
-        i += 2 if word in takes else 1
+        # -iu root: the last letter of a group of short options may take the value.
+        short = "-" + word[-1] if not word.startswith("--") else word
+        i += 2 if word in takes or short in takes else 1
     if i < len(words) and words[i] == "--":
         i += 1
-    return words[i + 1 :] if name == "timeout" else words[i:]
+    return words[i + 1 :] if name in OWN_WORD else words[i:]
 
 
 def command_words(text: str) -> tuple[dict[str, str], list[str]]:
@@ -504,10 +619,20 @@ def command_words(text: str) -> tuple[dict[str, str], list[str]]:
             words = words[1:]
         elif words[0] == "function":
             words = words[2:]
-        elif name == "mise" and words[1:2] in (["x"], ["exec"]) and "--" in words:
+        elif (found := REDIRECT.fullmatch(words[0])) and not words[0].startswith("<("):
+            # A redirection before the command word: >log docker run x.
+            words = words[1 if found.group(1) else 2 :]
+        elif name in LAUNCHERS and "--" in words:
             words = words[words.index("--") + 1 :]
         elif words[:2] == ["tailscale", "ssh"]:
             words = words[1:]
+        elif name == "autossh":
+            # autossh -M PORT HOST: the monitor port is its own, the rest is ssh's.
+            words = ["ssh", *words[3 if words[1:2] == ["-M"] else 1 :]]
+        elif name == "mosh":
+            # mosh HOST -- COMMAND: read as ssh HOST COMMAND.
+            rest = [w for w in words[1:] if not w.startswith("-") or w == "--"]
+            words = ["ssh", *(w for w in rest if w != "--")]
         elif name in WRAPPERS:
             words = wrapped(name, words[1:], assigned)
         else:
@@ -521,11 +646,15 @@ def shell_text(words: list[str], body: str) -> str:
     here-document sent to a shell that names no script."""
     if words[0] == "eval":
         return " ".join(words[1:])
-    for i, word in enumerate(words[1:], 1):
-        if not word.startswith("-") or word == "--":
-            return ""  # a script file, which is not read
-        if not word.startswith("--") and "c" in word:
-            return words[i + 1] if i + 1 < len(words) else ""
+    i = 1
+    while i < len(words) and words[i].startswith(("-", "+")) and words[i] != "--":
+        word = words[i]
+        # -o and -O take the next word: bash -euo pipefail -c '...'.
+        named = not word.startswith("--") and ("o" in word or "O" in word)
+        if word.startswith("-") and not word.startswith("--") and "c" in word:
+            return "\n".join(words[i + 1 + named : i + 2 + named] + [body])
+        i += 1 + named
+    # A shell reads a here-document as commands whether or not it is also given words (bash -s a b).
     return body
 
 
@@ -591,9 +720,26 @@ def pc_reason(given: dict[str, str], env: dict[str, str]) -> str | None:
 
 
 def unexpanded(target: str) -> None:
-    """Refuse a target that names a variable: read as written it would look like Mac work."""
-    if "$" in target:
+    """Refuse a target the shell would expand (a variable, a leading ~): read as written it would look like
+    Mac work."""
+    if "$" in target or target.startswith("~"):
         raise ValueError(UNEXPANDED.format(target))
+
+
+def loose(text: str, env: dict[str, str]) -> list[tuple[str, str | None]]:
+    """The starts in text that may be commands or may be prose, read a line at a time: a line that cannot be
+    read as a command (an apostrophe in a commit message) is read again without its quotes, then left out."""
+    out: list[tuple[str, str | None]] = []
+    for line in text.split("\n"):
+        for attempt in (line, re.sub(r"[\"'`()]", " ", line)):
+            try:
+                out += started(attempt, env)
+            except ValueError as error:
+                if "not expanded" in str(error) or "inspected" in str(error):
+                    raise
+                continue
+            break
+    return out
 
 
 def started(command: str, env: dict[str, str]) -> list[tuple[str, str | None]]:
@@ -608,17 +754,25 @@ def started(command: str, env: dict[str, str]) -> list[tuple[str, str | None]]:
         assigned, words = command_words(text)
         fed = "\n".join(filter(None, (body, sent if piped else "")))
         sent = ""
+        if body and words[:1] not in READS_BODY:
+            # Any other receiver may run its here-document (sudo -s, su, fish, at): read each line as a command.
+            out += loose(body, shell | assigned)
         if not words:
             shell.update(assigned)
         elif words[0] in PRINTS:
-            sent = body if words[0] in {"cat", "tee"} else " ".join(words[1:])
+            sent = fed if words[0] in {"cat", "tee"} else " ".join(words[1:])
         elif words[0] in DECLARES:
             shell.update(w.split("=", 1) for w in words[1:] if "=" in w)
         elif words[0] == "unset":
             for word in words[1:]:
                 shell.pop(word, None)
         elif words[0] == "eval" or words[0] in SHELLS:
-            out += started(shell_text(words, fed), shell | assigned)
+            found = started(shell_text(words, fed), shell | assigned)
+            if not found and piped and HEAVY.search(fed):
+                # echo -e '...' | bash, printf '%s\n' '...' | sh: the words are not the text the shell gets,
+                # but a start among them counts.
+                found = [(fed, pc_reason({}, shell | assigned))]
+            out += found
         elif words[0] == "ssh":
             # The remote command is opaque to the word rules here; any heavy docker in it counts.
             target, remote = ssh_call(words, fed)
@@ -642,13 +796,117 @@ def started(command: str, env: dict[str, str]) -> list[tuple[str, str | None]]:
     return out
 
 
+PLAIN = re.compile(r"&&|\|\||[;|&\n]")
+# The -c of a shell (sh -c, bash -c) is not docker's -c, so it is no hint.
+PC_HINT = re.compile(
+    r"ssh|mosh|DOCKER_HOST|DOCKER_CONTEXT|--context|--host|(?<!\S)(?<!sh\s)-[cH]"
+)
+
+
+def plain_start(piece: str) -> bool:
+    """Whether a piece of the command text, split with no regard for quotes, has docker (or ssh running docker)
+    as its command word and starts container work."""
+    words = piece.split()
+    while words and (ASSIGNMENT.fullmatch(words[0]) or words[0] in WRAPPERS):
+        words = words[1:]
+    if words[:1] == ["ssh"]:
+        return bool(HEAVY.search(" ".join(words[1:])))
+    return bool(words and DOCKER.fullmatch(words[0]) and HEAVY.search(" ".join(words)))
+
+
+NOT_FLAT = re.compile(r"[(){}&|`]|\$\(|\b(?:if|while|until|case|for|select|function)\b")
+# A change of the docker target that outlasts its own command: unset, export and the like, a bare assignment,
+# docker context use. An assignment in front of a command is not one.
+TARGET_MOVE = re.compile(
+    r"\b(?:unset|export|declare|typeset|readonly|local)\b[^;&|\n]*DOCKER_(?:HOST|CONTEXT)"
+    r"|context\s+use"
+    r"|(?:^|[;&|\n({])\s*DOCKER_(?:HOST|CONTEXT)=\S*\s*(?:$|[;&|\n)}])"
+)
+BUILDER = re.compile(r"--builder[=\s]+(\S+)|\bBUILDX_BUILDER=(\S+)")
+BUILDER_USE = re.compile(r"\bbuildx\s+use\b")
+LOCAL_BUILDERS = frozenset({"", "default", "desktop-linux"})
+
+
+def points_at_pc(command: str, env: dict[str, str]) -> bool:
+    """Whether anything in the command's text or the environment names the PC."""
+    return bool(PC_HINT.search(command) or is_pc_word(command) or pc_reason({}, env))
+
+
+def unplaced(
+    command: str, env: dict[str, str], mac_work: bool, pc_work: bool
+) -> str | None:
+    """Why this command's work needs both grants, or None. The parser's reading of where docker is aimed is
+    trusted only in a flat list of commands separated by ; or newlines. In anything else (a subshell, a
+    pipeline, &&, a loop, a function) a command that points at the PC needs both grants when some work was read
+    as the Mac's or when it changes the docker target. A buildx builder is never followed."""
+    if (
+        NOT_FLAT.search(command)
+        and (mac_work or TARGET_MOVE.search(command))
+        and (pc_work or points_at_pc(command, env))
+    ):
+        return "a command that points at the PC and is not a flat list"
+    if BUILDER_USE.search(command):
+        return "a buildx builder change, which this guard cannot place"
+    named = [a or b for a, b in BUILDER.findall(command)] + [
+        env.get("BUILDX_BUILDER", "")
+    ]
+    for name in named:
+        if name.strip("\"'") not in LOCAL_BUILDERS:
+            return f"buildx builder {name}, which this guard cannot place"
+    return None
+
+
+def is_pc_word(command: str) -> bool:
+    return PC_ALIAS in re.split(r"[^\w.-]+", command)
+
+
+def without_text(command: str) -> str:
+    """The command less the here-documents that are text and nothing runs: one given to git or gh, and one
+    given to cat, tee, echo or printf that does not go on down a pipe."""
+    parts = segments(command)
+    for i, (text, body, _) in enumerate(parts):
+        words = command_words(text)[1]
+        onward = i + 1 < len(parts) and parts[i + 1][2]
+        if (
+            body
+            and words
+            and (words[0] in TEXT_ONLY or (words[0] in PRINTS and not onward))
+        ):
+            command = command.replace(body, "", 1)
+    return command
+
+
+def placed(command: str, env: dict[str, str]) -> list[tuple[str, str | None]]:
+    """Each start in the command with why it is the PC's (None: the Mac's). A command that is both gets a row
+    of each kind, so it needs both grants."""
+    work = started(command, env)
+    missed = sum(map(plain_start, PLAIN.split(without_text(command)))) - len(work)
+    if missed > 0:
+        # The guard this one replaced split the text at every ; & | and newline and looked at each piece. A
+        # start it finds that the parser above did not is not let through: it needs this machine's grant, and
+        # the PC's too when anything in the command or the environment points there.
+        work.append((command, None))
+        if points_at_pc(command, env):
+            work.append((command, "a start this guard could not place"))
+    if work and (
+        why := unplaced(
+            command,
+            env,
+            any(not reason for _, reason in work),
+            any(reason for _, reason in work),
+        )
+    ):
+        work += [(command, None), (command, why)]
+    return work
+
+
 def guard_command(command: str, env: dict[str, str]) -> None:
     """Refuse a shell command that starts container work without the live grant of the host it is aimed at, or
     under too high a load there: the pc grant and the PC's load for work aimed at the PC, else the Mac's."""
     if not DOCKER.search(command):
         return
     try:
-        work = started(command, env)
+        work = placed(command, env)
     except ValueError as error:
         # Guessing here is how PC work was once read as Mac work; a command that names docker and cannot be
         # read does not run.
