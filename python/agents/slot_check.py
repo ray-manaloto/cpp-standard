@@ -34,6 +34,7 @@ elif name in ("docker", "docker-compose") and sys.argv[1:3] == ["context", "insp
     print(known[sys.argv[3]])
 elif name in ("docker", "docker-compose"):
     print("real " + name + " " + json.dumps(sys.argv[1:]))
+    sys.exit(int(os.environ.get("STUB_DOCKER_EXIT", "0")))
 else:
     sys.exit(97)
 """
@@ -384,6 +385,19 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         ("/usr/bin/ssh pc docker run x", {}, there),
         ("docker run a && ssh pc docker run b", {}, there),
         ("cat <<EOF | ssh pc bash\ndocker run x\nEOF", {}, there),
+        # Round-4 shapes: a substitution in the ssh call, an ssh wrapper with a here-document.
+        ("ssh $(cat pchost) docker run x", {}, there),
+        ("ssh -i $(pwd)/key pc docker run x", {}, there),
+        ("sshpass -p x ssh pc bash <<'EOF'\ndocker run x\nEOF", {}, there),
+        ("DOCKER_HOST=ssh://pc docker compose -f $(pwd)/compose.yml up -d", {}, there),
+        # Round-4 shapes main read by its split; the shim decides them at exec time.
+        ("docker compose -f $(pwd)/compose.yml up -d", {}, here),
+        ("bash -euo pipefail <<'EOF'\ndocker run x\nEOF", {}, here),
+        ("sudo -s <<'EOF'\ndocker run x\nEOF", {}, here),
+        ("(( n = 1 << 3 )); docker ps", {}, free),
+        # As on main, the hook reads the inherited target, not one an earlier command clears; the shim then reads
+        # the real environment (here the Mac), so this command needs both grants.
+        ("unset DOCKER_HOST; docker run x", at_pc, there),
         # Rule 1 reads heavy docker after the ssh word, so an ssh call that comes first and starts nothing still
         # asks for the pc grant; the Mac start after it is the shim's (report-08 finding 2b, kept by rule 1).
         ("ssh pc true; docker run x", {}, there),
@@ -479,6 +493,18 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             done.returncode == 0
             and done.stdout == "real docker " + json.dumps(words) + "\n"
         )
+
+    def exit_kept() -> bool:
+        """Real docker's exit code comes back through the shim, on the fast path and after a verdict."""
+        granted()
+        fast = ["version", "--format", "{{.Client.Version}}"]
+        codes = [
+            run(shim_env(STUB_DOCKER_EXIT=code), *words)
+            for words, code in ((fast, "3"), (["run", "x"], "125"))
+        ]
+        return [done.returncode for done in codes] == [3, 125] and codes[
+            0
+        ].stdout == "real docker " + json.dumps(fast) + "\n"
 
     def shim_refuses() -> bool:
         """No grant: the shim's own message, and real docker never runs."""
@@ -873,6 +899,7 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         ("shim: a call that starts nothing needs no python", no_python),
         ("shim: a heavy call fails closed when slot.py cannot run", fails_closed),
         ("shim: real docker gets the words unchanged", argv_untouched),
+        ("shim: real docker's exit code comes back", exit_kept),
         ("shim: no grant, its own one-line refusal", shim_refuses),
         ("shim: PC work with the pc grant runs, the Mac's load not read", shim_pc),
         ("shim: its folder twice on PATH", shim_twice),
