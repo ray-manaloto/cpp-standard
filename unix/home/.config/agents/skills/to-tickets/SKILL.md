@@ -108,7 +108,8 @@ numbers and stop).
    Its `task_plan.md` starts `# Task Plan: #<number> <title>` and its `## Goal` is the line
    `Implement <issue URL>`. Never re-create a plan that exists.
 2. Replace the spec's section of the roadmap with the output of `workflowtools tickets --rebuild --spec <N>`: one
-   line per ticket, with its issue link, `PLAN_ID` and blockers.
+   line per ticket, with its issue link, `PLAN_ID` and blockers. The section heading must be `## … spec #<N> …`; a
+   line anywhere else makes `workflowtools tickets` fail and name the line.
 3. `workflowtools tickets --spec <N> --require-github --listing frontier` must exit 0. Show the owner the frontier.
 
 <issue-template>
