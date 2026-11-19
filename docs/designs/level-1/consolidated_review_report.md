@@ -1,7 +1,11 @@
 # Consolidated Goldfish review: D136 to D155
 
-Status: awaiting the owner's gate. Each finding needs the owner's mark, kept
-or dropped. Each decision's disposition stays "open" until the resolve step.
+Status: resolved
+
+The owner approved one resolution table for ticket #142 (2026-11-18); the
+owner did not mark the findings one by one. The resolve step wrote each
+finding's Owner line from that table and set each decision's disposition
+in the Disposition table.
 
 - **Design revision reviewed:** `docs/designs/environment-standard.md` at
   `main` commit 283866d. The design text was last changed in 3e0dfa8 (#140)
@@ -12,8 +16,8 @@ or dropped. Each decision's disposition stays "open" until the resolve step.
   one consolidated pass, the "uninterrupted" preset. The design was not
   edited. The stage reports of the D99-D135 review (`zoom_out_report.md`,
   `critic_report.md` and the others) are left as they were.
-  `goldfish_review_report.md` is the resolve step's file and is left for that
-  step.
+  `goldfish_review_report.md` holds the resolved D99-D135 review and is left
+  as it was; this review's resolved state is recorded in this file.
 
 ## Scope
 
@@ -114,7 +118,8 @@ Each finding has these fields:
 - **Codex review:** the verdict on the Codex adversarial review's point,
   checked against the cited files.
 - **Recommendation:** the Elephant's suggestion to the owner.
-- **Owner:** the owner's mark, kept or dropped. It is empty until the gate.
+- **Owner:** kept or dropped, written by the resolve step from the resolution
+  table the owner approved. It is empty until the gate.
 
 #### F1. Admission control on the PC runner slots is missing, so no cpp-standard slot may be activated before M2's controls
 
@@ -163,7 +168,8 @@ Each finding has these fields:
   (agent-secrets.bash, line 106). The blocker narrows to activating the
   cpp-standard slot (migration plan, lines 222-225).
 - **Recommendation:** keep, narrowed as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed; moved to
+  #218.
 
 #### F2. The inputs that configure the hosts are not trust roots, and nothing says who applies them
 
@@ -205,7 +211,8 @@ Each finding has these fields:
   root, not a trust root, by design (design lines 979-986 and 1016-1024).
   The trust gap stands.
 - **Recommendation:** keep, narrowed as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; #227
+  decides the trust-root list, and the remainder moved to #247.
 
 #### F3. M2 entry needs a decision: who starts containers and certification after isolation, where agents run, and what each may read
 
@@ -238,7 +245,8 @@ Each finding has these fields:
   852-854; D137), so the unconditional Blocker was overstated. The post-M2
   launcher and the stale rejection are real gaps.
 - **Recommendation:** keep, as a Major M2 entry decision.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed; moved to
+  #219.
 
 #### F4. A container agent can run code on the PC runner slots
 
@@ -282,7 +290,8 @@ Each finding has these fields:
 - **Raw:** cp-6, zo-5, ir-13, ic-6, cb-5, des-5, des-22.
 - **Codex review:** holds. D155 assigns the two Apps to their environments, but the design's Glossary and §6 still list one; the PC-only Doppler config (D141) and the `agent-containers` token (D155) serve different purposes, and both are missing from Credential storage.
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
+  remainder moved to #247.
 
 #### F7. Choosing a project image on the Mac also replaces the Mac's credential service
 
@@ -311,7 +320,7 @@ Each finding has these fields:
 - **Codex review:** holds and widens (`agents/up`, lines 56-64). Raised from
   Major.
 - **Recommendation:** keep, as a Blocker.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): moved to #221.
 
 #### F8. D118's weekly owner wait on the Action SHA batch has no mechanism after D149
 
@@ -338,7 +347,7 @@ Each finding has these fields:
 - **Codex review:** holds, as the unresolved D118 policy choice. The tally in the Fix is as the six reviewers gave it.
 - **Recommendation:** keep. Supersede D118 by a new decision row. The
   `automerge: false` convention is the owner's choice.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed (D170).
 
 #### F9. The D131 one-time read at M2 needs a baseline and a receipt, and cannot pre-review what already ran
 
@@ -363,7 +372,7 @@ Each finding has these fields:
   give one. The baseline, the receipt and the timing distinction stand.
 - **Recommendation:** keep the read, with a baseline and a receipt. Close
   the question in a decision row.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F10. Phase `m2` of `repo:rulesets` adds nothing the design names, and one check guards nothing
 
@@ -388,7 +397,8 @@ Each finding has these fields:
   at design line 1892, so it is not new. The undefined increment stands.
 - **Recommendation:** keep, routed to the follow-up spec "M1a trust roots and
   repository rules".
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed; moved to
+  #220.
 
 #### F11. With no human look before merge, the post-merge backstop is itself editable
 
@@ -411,7 +421,7 @@ Each finding has these fields:
   does not work: the two changes can land in separate PRs, and row 1624
   records the binding limit. That fix was removed.
 - **Recommendation:** keep, narrowed as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F12. `minimum_release_age`: the design gives two values, and `mise.toml` has the old one
 
@@ -435,7 +445,8 @@ Each finding has these fields:
 - **Raw:** zo-6, cp-5, ic-7, ir-6, cb-12, des-10.
 - **Codex review:** holds (`mise.toml`, line 11).
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed; moved to
+  #222.
 
 #### F13. Integrating D148's `CI Check` and auto-merge with cpp-standard's required checks, queue and owner-held updates
 
@@ -473,7 +484,8 @@ Each finding has these fields:
   already settles adoption, ownership, rollout and the acceptance test, so
   those parts were removed. Capability-lock changes were added.
 - **Recommendation:** keep, narrowed to integration.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed; moved to
+  #222.
 
 #### F14. mise version declarations: §11 calls the floor a pin, and some copies are outside D146's list
 
@@ -498,7 +510,8 @@ Each finding has these fields:
 - **Codex review:** partly holds. The floor's meaning is settled by D86 and
   is not reopened. The wording and the undeclared copies stand.
 - **Recommendation:** keep, narrowed as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
+  remainder moved to #247.
 
 #### F15. G1 ("every input is pinned") against unpinned agent CLIs, auto-merged skills and D41's owner approval
 
@@ -521,7 +534,8 @@ Each finding has these fields:
 - **Raw:** zo-7, ic-14, ic-20, zo-21, des-16.
 - **Codex review:** holds. D41 governs adding a plugin and D152 governs updating it, so the gap is unreviewed content arriving through updates.
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed; moved to
+  #228.
 
 #### F16. The risk table lacks the D155 and D148 risks that no other finding carries
 
@@ -541,7 +555,7 @@ Each finding has these fields:
   failure and undo, and D140 already has a version warning. Those were
   removed here.
 - **Recommendation:** keep, narrowed as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F17. Alternatives lists none of the options D136 to D155 rejected
 
@@ -563,7 +577,7 @@ Each finding has these fields:
 - **Raw:** des-8.
 - **Codex review:** partly holds. The decision rows give the reasons, §12 names the superseded seed volume and logins, and lines 1570-1576 already carry D149's alternatives. The design still omits the others. Downgraded to a Nit.
 - **Recommendation:** keep, as a Nit.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F18. §11, §12 and the shared repositories have no place against the Level 1 date
 
@@ -609,7 +623,8 @@ Each finding has these fields:
   F37 (cp-13).
 - **Codex review:** holds as merged.
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
+  remainder moved to #247.
 
 #### F20. The Glossary still calls the dotfiles setup agent the only installer, and the Tart step gives no digest
 
@@ -632,7 +647,7 @@ Each finding has these fields:
   `.mise/conf.d/vm.toml`, so "make Tart a cpp-standard pin" was removed. The
   stale installer role and the missing digest stand.
 - **Recommendation:** keep, narrowed as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F21. The Non-Goals still exclude the agent-setup cleanup that D150 takes on
 
@@ -672,7 +687,8 @@ Each finding has these fields:
   line 73; `agy-login`, lines 15-18). Two of the three earlier options left
   the violation in place, so the options were removed. Raised from Major.
 - **Recommendation:** keep, as a Blocker.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed; D166 and
+  D167 had settled the rest.
 
 #### F23. §12 describes plugin and skill mechanisms that are not the ones built
 
@@ -694,7 +710,7 @@ Each finding has these fields:
 - **Codex review:** partly holds. D144 and D145 do cover both Spack and
   skills, so cp-14's citation complaint was removed.
 - **Recommendation:** keep, narrowed as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed (D171).
 
 #### F24. Spack's pre-image probe has no owner or output
 
@@ -713,7 +729,8 @@ Each finding has these fields:
 - **Codex review:** partly holds. Downgraded from Major to documenting the
   probe.
 - **Recommendation:** keep, as a Nit.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
+  remainder moved to #247.
 
 #### F25. M2 reconciliation: `m2-trust-backlog.md` against §12, D149 and D155
 
@@ -734,7 +751,7 @@ Each finding has these fields:
 - **Codex review:** partly holds. Recast from "stale" to an M2 reconciliation
   item, because the backlog is deferred material by its own account.
 - **Recommendation:** keep, recast as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): moved to #219.
 
 #### F26. §11 should carry D140's full launch contract, and keep the certification receipt apart from the gate's
 
@@ -758,7 +775,7 @@ Each finding has these fields:
   R2 counters outside the Level 1 gate. The missing `container=docker`
   holds (`certify/ubuntu`, line 125).
 - **Recommendation:** keep, as replaced.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F27. There are two p2996 build configurations
 
@@ -777,7 +794,8 @@ Each finding has these fields:
 - **Raw:** ic-10, des-14.
 - **Codex review:** holds: the larger D136 build profile is unmeasured against the hosted budget.
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed; moved to
+  #226.
 
 #### F28. Four Ubuntu images with separate pins, and none of them both certified and gated
 
@@ -806,7 +824,7 @@ Each finding has these fields:
   Major because the leak is live in a public repository.
 - **Codex review:** holds. The identifiers are present in the README's first lines; repository visibility was checked with `gh repo view`, not by Codex.
 - **Recommendation:** keep, and fix it ahead of the resolve step.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): moved to #223.
 
 #### F30. "Tailnet names, never LAN addresses" against a break-glass LAN alias
 
@@ -819,7 +837,7 @@ Each finding has these fields:
 - **Raw:** cb-9, des-21.
 - **Codex review:** holds as a real D150 exception (`mise.mac.toml`; migration plan, line 273). Downgraded, because nothing shows routine use of the break-glass route.
 - **Recommendation:** keep, as a Nit.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F31. Retiring the unused `GEMINI_API_KEY` needs the provisioning contract changed first
 
@@ -839,7 +857,7 @@ Each finding has these fields:
   change was dropped: D155's Claude credential is a subscription OAuth
   token, so "Subscriptions, not API keys" is accurate.
 - **Recommendation:** keep, narrowed as above.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): moved to #224.
 
 #### F32. On the Xcode base, the weekly CUJ 1 run means something else (an M3 item)
 
@@ -860,7 +878,7 @@ Each finding has these fields:
   (1987) names no vanilla image. The naming complaint and the "change now"
   fix were removed.
 - **Recommendation:** keep, as an M3 item.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F33. The migration steps M1 to M3 share names with the milestones
 
@@ -885,7 +903,8 @@ Each finding has these fields:
   and F22.
 - **Codex review:** holds as narrowed.
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
+  remainder moved to #247.
 
 #### F35. The Glossary's "Agent session" names only Claude and Codex
 
@@ -900,7 +919,7 @@ Each finding has these fields:
 - **Raw:** cp-19. The owner-switch convention moved to F13.
 - **Codex review:** holds as narrowed.
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F36. The design names a model ID that has already changed once
 
@@ -932,7 +951,7 @@ Each finding has these fields:
 - **Raw:** ic-21. The stale trust-root list (des-20) moved to F2.
 - **Codex review:** holds as narrowed.
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F39. M0-Linux's end date is the planned date; its exit review happened a day later
 
@@ -949,7 +968,7 @@ Each finding has these fields:
 - **Codex review:** holds (D84 at decisions-log.md, line 92; D149 at line
   157). The earlier drop recommendation was reversed.
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): the design text changed.
 
 #### F40. `agent-secrets` registration reports success with a stale token
 
@@ -967,38 +986,58 @@ Each finding has these fields:
 - **Raw:** new item from the Codex adversarial review.
 - **Codex review:** holds (`agent-secrets.bash`, lines 108-111 and 142-145).
 - **Recommendation:** keep.
-- **Owner:**
+- **Owner:** kept (ticket #142, 2026-11-18): moved to #221.
 
 ## Disposition table
 
 One row per decision. "Sections" are the design sections the decision
 touches: where the design cites it, plus the main sections its findings name
 (each finding lists its own sections in full).
-Every disposition is "open" until the resolve step. That step changes each
-one to "reviewed, no change", "changed in the design" or "moved to #<issue>".
+The resolve step (ticket #142, 2026-11-18) set each disposition to
+"reviewed, no change", "changed in the design" (with the sections changed)
+or "moved to #<issue>"; a decision with both kinds of finding has both in
+one cell. Findings moved: F1 to #218; F3 and F25 to #219; F10 to #220; F7
+and F40 to #221; F12 and F13 to #222; F29 to #223; F31 to #224; F27
+to #226; F2 to #227; F15 to #228. For a moved finding the design states what
+is open and names the issue. Six findings changed the design only in part:
+the remainder of F2, F6, F14, F19, F24 and F34 moved to #247. F22 was
+settled before this step by D166 and D167. Four decision rows came out of
+it: D170 (F8), D171 (F23), D172 and D174 (F1).
 
 | Decision | Design sections | Findings | Merged or dropped here | Disposition |
 |---|---|---|---|---|
-| D136 | §11 Certification playbooks; G1; §8 table; Tart setup step; M3 file plan; §10 Cut order | F19, F20, F26, F27, F32 | F18 (to F19) | open |
-| D137 | §11 Certification playbooks and Containers on the PC; §6 Credential storage; M2 entry gate; Alternatives | F1, F3, F19, F26, F27 | F18 (to F19), F28 (to F14, F26 and F27) | open |
-| D138 | §11 apt cache; Alternatives; Detailed Implementation | F17, F19 | F37 (to F19) | open |
-| D139 | Overview; Glossary (setup agent); Non-Goals; §11 Machine configuration; Files changed elsewhere | F2, F17, F19, F20 | F18 (to F19) | open |
-| D140 | §11 Containers on the PC; Alternatives; Detailed Implementation | F17, F19, F26 | none | open |
-| D141 | §11 Machine configuration; §6 The fence, Runner VMs, Identities, Credential storage; Trust and Owned roots | F1, F2, F6, F19, F20, F29, F34 | F4 (to F1), F18 (to F19), F21 (dropped) | open |
-| D142 | §11 Spack; Open Questions | F19, F24 | none | open |
-| D143 | §12 Project agent containers; §9 Agents; Settled questions; G5; §6 The fence | F3, F15, F17, F19, F23, F25 | F5 (to F3), F18 (to F19), F28 (to F14, F26 and F27) | open |
-| D144 | §11 Spack; §12 Plugins and skills | F19, F24 | none | open |
-| D145 | §11 Spack; §12 Plugins and skills | F19, F23, F24 | none | open |
-| D146 | §11 mise pin; Schema of the configuration; Alternatives | F14 | none | open |
-| D147 | §12 Plugins and skills; §9 Agents; Open Questions | F15, F17, F19, F22, F23 | none | open |
-| D148 | §7 Updates; §3 [settings]; Schema; Open Questions (Q6); M1a and M1b file plans | F8, F12, F13, F15, F16, F19, F23 | F18 (to F19) | open |
-| D149 | Status header; §6 Trust roots, Owned roots, settings check; §7 Merge rule; §10 M2 entry gate, M0-Linux exit review; Risks; setup steps; M1a file plan | F1, F2, F8, F9, F10, F11, F25, F38, F39 | none | open |
-| D150 | Overview; Non-Goals; Glossary; §11 Machine configuration; Files changed elsewhere | F1, F2, F3, F19, F20, F30 | F18 (to F19), F21 (dropped), F33 (dropped) | open |
-| D151 | §12 Logins, Subscriptions; Alternatives | F17, F19 | none | open |
-| D152 | §7 Updates; §9 Agents; §12 Updates; G1; Risks | F7, F8, F12, F13, F15, F19, F22, F23 | F18 (to F19) | open |
-| D153 | §12 Logins; Glossary and §6 Identities; setup step 6 | F6, F17 | none | open |
-| D154 | §12 OpenCode; Glossary (Agent session) | F19, F35 | F36 (dropped) | open |
-| D155 | Overview; §12 Logins, Subscriptions, Accepted risks; §6 Identities, Credential storage; Trust roots; M2 entry gate; Settled questions | F1, F2, F3, F6, F7, F15, F16, F17, F19, F20, F22, F25, F31, F34, F40 | F4 (to F1), F5 (to F3), F18 (to F19), F28 (to F14, F26 and F27) | open |
+| D136 | §11 Certification playbooks; G1; §8 table; Tart setup step; M3 file plan; §10 Cut order | F19, F20, F26, F27, F32 | F18 (to F19) | changed in the design (§8; §11 Certification playbooks and Containers on the PC; Glossary; the Tart setup step; Files changed elsewhere); moved to #226 and #247 |
+| D137 | §11 Certification playbooks and Containers on the PC; §6 Credential storage; M2 entry gate; Alternatives | F1, F3, F19, F26, F27 | F18 (to F19), F28 (to F14, F26 and F27) | changed in the design (§6 Public repository and The fence; §11; Alternatives; Risks); moved to #218, #219, #226 and #247 |
+| D138 | §11 apt cache; Alternatives; Detailed Implementation | F17, F19 | F37 (to F19) | changed in the design (§11 apt cache; Alternatives; Files changed elsewhere); moved to #247 |
+| D139 | Overview; Glossary (setup agent); Non-Goals; §11 Machine configuration; Files changed elsewhere | F2, F17, F19, F20 | F18 (to F19) | changed in the design (Glossary; §6 Trust roots; the Tart setup step; Files changed elsewhere); moved to #227 and #247 |
+| D140 | §11 Containers on the PC; Alternatives; Detailed Implementation | F17, F19, F26 | none | changed in the design (§11 Containers on the PC; Alternatives); moved to #247 |
+| D141 | §11 Machine configuration; §6 The fence, Runner VMs, Identities, Credential storage; Trust and Owned roots | F1, F2, F6, F19, F20, F29, F34 | F4 (to F1), F18 (to F19), F21 (dropped) | changed in the design (§6 Public repository, Identities, Credential storage and Trust roots; Glossary; §11; Open Questions Q1; Risks; the `AGENTS.md` row); moved to #218, #223, #227 and #247 |
+| D142 | §11 Spack; Open Questions | F19, F24 | none | changed in the design (§11 Spack; Open Questions Q9); moved to #247 |
+| D143 | §12 Project agent containers; §9 Agents; Settled questions; G5; §6 The fence | F3, F15, F17, F19, F23, F25 | F5 (to F3), F18 (to F19), F28 (to F14, F26 and F27) | changed in the design (G1; §6 The fence; §9; §12 Plugins and skills; Alternatives; Risks); moved to #219, #228 and #247 |
+| D144 | §11 Spack; §12 Plugins and skills | F19, F24 | none | changed in the design (§11 Spack; Open Questions Q9); moved to #247 |
+| D145 | §11 Spack; §12 Plugins and skills | F19, F23, F24 | none | changed in the design (§12 Plugins and skills, by D171; §11 Spack); moved to #247 |
+| D146 | §11 mise pin; Schema of the configuration; Alternatives | F14 | none | changed in the design (§11 mise version); moved to #247 |
+| D147 | §12 Plugins and skills; §9 Agents; Open Questions | F15, F17, F19, F22, F23 | none | changed in the design (§12 Plugins and skills, amended by D171; §9; Alternatives; Risks); moved to #228 and #247 |
+| D148 | §7 Updates; §3 [settings]; Schema; Open Questions (Q6); M1a and M1b file plans | F8, F12, F13, F15, F16, F19, F23 | F18 (to F19) | changed in the design (§3; §7; Schema; Risks; the `renovate.json5` row; D170); moved to #222, #228 and #247 |
+| D149 | Status header; §6 Trust roots, Owned roots, settings check; §7 Merge rule; §10 M2 entry gate, M0-Linux exit review; Risks; setup steps; M1a file plan | F1, F2, F8, F9, F10, F11, F25, F38, F39 | none | changed in the design (Status; Glossary; §6 Trust roots and the settings check; §7; §10; Risks; setup step 1; the `spikes/m2/README.md` row; D170 supersedes D118); moved to #218, #219, #220, #227 and #247 |
+| D150 | Overview; Non-Goals; Glossary; §11 Machine configuration; Files changed elsewhere | F1, F2, F3, F19, F20, F30 | F18 (to F19), F21 (dropped), F33 (dropped) | changed in the design (Glossary; §6 Trust roots and The fence; §11 Machine configs; Alternatives; Files changed elsewhere); moved to #218, #219, #227 and #247 |
+| D151 | §12 Logins, Subscriptions; Alternatives | F17, F19 | none | changed in the design (Alternatives; Files changed elsewhere); moved to #247 |
+| D152 | §7 Updates; §9 Agents; §12 Updates; G1; Risks | F7, F8, F12, F13, F15, F19, F22, F23 | F18 (to F19) | changed in the design (G1; §7; §9; §12 Plugins and skills; Risks); moved to #221, #222, #228 and #247 |
+| D153 | §12 Logins; Glossary and §6 Identities; setup step 6 | F6, F17 | none | changed in the design (Glossary; §6 Identities and Credential storage; setup step 6; Alternatives); moved to #247 |
+| D154 | §12 OpenCode; Glossary (Agent session) | F19, F35 | F36 (dropped) | changed in the design (Glossary, Agent session; Files changed elsewhere); moved to #247 |
+| D155 | Overview; §12 Logins, Subscriptions, Accepted risks; §6 Identities, Credential storage; Trust roots; M2 entry gate; Settled questions | F1, F2, F3, F6, F7, F15, F16, F17, F19, F20, F22, F25, F31, F34, F40 | F4 (to F1), F5 (to F3), F18 (to F19), F28 (to F14, F26 and F27) | changed in the design (Glossary; §6 Public repository, Identities, Credential storage and Trust roots; §10 M2 entry; setup step 6; Alternatives; Risks; the `AGENTS.md` row); moved to #218, #219, #221, #224, #227, #228 and #247 |
+
+## Certification failures
+
+Ticket #142 also lists the failures the two certifications left.
+
+- **Ubuntu, E2:** clangd 23.1.5 beside clang 23.1.6. D137, an owner-sourced
+  row, records that E2 stays FAIL while clangd's version differs from the apt
+  snapshot; the owner took that as the recorded acceptance (ticket #142,
+  2026-11-18). No check exempts it: it stays a FAIL in the certification
+  output until the versions match.
+- **macOS, P10:** linking a p2996 program with `-fuse-ld=lld`. The owner
+  accepted it as a known upstream failure (D172).
 
 ## Outside scope
 
@@ -1012,7 +1051,7 @@ triage.
   `main.json` has an OrganizationAdmin bypass in pull-request mode.
   `--verify` requires that bypass, counts the org admins, and fails on any
   parameter that differs from `main.json`, so an added protection fails the
-  check.
+  check. Moved to #225.
 - **cp-20 and zo-20: Status, Inputs and M1a.** The design cites the four decisions recorded after
   D155 and "Spec #122", while the header and Inputs say "D1 to D155". The review
   state of those four decisions is not stated.
