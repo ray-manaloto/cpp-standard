@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#MISE description="Open a watched Claude or Codex tab in this terminal's herdr-app space and prove the task arrived (#200)"
+#
+# The launcher is python/agents/herdrtab.py (standard library only); its docstring has the flags and exit codes:
+#   --agent claude|codex --name N --task TEXT [--folder DIR] [--wait 30]
+# 0 the task arrived, 2 usage or no space (nothing opened), 4 a tab opened but a trust dialog or no task text showed.
+# The last stdout line is `name (terminal)`; the JSON line before it has the tab id `agents:tab-close` takes.
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/herdrtab.py" tab "$@"

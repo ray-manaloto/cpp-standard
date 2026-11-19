@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#MISE description="Check the agent-tab launcher offline: stand-in herdr-app and hc, never a real tab (#200)"
+set -euo pipefail
+# A git hook exports GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and the rest; clear them so a test or fixture's
+# scratch `git init` or `git commit` cannot reach the real repository (#280).
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/herdrtab_check.py"
