@@ -58,6 +58,28 @@ cat $R/log/testguard.jsonl                           # one line per tool call th
 | 3 | the folder is untrusted, unknown or not in git; no tab opened | tell the lead; only the owner trusts a folder |
 | 4 | a trust dialog, or no ready prompt within `--wait`; screen saved, tab closed, nothing sent | report to the lead |
 
+## A Code Mode arm
+
+For a Code Mode A/B, give the Code Mode arm its variable through `--extra`. The launch strips the inherited
+`CLAUDE_CODE_*` variables, so the shell cannot carry it, and the tab's settings keep the file's `env`:
+
+```bash
+printf '%s\n' '{"env": {"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1", "CLAUDE_CODE_PLUGIN_DIRS": ""},
+  "remoteControlAtStartup": false}' > $R/code-mode.json
+.agents/skills/run-testtab/testtab-run.sh $R testtab-cm --extra $R/code-mode.json --prompt "..."
+```
+
+- Run the other arm with the same file minus the Code Mode variable, on the same Claude Code version (2.1.328
+  changed Code Mode's timing and tool descriptions; figures from 2.1.325 do not compare).
+- Code Mode stays off while Remote Control is on, and while a mod that subscribes to tool calls is loaded. The
+  owner's user settings turn on both (`remoteControlAtStartup`, and mods through `env.CLAUDE_CODE_PLUGIN_DIRS`), so
+  the file turns both off for the tab. Not yet tried in a test tab: if the screen shows Code Mode off, these two
+  overrides are the first suspects.
+- Code Mode asks a one-time confirmation. A tab showing it ends with exit 4 like any dialog: report it, never answer.
+- Test tabs run in default or plan mode, so Code Mode changes that apply only to auto and bypass modes (2.1.328's
+  removed 0.75 second pause after scripts) do not show in a test tab.
+- Check the saved screen for the `REPL` tool before counting the run: without it the arm ran without Code Mode.
+
 ## Run by hand
 
 The same steps without the driver, when you need the tab to stay open while you look:
