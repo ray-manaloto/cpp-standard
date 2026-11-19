@@ -42,6 +42,7 @@ import argparse
 import contextlib
 import fcntl
 import json
+import math
 import os
 import re
 import shlex
@@ -267,7 +268,7 @@ def check(host: str = "mac") -> str:
             f"the PC's ({cores} cores) ",
         )
     else:
-        line = float(os.environ.get("SLOT_LOAD_LINE") or LOAD_LINE)
+        line = load_line()
         measured, pause, where = load(), PAUSE_LINE, ""
     if measured >= line:
         over = (
@@ -310,7 +311,21 @@ def host_of(endpoint: str) -> str | None:
 DOCKER_BIN = "docker"
 
 
-def context_host(name: str) -> str | None:
+def load_line() -> float:
+    """The Mac's start line: SLOT_LOAD_LINE when set, else 9. A value that is not a finite number refuses."""
+    text = os.environ.get("SLOT_LOAD_LINE") or str(LOAD_LINE)
+    try:
+        line = float(text)
+    except ValueError:
+        line = math.nan
+    if not math.isfinite(line):
+        msg = f"SLOT_LOAD_LINE={text} is not a finite number"
+        raise RefusedError(msg)
+    return line
+
+
+def context_host(name: str, config: str | None = None) -> str | None:
+    """The host of a docker context, looked up in the config folder that holds it (--config or DOCKER_CONFIG)."""
     fmt = "{{.Endpoints.docker.Host}}"
     done = subprocess.run(
         [DOCKER_BIN, "context", "inspect", name, "--format", fmt],
@@ -318,6 +333,7 @@ def context_host(name: str) -> str | None:
         text=True,
         timeout=10,
         check=False,
+        env=(os.environ | {"DOCKER_CONFIG": config}) if config else None,
     )
     if done.returncode != 0:
         # Docker would not start anything in a context it cannot find; neither grant fits it.
@@ -440,7 +456,9 @@ def current_context(env: dict[str, str]) -> str | None:
     folder = env.get("DOCKER_CONFIG") or str(Path.home() / ".docker")
     try:
         config = json.loads((Path(folder) / "config.json").read_text(encoding="utf-8"))
-        return config.get("currentContext") or None
+        value = config.get("currentContext")
+        # Anything but a non-empty string is no context.
+        return value if isinstance(value, str) and value else None
     except (OSError, ValueError, AttributeError):
         return None
 
@@ -461,7 +479,7 @@ def pc_reason(given: dict[str, str], env: dict[str, str]) -> str | None:
         context, endpoint = None, env.get("DOCKER_HOST")
     if endpoint:
         return f"DOCKER_HOST {endpoint}" if is_pc(host_of(endpoint)) else None
-    if context and is_pc(context_host(context)):
+    if context and is_pc(context_host(context, env.get("DOCKER_CONFIG"))):
         return f"docker context {context}"
     return None
 
@@ -583,6 +601,11 @@ def hook() -> None:
         # ssh -G could not run: block rather than let an unchecked call through.
         sys.stderr.write(f"slot guard: cannot tell where docker is aimed: {error}\n")
         sys.exit(2)
+    except Exception as error:  # noqa: BLE001 - any other failure blocks; exit 1 would let the call run
+        sys.stderr.write(
+            f"slot guard: failed ({type(error).__name__}: {error}), so the call is blocked\n"
+        )
+        sys.exit(2)
 
 
 def shim(args: list[str]) -> None:
@@ -607,6 +630,19 @@ def shim(args: list[str]) -> None:
         sys.exit(1)
 
 
+def minutes(text: str) -> float:
+    """A grant's length: a finite number of minutes, 0 or more, that a date can still hold."""
+    try:
+        value = float(text)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(text)
+        now() + timedelta(minutes=value)
+    except (ValueError, OverflowError) as error:
+        msg = f"--minutes {text} is not a usable number of minutes"
+        raise argparse.ArgumentTypeError(msg) from error
+    return value
+
+
 def main() -> None:
     if sys.argv[1:2] == ["exec"]:
         shim(sys.argv[2:])
@@ -616,13 +652,18 @@ def main() -> None:
     give = sub.add_parser("grant")
     give.add_argument("lane")
     give.add_argument("holder")
-    give.add_argument("--minutes", type=float, default=30)
+    give.add_argument("--minutes", type=minutes, default=30)
     give.add_argument("--host", choices=HOSTS, default="mac")
     give_back = sub.add_parser("release")
     give_back.add_argument("--holder")
     give_back.add_argument("--host", choices=HOSTS, default="mac")
     sub.add_parser("clear-expired")
     sub.add_parser("check").add_argument("--host", choices=HOSTS)
+    # Read before argparse (see shim); listed here so --help names it.
+    sub.add_parser(
+        "exec",
+        help="the docker shim's verdict: exec --real <docker> <name> <word>...",
+    )
     sub.add_parser("hook")
     args = parser.parse_args()
     if args.action == "hook":

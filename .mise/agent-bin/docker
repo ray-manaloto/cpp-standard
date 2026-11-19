@@ -1,17 +1,29 @@
 #!/bin/sh
-# The agent shells' docker (#194). A SessionStart hook in .claude/settings.json puts this folder first on PATH in the
-# Bash shells of Claude sessions in this repository; nothing else does, so the owner's own shells keep real docker.
+# slot-shim (#194): this line marks the file as the shim, so a copy of it is never taken for real docker.
+# The agent shells' docker. A SessionStart hook in .claude/settings.json puts this folder first on PATH in the Bash
+# shells of Claude sessions in this repository; nothing else does, so the owner's own shells keep real docker.
 # A call whose first word cannot start a container runs real docker at once, with no Python. Any other call asks
 # `slot.py exec` for a verdict on its real words and environment (the slot grant of the host it is aimed at, the
 # load there, no --privileged on the PC), then runs real docker with the words unchanged. docker-compose is a link
-# to this file. Real docker is the first one on PATH that is not this file, however often this folder is on PATH.
+# to this file. Real docker is the first one on PATH that is no shim: not this file, not in any .mise/agent-bin
+# folder (another worktree's), and not a file whose second line starts with "# slot-shim". Two shims that each took
+# the other for real docker would call each other forever.
 name=${0##*/}
 set -f
 real=
 IFS=:
 for dir in $PATH; do
-  if [ -x "${dir:-.}/$name" ] && ! [ "${dir:-.}/$name" -ef "$0" ]; then
-    real=${dir:-.}/$name
+  case ${dir%/} in
+    */.mise/agent-bin) continue ;;
+  esac
+  file=${dir:-.}/$name
+  if [ -x "$file" ] && ! [ "$file" -ef "$0" ]; then
+    marker=
+    { read -r _ && read -r marker; } <"$file" 2>/dev/null
+    case $marker in
+      "# slot-shim"*) continue ;;
+    esac
+    real=$file
     break
   fi
 done

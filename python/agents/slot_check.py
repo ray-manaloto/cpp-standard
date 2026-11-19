@@ -17,6 +17,9 @@ SHIM = HERE.parent.parent / ".mise" / "agent-bin" / "docker"
 STANDIN = """#!{python} -I
 import json, os, sys
 name = os.path.basename(sys.argv[0])
+if name == "ssh" and os.environ.get("STUB_SSH_LOG"):
+    with open(os.environ["STUB_SSH_LOG"], "a") as log:
+        log.write(json.dumps(sys.argv[1:]) + "\\n")
 if name == "ssh" and sys.argv[1:2] == ["-G"]:
     host = {{"pc": "pc-host.example", "pc-host.example": "pc-host.example"}}.get(sys.argv[2], sys.argv[2])
     print("user dev")
@@ -29,6 +32,10 @@ elif name == "ssh" and sys.argv[-1] == "cat /proc/loadavg; nproc":
     print(os.environ.get("STUB_PC_CORES", "16"))
 elif name in ("docker", "docker-compose") and sys.argv[1:3] == ["context", "inspect"]:
     known = {{"pcctx": "ssh://dev@pc", "localctx": "unix:///var/run/docker.sock"}}
+    # Contexts kept in the config folder docker is given (DOCKER_CONFIG), as the real CLI keeps them there.
+    extra = os.path.join(os.environ.get("DOCKER_CONFIG", ""), "contexts.json")
+    if os.path.exists(extra):
+        known.update(json.load(open(extra)))
     if sys.argv[3] not in known:
         sys.exit(1)
     print(known[sys.argv[3]])
@@ -65,14 +72,20 @@ def hook(env: dict[str, str], command: str) -> tuple[int, str]:
 def run(
     env: dict[str, str], *argv: str, name: str = "docker"
 ) -> subprocess.CompletedProcess[str]:
-    """The shim itself, as an agent shell runs it (docker-compose through its link)."""
-    return subprocess.run(
-        [str(SHIM.parent / name), *argv],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    """The shim itself, as an agent shell runs it (docker-compose through its link). A run that does not end in
+    30 seconds (two shims calling each other) comes back as exit 124."""
+    shim = SHIM.parent / name if "/" not in name else Path(name)
+    try:
+        return subprocess.run(
+            [str(shim), *argv],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess([str(shim)], 124, "", "timed out")
 
 
 def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
@@ -275,6 +288,15 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
     pcdir = Path(env["DOCKER_CONFIG"]).parent / "docker-pc"
     pcdir.mkdir(exist_ok=True)
     (pcdir / "config.json").write_text('{"currentContext": "pcctx"}')
+    # A config folder whose current context only that folder knows: docker context inspect must be asked there.
+    cfg2 = Path(env["DOCKER_CONFIG"]).parent / "docker-own"
+    cfg2.mkdir(exist_ok=True)
+    (cfg2 / "config.json").write_text('{"currentContext": "onlyhere"}')
+    (cfg2 / "contexts.json").write_text('{"onlyhere": "ssh://dev@pc"}')
+    # A current context that is not a string is no context.
+    odd = Path(env["DOCKER_CONFIG"]).parent / "docker-odd"
+    odd.mkdir(exist_ok=True)
+    (odd / "config.json").write_text('{"currentContext": 5}')
 
     here, there, both = [2, 0, 2, 0], [2, 2, 0, 0], [2, 2, 2, 0]
     free = [0, 0, 0, 0]
@@ -302,6 +324,14 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         (["buildx", "--builder", "b", "bake"], {}, None, x_here),
         (["compose", "-f", "a.yml", "up", "-d"], {}, None, x_here),
         (["compose", "run", "app"], {}, None, x_here),
+        (["compose", "create"], {}, None, x_here),
+        (["compose", "create"], at_pc, None, x_there),
+        (["run", "--cap-add=ALL", "x"], {}, None, x_here),
+        (["run", "--cap-add", "ALL", "x"], at_pc, None, x_never),
+        (["run", "--cap-add=all", "x"], at_pc, None, x_never),
+        (["--config", str(cfg2), "run", "x"], {}, None, x_there),
+        (["run", "x"], {"DOCKER_CONFIG": str(cfg2)}, None, x_there),
+        (["run", "x"], {"DOCKER_CONFIG": str(odd)}, None, x_here),
         (["compose", "--profile", "p", "build"], {}, None, x_here),
         (["-l", "debug", "run", "x"], {}, None, x_here),
         (["run", "-c", "512", "img"], {}, None, x_here),
@@ -460,6 +490,8 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         ("git commit -F - <<'EOF'\ndocker run x\nEOF", {}, here),
         # A shape main never read: left to the shim at exec time.
         ("(docker run x)", {}, free),
+        # The hook's text match takes docker-compose up only; run, build and create are the shim's.
+        ("docker-compose run app", {}, free),
     ]
 
     def shim_env(**extra: str) -> dict[str, str]:
@@ -561,6 +593,107 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
             and words in done.stderr
             and "Traceback" not in done.stderr
             and done.stderr.count("\n") == 1
+        )
+
+    scratch = Path(env["XDG_STATE_HOME"]).parent
+    # Another worktree's shim: a copy in its own .mise/agent-bin, with slot.py where the copy looks for it.
+    other_wt = scratch / "other-worktree"
+    (other_wt / ".mise" / "agent-bin").mkdir(parents=True, exist_ok=True)
+    (other_wt / "python" / "agents").mkdir(parents=True, exist_ok=True)
+    copy = other_wt / ".mise" / "agent-bin" / "docker"
+    copy.write_text(SHIM.read_text())
+    copy.chmod(0o755)
+    link = other_wt / "python" / "agents" / "slot.py"
+    if not link.exists():
+        link.symlink_to(HERE / "slot.py")
+    # A shim copy outside any .mise/agent-bin folder, known only by its marker line; it says so if it ever runs.
+    marked = scratch / "marked-bin"
+    marked.mkdir(exist_ok=True)
+    (marked / "docker").write_text(
+        "#!/bin/sh\n# slot-shim copy\necho marked copy ran; exit 99\n"
+    )
+    (marked / "docker").chmod(0o755)
+
+    def two_shims() -> bool:
+        """Two shims on PATH, each first in turn, and a marked copy: both calls reach the stand-in, none loops."""
+        granted()
+        paths = (
+            [str(copy.parent), agent_bin, bin_dir],
+            [agent_bin, str(copy.parent), bin_dir],
+            [agent_bin, str(marked), bin_dir],
+        )
+        outs = []
+        for parts in paths:
+            path = os.pathsep.join([*parts, env["PATH"]])
+            for words in (["ps"], ["run", "x"]):
+                first = str(Path(parts[0]) / "docker")
+                done = run(me | {"PATH": path}, *words, name=first)
+                outs.append(
+                    (done.returncode, done.stdout)
+                    == (0, "real docker " + json.dumps(words) + "\n")
+                )
+        return all(outs)
+
+    def case_words() -> bool:
+        """The shim's fast-path list hands every heavy first word to slot.py, and nothing else but options."""
+        sys.path.insert(0, str(HERE))
+        import slot
+
+        line = next(
+            text
+            for text in SHIM.read_text().splitlines()
+            if text.strip().startswith("run |")
+        )
+        words = {word.strip() for word in line.split(")")[0].split("|")}
+        heavy = set(slot.HEAVY_ONE) | {pair[0] for pair in slot.HEAVY_TWO}
+        # up: docker-compose up, whose first word is up.
+        return words == heavy | {"up", "-*"}
+
+    def no_ssh_call(*argv: str) -> bool:
+        """A call that starts nothing makes no ssh call (no load read, no host lookup), even with Docker at the
+        PC."""
+        log = scratch / "ssh.log"
+        log.unlink(missing_ok=True)
+        done = run(shim_env(DOCKER_HOST="ssh://pc", STUB_SSH_LOG=str(log)), *argv)
+        return done.returncode == 0 and not log.exists()
+
+    def hook_command(project: str, path: str, command: str) -> tuple[int, str]:
+        """The PreToolUse command line from .claude/settings.json, run as Claude Code runs it."""
+        settings = json.loads(
+            (SHIM.parent.parent.parent / ".claude" / "settings.json").read_text()
+        )
+        line = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        done = subprocess.run(
+            ["/bin/sh", "-c", line],
+            env=nobody | {"CLAUDE_PROJECT_DIR": project, "PATH": path},
+            input=json.dumps({"tool_input": {"command": command}}),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return done.returncode, done.stderr
+
+    def settings_hook() -> bool:
+        """No slot.py in the project, or no uv on PATH: a command naming docker is blocked, never let through;
+        one that does not name docker, or a working hook on docker ps, passes."""
+        repo = str(SHIM.parent.parent.parent)
+        settings = json.loads(
+            (SHIM.parent.parent.parent / ".claude" / "settings.json").read_text()
+        )
+        # A hook that cannot start, times out or exits other than 0 or 2 blocks too (Claude Code's onFailure).
+        blocks = (
+            settings["hooks"]["PreToolUse"][0]["hooks"][0].get("onFailure") == "block"
+        )
+        missing = hook_command(str(scratch), env["PATH"], "docker ps")
+        no_uv = hook_command(repo, "/usr/bin:/bin", "docker ps")
+        return (
+            blocks
+            and missing[0] == 2
+            and "is missing" in missing[1]
+            and no_uv[0] == 2
+            and "could not run" in no_uv[1]
+            and hook_command(str(scratch), env["PATH"], "ls -la")[0] == 0
+            and hook_command(repo, env["PATH"], "docker ps")[0] == 0
         )
 
     rows: list[tuple[str, Callable[[], bool]]] = [
@@ -905,6 +1038,76 @@ def cases(env: dict[str, str]) -> list[tuple[str, Callable[[], bool]]]:
         ("shim: its folder twice on PATH", shim_twice),
         ("shim: no docker past it: exit 127", shim_alone),
         ("shim: the docker-compose link", compose_link),
+        ("shim: two shim copies and a marked copy on PATH: no loop", two_shims),
+        ("shim: its fast-path words match slot.py's heavy set", case_words),
+        (
+            "shim: ps, images, -v and --help make no ssh call with Docker at the PC",
+            lambda: all(
+                no_ssh_call(*argv) for argv in (["ps"], ["images"], ["-v"], ["--help"])
+            ),
+        ),
+        (
+            "exec: the PC's load cannot be read over ssh: refused with ssh's reason",
+            lambda: (
+                granted(host="pc"),
+                one_line(
+                    slot(
+                        me | {"STUB_PC_FAIL": "1"},
+                        "exec",
+                        "--real",
+                        real,
+                        "docker",
+                        "-H",
+                        "ssh://pc",
+                        "run",
+                        "x",
+                    ),
+                    "Connection refused",
+                ),
+            )[1],
+        ),
+        (
+            "check: SLOT_LOAD_LINE nan or not a number: refused, one line",
+            lambda: (
+                granted(),
+                all(
+                    one_line(
+                        slot(me | {"SLOT_LOAD_LINE": value}, "check"),
+                        "is not a finite number",
+                    )
+                    for value in ("nan", "inf", "abc")
+                ),
+            )[1],
+        ),
+        (
+            "grant --minutes inf, 1e20, -1 or nan: a usage error, no traceback",
+            lambda: all(
+                (done := slot(env, "grant", "l", "t9", "--minutes", value)).returncode
+                == 2
+                and "not a usable number of minutes" in done.stderr
+                and "Traceback" not in done.stderr
+                for value in ("inf", "1e20", "-1", "nan")
+            ),
+        ),
+        ("--help names exec", lambda: "exec" in slot(env, "--help").stdout),
+        (
+            "hook: a failure inside the hook blocks (exit 2), never exit 1",
+            lambda: (
+                (
+                    done := slot(
+                        me,
+                        "hook",
+                        stdin=json.dumps({"tool_input": {"command": 5}}),
+                    )
+                ).returncode
+                == 2
+                and "so the call is blocked" in done.stderr
+            ),
+        ),
+        (
+            "settings hook: slot.py missing or uv missing blocks a command naming docker",
+            settings_hook,
+        ),
     ]
     return rows
 
