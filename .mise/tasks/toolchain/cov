@@ -10,8 +10,9 @@ rc=python/toolchain/pyproject.toml
 cov=(uv run --no-project --quiet --with coverage==7.17.3 python -I -m coverage)
 # The same tests as ci.yml's artifact-check job, which runs them on CI's bare python3.
 "${cov[@]}" run --rcfile="$rc" tests/toolchain/test_fetch.py
-# The recipe's patch step and the must-fail runner: shell under test, so outside the measure.
+# The recipe's patch step, the smoke step and the must-fail runner: shell under test, so outside the measure.
 python3 -I tests/toolchain/test_build_patch.py
+python3 -I tests/toolchain/test_smoke.py
 python3 -I tests/must_fail/test_ci_must_fail.py
 "${cov[@]}" combine --rcfile="$rc" --quiet "$data"
 exec "${cov[@]}" report --rcfile="$rc"

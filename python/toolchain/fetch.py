@@ -182,22 +182,32 @@ class GhReleases:
         return pick_release(tag, [r for page in pages for r in page])
 
     def download(self, release: Release, asset: str, dest: Path) -> Path:
-        subprocess.run(
-            [
-                "gh",
-                "release",
-                "download",
-                release.tag,
-                "--repo",
-                self.repo,
-                "--pattern",
-                asset,
-                "--dir",
-                str(dest),
-                "--clobber",
-            ],
-            check=True,
-        )
+        try:
+            subprocess.run(
+                [
+                    "gh",
+                    "release",
+                    "download",
+                    release.tag,
+                    "--repo",
+                    self.repo,
+                    "--pattern",
+                    asset,
+                    "--dir",
+                    str(dest),
+                    "--clobber",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            detail = (e.stderr or "").strip() or str(e)
+            raise SourceError(
+                f"gh release download {release.tag}/{asset} from {self.repo} failed: {detail}"
+            ) from e
+        except FileNotFoundError as e:
+            raise SourceError("gh is not on PATH") from e
         return dest / asset
 
 
@@ -324,7 +334,15 @@ def install(archive: Path, tag: str, root: Path) -> Path:
             if r.returncode != 0:
                 raise Refused(f"{archive.name} does not extract: {r.stderr.strip()}")
             hash_file = new / HASH_FILE
-            got = hash_file.read_text().strip() if hash_file.is_file() else None
+            if hash_file.is_file():
+                try:
+                    got = hash_file.read_text(encoding="utf-8").strip()
+                except UnicodeDecodeError as e:
+                    raise Refused(
+                        f"{archive.name}: {HASH_FILE} is not valid UTF-8: {e}"
+                    ) from e
+            else:
+                got = None
             if got != tag_hash(tag):
                 raise Refused(
                     f"{archive.name}: {HASH_FILE} is {got!r}, the tag's hash is {tag_hash(tag)}"

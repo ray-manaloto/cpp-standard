@@ -118,10 +118,11 @@ jobs:
           install: false
       - name: Publisher and artifact:names agree; the wait and resolve cases
         run: python3 -I tests/artifact/test_artifact.py
-      - name: The source table of toolchain:fetch; the recipe's patch step
+      - name: The source table of toolchain:fetch; the recipe's patch and smoke steps
         run: |
           python3 -I tests/toolchain/test_fetch.py
           python3 -I tests/toolchain/test_build_patch.py
+          python3 -I tests/toolchain/test_smoke.py
       - name: Wait for this commit's tools image and p2996 toolchain
         timeout-minutes: 181
         env:

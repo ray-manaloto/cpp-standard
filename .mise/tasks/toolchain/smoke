@@ -19,5 +19,5 @@ cmake -G Ninja -S "$root" -B "$build" \
   -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
   -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -Wl,-rpath,$prefix/lib/$triple"
 cmake --build "$build"
-ctest --test-dir "$build" --output-on-failure
+ctest --test-dir "$build" --output-on-failure -R '^standin_test$' --no-tests=error
 echo "PASS: the stand-in module's test with $cxx"
