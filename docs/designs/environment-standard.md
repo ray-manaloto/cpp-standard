@@ -44,7 +44,7 @@ is Linux-first (D44, D53, §10).
 **Inputs:**
 
 - [concepts_brief.md](level-1/concepts_brief.md);
-- [decisions-log.md](level-1/decisions-log.md), D1 to D155. "Dnn" in this
+- [decisions-log.md](level-1/decisions-log.md), D1 to D175. "Dnn" in this
   document means row Dnn of that log;
 - the reports in [level-1/research/](level-1/research/), and
   [goldfish_brainstorm_report.md](level-1/goldfish_brainstorm_report.md);
@@ -380,9 +380,11 @@ Settled questions are at the end of the Technical Plan
 ## Technical Plan (Architecture)
 
 This section describes how the pieces fit together. Decisions D26 to D135 were
-made while drafting and reviewing it; D136 to D155 came later and are
-described in §6, §7, §10, §11 and §12, without a Goldfish review yet. The file-by-file list is in Detailed
-Implementation. What is unproven, and the accepted risks, are in
+made while drafting and reviewing it; D136 to D155 came later, were reviewed
+in #141 and resolved in #142, and are described in §6, §7, §10, §11 and §12.
+Later decisions through D175 are described here (including §13) without a
+Goldfish review yet. The file-by-file list is in Detailed Implementation. What
+is unproven, and the accepted risks, are in
 [Risks & Mitigations](#risks--mitigations).
 
 ### Architecture at a glance
@@ -418,8 +420,9 @@ flowchart LR
   REN[Renovate and pins:apt-bump, daily] --> PINS
 ```
 
-There is one configuration: `mise.toml` with five conf.d pins fragments
-(§3) and a lock file. It produces three environments. Images and
+There is one configuration: `mise.toml` with five conf.d pins fragments,
+five non-pin host and certification fragments (§3, D161), and a lock file.
+It produces three environments. Images and
 toolchains are tagged by the hash of their inputs. Each artifact tag is
 published once, from `main`, by `publish.yml`. Code not yet on `main` never runs
 on a self-hosted runner; agent code runs on hosted runners and in the dev VM
@@ -634,8 +637,15 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
 
 `mise.toml` is the bootstrap project (D13), and the owner owns it. It holds:
 
-- **`[tasks]`:** settings only. Every task is a file under `.mise/tasks/`
-  (D93); §6 lists which ones agents may edit;
+- **`monorepo_root = true` and `[monorepo]` (D163):** `config_roots =
+  ["python/repo", "python/workflow"]` with `[monorepo.path_aliases]`
+  mapping `repo` and `workflow`. Those two copied packages keep their own
+  `mise.toml` and run as `//repo:<task>` and `//workflow:<task>` (§13).
+  Every other task stays a file task under `.mise/tasks/` (D93); §6 lists
+  which ones agents may edit;
+- **`[env]` (D163):** `PYTEST_XDIST_AUTO_NUM_WORKERS = "4"`, capping
+  `pytest -n auto` at four workers per suite so two concurrent hk suite
+  steps use at most eight workers;
 - **`[settings]`:** a fixed `minimum_release_age` cutoff, so `mise lock`
   gives the same lock whenever it runs (M0 (i)), bumped with the pins, and
   `lockfile = true`; a pins PR that needs a release newer than the cutoff
@@ -670,14 +680,38 @@ base build re-checks two legs, D53, D104):
 - **`apt.toml`**: the rest of the apt packages, including
   `libclang-rt-23-dev` for the `--coverage` runtime (D105).
 
+Five more `.mise/conf.d/` fragments are non-pin host and certification
+files, listed under `other_fragments` in `pins-allowlist.toml` (D161). No
+Linux image or toolchain build hashes or COPYs them:
+
+- **`build.toml`**: macOS-only `sccache`, `hyperfine`, `conda:doxygen`, and
+  `github:microsoft/vcpkg-tool` (with `vcpkg-standalone-bundle.tar.gz` and
+  `[env]` `VCPKG_ROOT`) for macOS certification (playbook B1);
+- **`docker.toml`**: macOS-only `docker-cli` (`aqua:docker/cli`) for
+  `certify:ubuntu` and `certify:ubuntu-image` on the Mac;
+- **`llvm.toml`**: macOS-only `"github:llvm/llvm-project"` release tarball
+  (D38), its `postinstall` writing `arm64-apple-darwin.cfg` and
+  `arm64-apple-darwin-clang++.cfg`, and `[env] _.path` placing
+  `.mise/apple-bin` (Apple's `dsymutil`) and the tarball's `bin/` ahead of
+  Homebrew LLVM;
+- **`python.toml`**: `ruff` and `ty` for `python/pctools` and hk's Python
+  steps (§5);
+- **`vm.toml`**: macOS-only `tart` (`aqua:openai/tart`) for the macOS
+  playbook's V checks.
+
 The schema in Detailed Implementation shows each fragment's contents.
 
-`pins:validate` (D51) is a required hosted check. It makes sure:
+`pins:validate` (D51, D161) is a required hosted check. It makes sure:
 
 - `tools.toml` and `lint.toml` hold only `[tools]`, `apt-sources.toml` only
   `[bootstrap.apt.sources.*]`, and `apt.toml` and `apt-toolchain-host.toml`
   only `[bootstrap.packages]`;
-- every name is in `pins-allowlist.toml`;
+- every name in those five pin fragments is in `pins-allowlist.toml`;
+- the five non-pin fragments in `other_fragments` (`build.toml`,
+  `docker.toml`, `llvm.toml`, `python.toml`, `vm.toml`) hold only `https`
+  URLs from allowlisted hosts (no section or tool-name check), their
+  `[tools]` still match `.mise/mise.lock` with no toolchain locked, and any
+  other `.mise/conf.d/` fragment fails;
 - every URL in `.mise/mise.lock`, `apt-sources.toml`, `image/base.inputs.toml`,
   `image/runner.inputs.toml`, `vm/inputs.toml`, `toolchains/*/pins.toml` and `canary/pins.toml` comes from
   an allowlisted host,
@@ -842,6 +876,36 @@ check`, and in the required `lint` job of `ci.yml` (`mise run check
 --online`), so CI refuses what a local hook refuses, and also runs the
 checks that need the GitHub API. M1a adds `gate:policy` as a further step;
 `gate:policy` stays the real build gate.
+
+**Python package gates.** Every folder under `python/` either gates its
+default test run on a recorded coverage floor or records a one-line reason
+for having none (`python/README.md`, #185; `python/guards` is a
+byte-for-byte copy of dotfiles' `python/guards`, gated at 100% there). The
+three packaged suites (`python/repo`, `python/workflow` and
+`python/pctools`) gate at 100% line and branch coverage in their
+`pyproject.toml`. The four standard-library script folders (`python/pins`,
+`python/agents`, `python/suites` and `python/artifact`) run their checks
+under `coverage` through `.mise/tasks/{pins,agents,suites,artifact}/cov`
+(`pins:cov`, `agents:cov`, `suites:cov`, `artifact:cov`), each failing
+below the floor in its `pyproject.toml`. `python/pctools` has its own task
+gate under `.mise/tasks/pctools/` (`pctools:sync` into a locked `.venv`
+using mise's pinned Python, `pctools:lock`, `pctools:codegen` for
+`models.py` schema drift, `pctools:test` at 100% line and branch coverage,
+and `pctools:check` running `ruff check`, `ruff format --check`, `ty
+check`, `pctools:codegen --check` and `pctools:test`), with `ruff` and `ty`
+pinned in `.mise/conf.d/python.toml`. The standard-library suite recorder
+(`python/suites/record.py`, checked by `python/suites/record_check.py`, #186)
+wraps the `repo`, `workflow` and `pctools` pytest suites and writes wall time,
+status, up to 25 slowest tests and 5-minute load at start and end to
+`$SUITE_TIMES_DIR` (else `$XDG_STATE_HOME/cpp-standard/suite-times`) without
+altering exit status; `mise run test:times` (`.mise/tasks/test/times`,
+`--markdown` for a table) reads those records, and CI's `lint` job appends the
+Markdown table to `$GITHUB_STEP_SUMMARY` and uploads the `suite-times`
+artifact. `hk.pkl` runs `pctools-sync`, `ruff`, `ruff-format`, `ty` (`--project
+python/pctools`), `pctools-codegen`, `pctools-test` and the four fast coverage
+steps (`pins-cov`, `suites-cov`, `agents-cov`, `artifact-cov`) on pre-commit
+and in `hk check`, and runs `repo-check` and `workflow-check` in `hk check`
+only (§13).
 
 **Edit-time guard (D64, M1b, cuttable).** jouet's `gate-guard` rules stop
 an agent, before the edit lands, from adding coverage-exclusion markers or
@@ -1089,6 +1153,7 @@ job. A job that runs `toolchain:fetch` or `image:verify` also gets
 | `repo-verify.yml` | `schedule`, `workflow_dispatch` on `main` | `contents: read`, `actions: read` |
 | `digest.yml` | `schedule` | `contents: read`, `actions: read`, `issues: write`, `pull-requests: read` |
 | `apt-bump.yml` | `schedule` (daily, `23 3 * * *`), `workflow_dispatch`; `bump` runs only on `refs/heads/main` | `contents: read` on `check` and `bump`; `bump` uses environment `apt-bump` (`main` deployment branches only) and mints a per-run `cpp-standard-agents` token scoped to `contents: write` and `pull-requests: write` from `APT_BUMP_CLIENT_ID` and `APT_BUMP_PRIVATE_KEY` when pins change (D165, D173) |
+| `author-email.yml` | `push` on `main` | none (`permissions: {}`); reads only the push event payload, with no checkout, actions or token |
 
 #### Trust roots (D108, D134, D149)
 
@@ -1156,7 +1221,8 @@ fixtures run on every PR (§5, D134). The list: `.github/**`,
 `doctor`, `perf/*`, `review/cap` and `vcpkg/bootstrap`), `fixtures/**`,
 `cmake/capabilities.lock.json`, `gate-policy.toml`, `hk.pkl` and its
 settings files (`.editorconfig`, `.rumdl.toml`, `.ryl.toml`, `_typos.toml`,
-D102), `.jouet/**`, `toolchains/*/build.sh`, `toolchains/*/macos/**`,
+`.betterleaksignore`, D102), `.jouet/**`, `toolchains/*/build.sh`,
+`toolchains/*/macos/**`,
 `toolchains/*/linux/**`,
 `image/*.Dockerfile`, `runner/**`, `pins-allowlist.toml` and
 `gate-removals.toml`.
@@ -1203,10 +1269,11 @@ fails if the queue stops being required.
   - Built-in managers cover mise tools, Docker digests and the vcpkg
     baseline, with tool bumps grouped into one daily PR; custom regex
     managers cover the other pins (file plan, `renovate.json5`).
-  - The apt pins are not Renovate's (D165): `mise run pins:apt-bump`,
-    and the skill of the same name, move every pin in `apt.toml`,
-    `apt-toolchain-host.toml` and `mise.ubuntu.toml` to the newest version
-    in its index. It reads the Ubuntu archive and apt.llvm.org for arm64
+  - The apt pins are not Renovate's (D165): `mise run pins:apt-bump`
+    (`python/pins/apt_bump.py`, with offline vectors in `tests/apt_bump/`
+    run by `pins:validate`), and the skill of the same name, move every pin
+    in `apt.toml`, `apt-toolchain-host.toml` and `mise.ubuntu.toml` to the
+    newest version in its index. It reads the Ubuntu archive and apt.llvm.org for arm64
     and amd64, refuses an index that does not match its release file's
     checksum (SHA512 on Ubuntu, SHA256 on apt.llvm.org) and a package whose
     newest version differs between the two, and moves `mise.ubuntu.toml`'s
@@ -1305,6 +1372,42 @@ image. §4 and the `mac-gate.yml` row still say vanilla; the M3 PR that adds
 
 - **Isolation.** Each agent works in its own worktree and branch (D23), and
   the merge queue serializes merges into `main`.
+- **Heavy-run slots and guarded test tabs.** One active heavy-run slot
+  grant per host (`mac` and `pc`, separate so PC work does not wait behind
+  Mac work) is stored in `$XDG_STATE_HOME/slots` (`grant.json` for the Mac,
+  `grant-pc.json` for the PC, updated under `grant.lock`) and managed by
+  `.mise/tasks/slot/{check,grant,release,clear-expired,guard-check}`
+  (`python/agents/slot.py`, offline check `python/agents/slot_check.py`,
+  #179, #194). The caller is `SLOT_HOLDER` or `HC_TERMINAL_ID`. The slot
+  guards heavy Docker work (`run`, `create`, `build`, `image build`,
+  `builder build`, `buildx build`/`bake`, `compose up`/`run`/`create`/
+  `build`), enforced by the `.mise/agent-bin/docker` shim (`docker-compose`
+  links to it; put on `PATH` by `.claude/settings.json`'s `SessionStart`
+  hook), `.claude/settings.json`'s `PreToolUse` `Bash` hook, and the
+  container tasks that call `slot:check` (`certify:ubuntu`,
+  `certify:ubuntu-image`, `agents:image`, `agents:up`, `ubuntu:arm64`);
+  both guards also refuse `--privileged` or `--cap-add ALL` on the PC,
+  grant or not. Load lines: heavy work starts only when 5-minute load is
+  below `9` on the Mac (`SLOT_LOAD_LINE`, default `9`; running work pauses
+  at `11`) and below `0.75 * cores` on the PC (read via
+  `ssh -o BatchMode=yes pc`, failing closed on ssh error; running work
+  pauses at `0.9 * cores`). It is an accident guard, not a security
+  boundary. For live Claude Code tests, `.mise/tasks/agents/testtab` and
+  `testtab-check` (`python/agents/{testtab,testtab_check,testguard}.py`,
+  #178) and the project skill `.agents/skills/run-testtab/` (driver
+  `testtab-run.sh`, linked at `.claude/skills/run-testtab`) open one
+  guarded tab in a herdr-app space with `--prompt` in argv so the launcher
+  never types. Before opening a tab it checks the owner's trust record in
+  `~/.claude.json` (keyed by git root or a linked worktree's main checkout)
+  and refuses an untrusted, unknown or non-git folder (exit 3); if a trust
+  dialog appears or no ready prompt shows within `--wait` (default 20 s),
+  it hands the tab to the owner without sending keys (exit 4). A test tab
+  runs only in `default` or `plan` mode (refusing `auto`,
+  `bypassPermissions` and `dontAsk`), with `--strict-mcp-config`,
+  `--no-chrome` and stripped `CLAUDE_CODE_*` variables, and `testguard.py`
+  (its first, fail-closed `PreToolUse` hook) allows only the run's listed
+  `--tools`, never allows shell tools (`Bash`, `Monitor`, `PowerShell`),
+  and restricts `SendMessage` to the run's own allowed tab names.
 - **The cap (M5, D113).** `review/cap.toml` caps agent sessions, starting
   at 3. `mise run review:cap` counts them on a schedule and posts the
   count as the agent App to a pinned `digest` issue.
@@ -1625,6 +1728,64 @@ on the Mac, D155).
   requests on every repository the App is installed on, as the owner's
   login can on the Mac, and any process in a container can copy the
   long-lived `CLAUDE_CODE_OAUTH_TOKEN`.
+
+### 13. Workflow tools, CI's tool config and the merge gate (D160, D163, D168, D169)
+
+`repotools` (`python/repo`) and `workflowtools` (`python/workflow`) moved
+from dotfiles ahead of the Mac switch (D160, spec #147). Each keeps its own
+`mise.toml` as a monorepo config root of the root `mise.toml` (§3, D163),
+so its tasks run as `//repo:<task>` (such as `pr-create`, `pr-merge`,
+`tools-install`, `zero-bash`, `fnox-refs`, `main-guard-*`, `lint`, `test`
+and `check`) and `//workflow:<task>` (such as `frontmatter`,
+`settings-local`, `skill-table`, `tickets`, `round-*`, `report`,
+`verify-receipt`, `verify-commit`, `lint`, `test` and `check`).
+`//repo:tools-install` installs both as uv tools from committed trees on
+`main`.
+
+- **Merge gate (`repotools.toml`, D169).** `//repo:pr-merge` runs the
+  installed uv tool copy of `repotools` (not the PR checkout's venv) and
+  reads `repotools.toml`'s `[pr-merge] gate` from origin's default branch,
+  never from the checkout under merge, so a PR cannot change its own gate.
+  The default is `local-hk`; cpp-standard sets `gate = "required-checks"`.
+  `pr-merge` runs every gate except hk (clean checkout, head, open, base,
+  pr-head, title, body), waits for the PR's required checks (`jouet wait
+  ci`), and queues the PR with `gh pr merge <number> --match-head-commit
+  <sha>` so the merge queue runs the required checks and squashes. Accepted
+  risk (D169): the merge gate runs on Linux only (hosted arm64), so
+  macOS-only failures surface after merge on the Mac, and CI failures
+  surface after push; pre-commit `hk check` on changed files stays.
+  `.github/workflows/author-email.yml` (advisory, `push` on `main`,
+  `permissions: {}`, no checkout or token) checks every pushed commit's
+  author and committer emails in the event payload against GitHub noreply
+  addresses after merge.
+- **CI's own tool config (`mise.ci.toml`, `mise.ci.lock`,
+  `.mise/locks/mise.ci/**`, D163, D168).** CI's `lint` job sets
+  `MISE_ENV=ci` and installs with `mise install --locked`. `mise.ci.toml`
+  pins the Linux-only tools that CI's Python checks need and the Mac takes
+  from the owner's global config: Python `3.14.8` and `3.15.2` (for
+  `workflowtools`), `pipx:datamodel-code-generator` `0.89.0` (with its uv
+  lock sidecar in
+  `.mise/locks/mise.ci/pipx-datamodel-code-generator/0.89.0/`), `uv`
+  `0.13.9`, `github:ast-grep/ast-grep` `0.51.3` (for `//repo:lint`) and
+  `conda:zsh` `5.9.2` (for `repotools`' shell tests), locked in
+  `mise.ci.lock`.
+- **Helper tasks and hk steps.** `.mise/tasks/privacy/scan`
+  (`privacy:scan`, `--outgoing` for unpushed commits) calls `repotools
+  privacy-scan` with patterns built at run time from `$HOME` and `$USER`,
+  keeping home paths out of the repository. `.mise/tasks/uv/cache-warm`
+  (`uv:cache-warm`) warms uv's cache online in a temporary directory for
+  `repotools`' `UV_OFFLINE=1` tests; CI's `lint` job runs it before hk, and
+  it is rerun after any `uv` pin bump (D168). In `hk.pkl`, `repo-check`
+  (`//repo:check`) and `workflow-check` (`//workflow:check`) run in `hk
+  check` and in CI's `lint` job on Linux (since D168, which ended D163's
+  Mac-only exception), not on pre-commit, because they take minutes; the
+  `commit-msg` hook runs `typos-msg` (`typos {{ commit_msg_file }}`).
+- **Agent docs (`docs/agents/`).** Linked from `AGENTS.md`, `docs/agents/`
+  holds the conventions that agent skills read: `issue-tracker.md` (GitHub
+  Issues, sub-issues, native blocking dependencies, wayfinder maps),
+  `triage-labels.md` (mapping the five canonical triage roles) and
+  `domain.md` (single-context domain docs: this design, `decisions-log.md`
+  and lazy `GLOSSARY.md`).
 
 ### Settled questions
 
@@ -1949,11 +2110,12 @@ history. So nothing unscrubbed is ever pushed.
    `.github/rulesets/main.json`, `.mise/tasks/repo/rulesets` and
    `.mise/tasks/agent/token`. These files are the first versions of their
    M1a rows; M1a PRs replace them. Done when both workflows have run green
-   on `main`. Since then the M0 (i) spike has replaced `builder.yml` on
-   `main`: jobs `build`, `mq-fetch`, `publish`, `branch-sign` and
-   `mise-checks`, packslip signing as `builder.yml@refs/heads/main`, and
-   `id-token: write` on `publish` and `branch-sign`. M1a PR 2 replaces it
-   (M1a table).
+   on `main`. The M0 (i) spike later replaced `builder.yml` on `main` (jobs
+   `build`, `mq-fetch`, `publish`, `branch-sign` and `mise-checks`), and
+   M1a PR 2 has since replaced that spike with the real `builder.yml` (jobs
+   `tags`, `build`, `pr-image` and `dispatch` on `ubuntu-26.04-arm`, with
+   no `id-token: write`; `publish.yml` handles `main` pushes and
+   attestations; M1a table).
 4. **Public, then fork-PR approval (D95).** `gh repo edit --visibility public
    --accept-visibility-change-consequences`, then the fork-PR approval
    setting (`gh api -X PUT
@@ -2163,10 +2325,10 @@ is green, or cut at its §10 cut date.
 | `README.md` | PR 6, new | What cpp-standard is (the Overview in five lines), with CUJ 1 and CUJ 2 as copy-paste steps, and links to `docs/standard/`. |
 | `AGENTS.md` | PR 6, change | The `## Workflow facts` section is already on `main` (ticket #126), ahead of PR 6. It holds: the build, test and lint commands (`mise run ci`, `mise run ci:fast`), one worktree per agent (D23), the agent App identity, the owned-roots list (D51), and the fence (D48). |
 | `LICENSE` | setup step 3 | Chosen by the owner (Q3); already on `main`. |
-| `mise.toml` **(O)** | PR 1, change | `min_version`, `[settings]` (`minimum_release_age`, `lockfile`) and the `[hooks] postinstall` that installs the hk hooks (§3, D69, D102). Never names a toolchain version (D72). Tasks are file tasks only, under `.mise/tasks/` (D93). |
+| `mise.toml` **(O)** | PR 1, change | `min_version`, `monorepo_root = true`, `[monorepo]` (`python/repo`, `python/workflow` aliased as `repo` and `workflow`, the one exception to D93's file-tasks-only rule), `[env]` (`PYTEST_XDIST_AUTO_NUM_WORKERS = "4"`), `[settings]` (`minimum_release_age`, `lockfile`) and `[hooks] postinstall` for hk hooks (§3, §13, D69, D102, D163). Never names a toolchain version or `[tools]` (D72, D74). Every other task is a file task under `.mise/tasks/` (D93). |
 | `.mise/conf.d/apt-sources.toml` **(P)** | PR 1, new | `[bootstrap.apt.sources.llvm]` only: `uris = "https://apt.llvm.org/resolute/"`, `suites = "llvm-toolchain-resolute-23"`, `components = "main"`, the key URL and fingerprint `6084F3CF814B57C1CF12EFD515CF4D18AF4F7421`. A base and toolchain hash input (D90). |
-| `.mise/conf.d/tools.toml` **(P)** | PR 1, new | `[tools]` only (D74), with exact versions: cmake, ninja, python, `uv`, mold, sccache, `gh`, packslip, gcovr, `"pipx:clang-format"`, jouet, fnox and the tier-2 tools. `uv` is needed because without it `mise lock` silently skips the PyPI sidecars and the uv line in `mise.lock` (M0 (i)). vcpkg is not a mise tool (no registry entry): it is a git checkout at the `vcpkg-configuration.json` baseline, done by `mise run vcpkg:bootstrap` (D93). |
-| `.mise/conf.d/lint.toml` **(P)** | PRs 2 and 4, change | `[tools]` only (D102): hk, at the `hk.pkl` package version, and the tools its builtins run. Already on `main`; the PRs that add Dockerfiles and C++ add their linters (D102). |
+| `.mise/conf.d/tools.toml` **(P)** | PR 1, new; PRs 3 and 4, change | `[tools]` only (D74), with exact versions. On `main` today: `cmake`, `ninja`, `python`, `uv` and `"pypi:gcovr"` (`uv` is needed so `mise lock` writes the PyPI sidecars and its own line in `.mise/mise.lock`, M0 (i)). Later tools join when the PR or milestone that needs them lands (their names are already in `pins-allowlist.toml`): `gh` in PR 3 with `toolchain:fetch`; `mold`, `sccache` and `"pipx:clang-format"` in PR 4 with the presets and C++ lint builtins; `jouet` and `fnox` in M1b with `.jouet/` and `fnox.toml`; `packslip` in M2 when `toolchain:fetch` turns on packslip install (D111; the base image uses the `ghcr.io/jdx/packslip` build stage, D73); and tier-2 tools in M5. For the Linux tools image and M1a PR 4, vcpkg stays out of `tools.toml` and is planned as a git checkout at the `vcpkg-configuration.json` baseline through `mise run vcpkg:bootstrap` (D93); on macOS, `.mise/conf.d/build.toml` pins `github:microsoft/vcpkg-tool` with its standalone bundle and sets `VCPKG_ROOT` (§3, D161). |
+| `.mise/conf.d/lint.toml` **(P)** | PRs 2 and 4, change | `[tools]` only (D102): hk, at the `hk.pkl` package version, and the tools its builtins run. Already on `main` (PR 2 added `hadolint` for Dockerfiles); PR 4 adds the C++ linters (D102). |
 | `.mise/tasks/vcpkg/bootstrap` | PR 4, new | The `vcpkg:bootstrap` task: clones microsoft/vcpkg at the `vcpkg-configuration.json` baseline commit into `.cache/vcpkg` and runs its bootstrap script. Agent-editable (§6) (D93). |
 | `.mise/conf.d/apt-toolchain-host.toml` **(P)** | PR 1, new | `[bootstrap.packages]` only, all `os = ["linux"]`: `g++-16`, binutils, make and a pinned `libc6-dev`. A toolchain hash input (D75). |
 | `.mise/conf.d/apt.toml` **(P)** | PR 1, new | `[bootstrap.packages]` only, all `os = ["linux"]`: the rest of the apt packages (schema below). |
@@ -2174,14 +2336,14 @@ is green, or cut at its §10 cut date.
 | `image/base.inputs.toml` **(P)** | PR 1, new | The Ubuntu image and digest, the mise version, the `ghcr.io/jdx/packslip` digest, and mise's packslip signer key (`ps1_…`) for the mise install (D69, D73). |
 | `image/runner.inputs.toml` **(P)** | M2, new (with `runner/`) | The exact actions/runner version and, for `linux-x64` and `osx-arm64`, the github.com release URL and sha256. An input of the `runner-pc` and `golden` tags only (D164). |
 | `pins-allowlist.toml` **(O)** | PR 1, new | Allowed tool names, apt package names and URL hosts for `pins:validate`. |
-| `.mise/tasks/pins/validate` **(O)** | PR 1, new | The D51 content check, for every pins file listed in §3. |
-| `.mise/tasks/artifact/tag` **(O)** | PR 1, new | Prints the tag for `base`, `tools`, `runner-pc`, `golden` or `<toolchain>-<os>-<arch>` from the inputs listed in §2 (D164). Golden-vector tests in `tests/artifact_tag/` (D90). |
-| `.mise/tasks/artifact/check` **(O)** | PR 2, new | The required PR check. It passes when every Linux tag the PR needs exists, with the 3-hour timeout (D61, D62). |
+| `.mise/tasks/pins/validate` **(O)**, `python/pins/` | PR 1, new | The D51/D161 content check for every pins file and non-pin host fragment in §3, backed by `python/pins/pins.py` (standard-library Python 3.11+). Also runs the pin-validation vectors in `tests/pins_validate/`, the artifact-tag vectors in `tests/artifact_tag/`, and the offline `pins:apt-bump` (`python/pins/apt_bump.py`) vectors in `tests/apt_bump/`. |
+| `.mise/tasks/artifact/tag` **(O)** | PR 1, new | Prints the tag for `base`, `tools`, `runner-pc`, `golden` or `<toolchain>-<os>-<arch>` from the inputs listed in §2 (D164), backed by `python/pins/pins.py`. Golden-vector tests in `tests/artifact_tag/` (D90). |
+| `.mise/tasks/artifact/check` **(O)** | PR 2, new | The required PR check, backed by `python/artifact/artifact.py`. Passes when every Linux tag the PR needs exists, with the 3-hour timeout (D61, D62). Offline unit tests of the wait cases live in `tests/artifact/`. |
 | `.mise/tasks/artifact/build` **(O)** | PR 2, new | Builds one missing tag: an image layer, or a toolchain's `build.sh`. It runs the smoke test, records the build-tool versions, and writes `dist/<tag>/`: for a toolchain, `<tag>.tar.zst` with `inputs-hash.txt` at its root; for an image, `image.tar` and `image.txt`. Workflow steps upload it as `toolchain-<tag>` or `image-<tag>` (§2); the PR status job pushes a PR's `image.tar` as its `pr-` tag, and `publish.yml` pushes `main`'s. It holds no token (D98). |
-| `.mise/tasks/artifact/names` **(O)** | PR 2, new | Prints the release tag, release title and image references for a tag (§2, D98), for tests and local use. `publish.yml` computes the same values inline and never runs it (D114); a test checks the two agree. |
-| `.github/workflows/publish.yml` **(O)** | PR 2, new | Dispatched by `builder.yml` on `main` with the build run id. Refuses any run id that is not a `builder.yml` run from `push`, `schedule` or `workflow_dispatch` on `main` with its head on `main`'s history; a negative test dispatches it with a PR run id (D114). Downloads the artifact, computes names inline, attests toolchain tarballs and images (M1a, D116), and from M2 signs toolchains with `jdx/packslip@<commit sha>` (`attest: false`) and dispatches the post-merge workflows (D112). Runs no repository code. A trust root (D108, D114). |
+| `.mise/tasks/artifact/names` **(O)**, `python/artifact/` | PR 2, new | Prints the release tag, release title and image references for a tag (§2, D98), backed by `python/artifact/artifact.py` (also behind `artifact:check`, `image:verify` and `image:resolve`), for tests and local use. `publish.yml` computes the same values inline and never runs it (D114); `tests/artifact/` (`tests/artifact/test_artifact.py`) checks the two agree and covers `artifact:check` and `image:resolve` offline. |
+| `.github/workflows/publish.yml` **(O)** | PR 2, new | Dispatched by `builder.yml` on `main` with the build run id. Refuses any run id that is not a `builder.yml` run from `push`, `schedule` or `workflow_dispatch` on `main` with its head on `main`'s history; the coordinator-run refusal test in `tests/publish_refusal/` (`tests/publish_refusal/README.md`) dispatches it on `main` with a PR run id (D114, D158). Downloads the artifact, computes names inline, attests toolchain tarballs and images (M1a, D116), and from M2 signs toolchains with `jdx/packslip@<commit sha>` (`attest: false`) and dispatches the post-merge workflows (D112). Runs no repository code. A trust root (D108, D114). |
 | `.mise/tasks/toolchain/fetch` **(O)** | PR 3, new | Computes each toolchain's hash, finds the release by its tag on every page of the releases, refusing a title that matches two (D122, D176), and installs it into an immutable `<root>/.<tag>.<unique>/` directory behind `<root>/<tag>`, a symlink switched in one atomic step, so the prefix always resolves to a complete install. In M1a it checks the tarball's attestation (`gh attestation verify --signer-workflow publish.yml --source-ref refs/heads/main`, D116) and, after extracting, the archive's `inputs-hash.txt` (D131); from M2 it installs with `packslip install … --identity https://github.com/ray-manaloto/cpp-standard/.github/workflows/publish.yml@refs/heads/main` (§2, D111, D114). If no release matches, it installs from `.cache/toolchains/<tag>/` (filled by workflow steps, D91); if that is empty, it rebuilds (D72, D83). |
-| `.mise/tasks/image/verify` **(O)** | PR 2, new | Runs `gh attestation verify oci://<image>@<digest> --repo ray-manaloto/cpp-standard --signer-workflow ray-manaloto/cpp-standard/.github/workflows/publish.yml --source-ref refs/heads/main` before any non-PR image use, and prints the digest. In CI a `resolve` job picks the image: `main`'s attested `tools:<arch>-<hash>` if it exists, verified here; else, in a PR or merge-group job only, the run's own unattested `pr-` image (D54). It passes the digest as a job output; container jobs use `image@digest`, never a tag. Negative test: `tests/image_verify/` checks that an image signed from a branch ref is refused (D59, D93, D98). |
+| `.mise/tasks/image/verify` **(O)**, `.mise/tasks/image/resolve` **(O)** | PR 2, new | Both backed by `python/artifact/artifact.py`. `image:verify` runs `gh attestation verify oci://<image>@<digest> --repo ray-manaloto/cpp-standard --signer-workflow ray-manaloto/cpp-standard/.github/workflows/publish.yml --source-ref refs/heads/main` before any non-PR image use, and prints the digest. `image:resolve` runs in CI's `resolve` job: it picks `main`'s attested `tools:<arch>-<hash>` verified by digest if it exists, else in a PR or merge-group run only the run's own unattested `pr-` image, and fails on any other event (D54); it writes `image=<image>@sha256:<digest>` and `source=main\|pr` to `$GITHUB_OUTPUT`, and container jobs use `image@digest`, never a tag. Negative test: `tests/image_verify/` checks that an image signed from a branch ref is refused (D59, D93, D98). |
 | `toolchains/p2996/build.sh` **(O)** | PR 3, new | Starts from the proven `spikes/m0/h/build.sh` (run 43509894509), with a link: the full CMake line, including `-DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON` (D105), the patch loop, compiler-rt, libcxx, libcxxabi, libunwind and the `llvm-cov` and `llvm-profdata` tools (D88). All CMake arguments live here. The smoke test starts from `spikes/m0/h/smoke.sh` and runs a P2996 `members_of` program with ASan and coverage. The macOS branch comes in M3. |
 | `toolchains/p2996/pins.toml` **(P)** | PR 3, new | Shared by Linux and macOS (D85): `upstream = "21.0.0-p2996"`, the commit (`562409c7942690d59ea470762515f88f24b16e23`), source URL and sha256, `salt`, and `host_tools = ["cmake", "ninja"]`. Renovate bumps the commit in one PR for every OS (D32). |
 | `toolchains/p2996/macos/**` **(O)** | M3, new | The macOS patches from dotfiles (D30), with a link; a macOS hash input. |
@@ -2205,11 +2367,11 @@ is green, or cut at its §10 cut date.
 | `docs/standard/coverage.md` | PR 4, new | The gcov-mode rule for each compiler, why source-based mode is not used, and what to do with runtime code that a test can't reach: test it or remove it (D88). |
 | `fixtures/must-fail/` **(O)** | PR 4, new | One directory per fixture, one for each tier-1 check in §5. `expected.toml` maps each fixture to its check, and the capability lock decides where each applies (D42). |
 | `.mise/tasks/ci/_default` **(O)**, `.mise/tasks/ci/fast` **(O)**, `.mise/tasks/ci-must-fail` **(O)**, `.mise/tasks/doctor` | PR 4, new | `ci` is the gate (§5), and `ci:fast` runs one preset. `ci` does not run the fixtures; `ci-must-fail` runs the applicable ones. `doctor` prints tool versions, artifact tags, capability files and `mise bootstrap packages status --missing`. |
-| `.github/workflows/ci.yml` **(O)** | PRs 1, 2, 4 and 6, change | Runs on `pull_request` and `merge_group` only (D130), on hosted runners only, with the §6 permissions. Jobs, whose names are the required checks (D93): `lint` (runs `mise run check --online`, the hk gate plus its `online` profile, D102), `pins-validate`, `artifact-check`, `resolve` (runs `image:verify`, outputs the digest), `gate-linux-arm64` (container `tools@<digest>`; the fetch-rule steps, `toolchain:fetch`, `mise run ci`), `must-fail` (every PR and merge group, D134; `mise run ci-must-fail` in the same container). `gate-linux-arm64` and `must-fail` have `needs: [artifact-check, resolve]`, so they fetch after the builder has finished and use the resolved digest (D123). On `main` today every job but `lint` is an `echo` stub on `ubuntu-24.04`, and the file still has `workflow_dispatch`. PR 1 makes `pins-validate` real, PR 2 `artifact-check` and `resolve`, PR 4 `gate-linux-arm64` and `must-fail`; PR 6 drops `workflow_dispatch` and runs the gate jobs on arm64. |
-| `hk.pkl` **(O)** | PRs 3, 4 and 6, change | The lint gate: hk builtins on pre-commit, `mise run check` and the `lint` job (D102). PR 3 drops the `spikes/**/mise.toml` glob. PR 4 excludes `fixtures/must-fail/**` from every step, because the fixtures break the rules on purpose, and adds `gate:policy` (D81). |
-| `.mise/tasks/check` **(O)** | on `main` | `mise run check [--fix] [--online]`: `hk check` (or `hk fix`) on every file (D102). |
-| `.editorconfig`, `.rumdl.toml`, `.ryl.toml`, `_typos.toml` **(O)** | on `main` | Settings for the hk steps: shfmt indents, Markdown rules, YAML rules and spell-check exceptions (D102). |
-| `.github/workflows/builder.yml` **(O)** | PR 2, change | Replaces the M0 (i) spike on `main`: its `mq-fetch`, `publish`, `branch-sign` and `mise-checks` jobs, the `PROJECT: m0i-linux-arm64` env, every `id-token: write` grant, and the header comment that its path must not change. The one trigger list (D112): `push` to `main`, a schedule, `workflow_dispatch`, PRs that change an input, and `merge_group` (D61). A `concurrency:` group per artifact tag keeps two runs from building the same tag at once (D135). The build job frees disk first and probes GHCR for the tag, treating any probe error other than "not found" as a failure; both steps come from dotfiles-legacy `dotfiles/.github/workflows/build-publish.yml` (the probe at lines 205-216, and `jlumbroso/free-disk-space` pinned by SHA at line 221), with a link (D90). In M1a every hash builds on hosted runners. From M2, `main` hashes build in PC runner VMs; from M3, macOS hashes build in Mac runner VMs. On `main` it dispatches `publish.yml` and holds no `id-token` (D114). A trust root, because from M2 it runs on the self-hosted runners (D108). |
+| `.github/workflows/ci.yml` **(O)** | PRs 1, 2, 3, 4 and 6, change | Runs on `pull_request` and `merge_group` only in its final form (D130), on hosted runners only, with the §6 permissions. Jobs, whose names are the required checks (D93): `lint` (runs `mise run uv:cache-warm` and `mise run check --online --ci` under `MISE_ENV=ci`, plus the `python/suites/record.py` summary and `suite-times` upload, D102, D168), `pins-validate`, `artifact-check`, `resolve` (runs `tests/image_verify/run.sh` and `image:resolve`, outputting the digest), `gate-linux-arm64` (container `tools@<digest>`; the fetch-rule steps, `toolchain:fetch`, `mise run ci`), `must-fail` (every PR and merge group, D134; `mise run ci-must-fail` in the same container). `gate-linux-arm64` and `must-fail` have `needs: [artifact-check, resolve]`, so they fetch after the builder has finished and use the resolved digest (D123). On `main` today only `must-fail` is still an `echo` stub on `ubuntu-24.04`; the other five jobs (`lint`, `pins-validate`, `artifact-check`, `resolve` and tracer-bullet `gate-linux-arm64` in the resolved tools image) are real and run on `ubuntu-26.04-arm`, and `workflow_dispatch` stays until the follow-up spec (D156). PR 3 makes `must-fail` real with the `toolchain:fetch` refusal tests; PR 4 completes `gate-linux-arm64` and `must-fail`. |
+| `hk.pkl` **(O)** | PRs 3, 4 and 6, change | The lint gate: hk builtins and Python gates on pre-commit, `mise run check` and the `lint` job (§5, §13, D102). PR 3 drops the `spikes/**/mise.toml` glob. PR 4 excludes `fixtures/must-fail/**` from every step, because the fixtures break the rules on purpose, and adds `gate:policy` (D81). |
+| `.mise/tasks/check` **(O)** | on `main` | `mise run check [--fix] [--online] [--ci]`: `hk check` (or `hk fix`) on every file (D102, D163). |
+| `.editorconfig`, `.rumdl.toml`, `.ryl.toml`, `_typos.toml`, `.betterleaksignore` **(O)** | on `main` | Settings for the hk steps: shfmt indents, Markdown rules, YAML rules, spell-check exceptions and betterleaks false-positive fingerprints for copied dotfiles npm locks (D102, D150). |
+| `.github/workflows/builder.yml` **(O)** | PR 2, change | Replaced the M0 (i) spike on `main` in PR 2 with jobs `tags`, `build`, `pr-image` and `dispatch` on `ubuntu-26.04-arm`, building the arm64 base and tools images (toolchains arrive in PR 3; no `id-token: write`, as `publish.yml` handles `main` pushes and attestations, D114). The one trigger list (D112): `push` to `main`, a schedule, `workflow_dispatch`, PRs that change an input, and `merge_group` (D61). A `concurrency:` group per artifact tag keeps two runs from building the same tag at once (D135). The `tags` job computes the tags and probes GHCR, treating any probe error other than "not found" as a failure, and `build` frees disk first; both come from dotfiles-legacy `dotfiles/.github/workflows/build-publish.yml` (probe at lines 199-216; `jlumbroso/free-disk-space` pinned by SHA at line 221), with a link (D90). In M1a every hash builds on hosted runners. From M2, `main` hashes build in PC runner VMs; from M3, macOS hashes build in Mac runner VMs. A trust root, because from M2 it runs on the self-hosted runners (D108). |
 | `gate-items.toml` **(O)** | PR 4, new | The Level 1 gate checklist: each item, its environment and the preset or check that proves it. `post-merge.yml` ticks it, `review:digest` shows it (D119). |
 | `.github/owned-roots.txt` **(O)** | PR 6, new | The §6 owned-roots globs, one per line. Documentation only (D101, D134). |
 | `.github/workflows/post-merge.yml` **(O)** | PR 4, new | Runs `mise run ci` and the must-fail fixtures for each M1a preset and uploads the results JSON that ticks `gate-items.toml` (D119). Triggers: `push` to `main` (from M2 only for commits whose artifact tags, from `artifact:tag`, already exist), a schedule, and, from M2, `workflow_dispatch` from `publish.yml` (D112). Hosted runners until M2, then the PC for heavy Linux jobs. A trust root (D108). |
@@ -2218,7 +2380,7 @@ is green, or cut at its §10 cut date.
 | `.github/workflows/repo-verify.yml` **(O)** | PR 6, new | Runs `repo:rulesets --verify --phase <current>` daily and on `workflow_dispatch` with `GITHUB_TOKEN` (D109). The current phase is a literal in this file; the M1b and M2 PRs that apply those phases bump it (D135). A trust root (D108). |
 | `gate-removals.toml` **(O)** | PR 6, new | One entry per removal of a capability-lock capability, a must-fail fixture or `expected.toml` row, a `required_flags` item or a `forbidden_markers` item: what, environment, reason, link. `gate:policy` fails on a removal without one (D115). A trust root (D108). |
 | `docs/standard/compilers.md`, `build.md`, `checks.md` | PR 6, new | `compilers.md`: the §1 tables and roles. `build.md`: presets, probes, the capability lock, triplets, sccache, and the `// clang-format off` rule around splices (D103). `checks.md`: tiers, coverage, the gate policy and fixtures. |
-| `docs/runbooks/agent-app.md`, `docs/runbooks/agent-app.manifest.json` | PR 6, change | The App-manifest steps, and the token path into the dev VM. PR 6 removes actions write from the manifest and the runbook's permission table, to match the live App (setup step 9, D134). |
+| `docs/runbooks/agent-app.md`, `docs/runbooks/agent-app.manifest.json`, `docs/runbooks/agent-app-create.sh` | PR 6, change | The App-manifest steps, the setup-step-6 creation script (`agent-app-create.sh`, already on `main`: opens the local manifest form, listens on `127.0.0.1:8765`, exchanges the callback code and pipes the PEM key straight into Keychain item `cpp-standard-agent-app` via `security -i`), and the token path into the dev VM. PR 6 removes actions write from the manifest and the runbook's permission table, to match the live App (setup step 9, D134). |
 | `.mise/tasks/agent/token` **(O)** | PR 6, change | M1a: a git and gh credential helper on the Mac host. It reads the App key from the Keychain item `cpp-standard-agent-app`, signs a 9-minute JWT with `openssl` (RS256), finds the installation with `GET /repos/ray-manaloto/cpp-standard/installation`, and mints a one-hour installation token, cached until 5 minutes before expiry. Agents run `gh` through `GH_TOKEN=$(mise run agent:token)`; git uses it as `credential.helper`. The key is never printed. PR 6 adds the test: `tests/agent_token/` checks the token's repository list and that the key never reaches stdout. Fallback: the owner's own `gh` login (D71, D80, D84). The launchd job and Tart shared directory come in M3 with `vm/dev`. |
 
 ### Schema of the configuration (M1a)
@@ -2226,17 +2388,26 @@ is green, or cut at its §10 cut date.
 ```toml
 # mise.toml (O)
 min_version = "<floor>"   # oldest mise that can read this file; not a pin (D86)
+monorepo_root = true      # D163: repotools and workflowtools keep their own mise.toml
+[monorepo]
+config_roots = ["python/repo", "python/workflow"]
+[monorepo.path_aliases]
+repo = "python/repo"
+workflow = "python/workflow"
+[env]
+PYTEST_XDIST_AUTO_NUM_WORKERS = "4"   # D163: cap pytest -n auto at 4 workers per suite
 [settings]
 minimum_release_age = "<date>"   # fixed cutoff, bumped with the pins (M0 (i)); D148's 0s is not applied (#222)
 lockfile = true
 [hooks]
 postinstall = '[ -n "${CI:-}" ] || hk install --mise'   # skipped in CI (D102)
-# tasks are file tasks under .mise/tasks/ only (D93): check, ci/_default, ci/fast, ci-must-fail,
-# caps/update, doctor, artifact/*, toolchain/*, image/*, vm/*, linux/run, review/*, repo/*,
-# pins/validate, gate/policy, agent/token, vcpkg/bootstrap, perf/instructions,
-# runner/pc-image, canary
-# and, outside M1a (§11, §12; Machine configuration and agent containers): certify/*,
-# pc/doctor, agents/*, pins/apt-bump
+# every other task is a file task under .mise/tasks/ (D93): check, ci/_default, ci/fast,
+# ci-must-fail, caps/update, doctor, artifact/*, toolchain/*, image/*, vm/*, linux/run,
+# review/*, repo/*, pins/validate, gate/policy, agent/token, vcpkg/bootstrap,
+# perf/instructions, runner/pc-image, canary
+# and, outside M1a (§5, §9, §11, §12, §13): certify/*, pc/doctor, pctools/*, agents/*,
+# slot/*, suites/cov, test/times, privacy/scan, uv/cache-warm, pins/apt-bump, pins/cov,
+# ubuntu/*
 # no [tools], no apt source and no toolchain version here (D72, D74, D90)
 
 # .mise/conf.d/apt-sources.toml (P), the only section allowed (D90):
@@ -2248,14 +2419,29 @@ key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
 fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 
 # .mise/conf.d/tools.toml (P), the only section allowed; every version exact:
-[tools]   # cmake, ninja, python, uv (mise lock needs it), mold, sccache, gh, packslip, gcovr,
-          # "pipx:clang-format" (23.x), jouet, fnox, tier-2 tools
-"github:llvm/llvm-project" = { version = "23.1.5", os = ["macos"] }   # D38; apt has 23.1.6 on Linux
+[tools]   # on main: cmake, ninja, python, uv (mise lock needs it), "pypi:gcovr"
+          # added later: gh (PR 3); mold, sccache, "pipx:clang-format" (PR 4);
+          # jouet, fnox (M1b); packslip (M2, D111); tier-2 tools (M5)
 
 # .mise/conf.d/lint.toml (P), the only section allowed (D102); every version exact:
 [tools]   # hk (= the hk.pkl package version), jactionlint, zizmor, pinact, ghalint,
           # shellcheck, shfmt, typos, rumdl, tombi, pkl, "aqua:owenlamont/ryl", jq,
-          # editorconfig-checker, betterleaks
+          # editorconfig-checker, betterleaks, hadolint
+
+# Non-pin host and certification fragments (other_fragments in pins-allowlist.toml, D161;
+# URL hosts and .mise/mise.lock still checked, never COPYed into Linux images):
+# .mise/conf.d/build.toml: macOS sccache, hyperfine, conda:doxygen,
+#   github:microsoft/vcpkg-tool (+ vcpkg-standalone-bundle.tar.gz) and [env] VCPKG_ROOT
+# .mise/conf.d/docker.toml: macOS docker-cli (for certify:ubuntu*)
+# .mise/conf.d/llvm.toml: macOS LLVM release tarball (D38) and [env] _.path (.mise/apple-bin + bin/)
+[tools."github:llvm/llvm-project"]
+version = "23.1.5"   # apt has 23.1.6 on Linux
+version_prefix = "llvmorg-"
+asset_pattern = "LLVM-*-macOS-ARM64.tar.xz"
+os = ["macos"]
+# postinstall writes arm64-apple-darwin.cfg and arm64-apple-darwin-clang++.cfg
+# .mise/conf.d/python.toml: ruff and ty (python/pctools and hk steps)
+# .mise/conf.d/vm.toml: macOS tart (macOS playbook V checks)
 
 # .mise/conf.d/apt-toolchain-host.toml (P), the only section allowed (D75):
 [bootstrap.packages]
@@ -2290,7 +2476,7 @@ source = { url = "<url>", sha256 = "<64 hex>", commit = "<sha, p2996 only>" }
 host_tools = ["cmake", "ninja"] # exact .mise/mise.lock entries hashed per platform
 apt_compiler = false            # required; true if build.sh bootstraps with an apt compiler (D162)
 salt = 0                        # bumped only to republish a deleted release (D72)
-# [macos] table only for gcc-macos: tarball, patch, deps, CLT, SDK major
+# [macos] table only for gcc-macos: patch, Homebrew commit, in-tree prerequisites, zstd/make, Xcode/SDK/bootstrap host fields (D33)
 ```
 
 ### M1b: around the critical path (can be cut)
@@ -2329,9 +2515,10 @@ salt = 0                        # bumped only to republish a deleted release (D7
 | `.github/workflows/mac-gate.yml` **(O)** | The post-merge macOS run, after merge to `main` and daily, plus the weekly CUJ 1 run from vanilla. It is not a required check until Q4. |
 | `docs/runbooks/mac-runner.md` | gha-outrunner as a LaunchAgent, the Keychain item, the egress-only network policy, and the two-VM rule. |
 | `toolchains/*/build.sh`, `toolchains/*/macos/**` **(O)** | The macOS p2996 and GCC builds through the builder. If late, Mac GCC is cut before the Mac runner (D53). |
-| `toolchains/gcc-macos/build.sh` **(O)** | The configure and build steps of Homebrew's `gcc.rb`, without Homebrew, and with a link to the formula revision. All configure arguments live here. It runs a three-stage bootstrap. The smoke test builds a C++26 `-freflection` program and an ASan program (`detect_leaks=0`), and records the exact Tart digest and CLT patch level. Built in M3; the first version is written on the M0 spike branch for M0-Mac (e), and lands here in M3 (D84). |
-| `toolchains/gcc-macos/pins.toml` **(P)** | `salt`, `host_tools`, and a `[macos]` table: the GCC tarball, Darwin patch, gmp, mpfr, mpc, isl, zstd and zlib (each with URL and sha256), the CLT version and the SDK major (D85). |
-| `toolchains/gcc-macos/README.md` | Why this exists, its limits (no upstream port, the iains patch, no TSan or LSan, ASan hanging with `detect_leaks=1`), and the fallback (reverting the bump, or p2996-only reflection gating on the Mac; a last-good artifact fallback is open question Q5). It is not a hash input. |
+| `toolchains/gcc-macos/build.sh` **(O)** | Landed early on `main` for macOS host certification (not yet wired into the CI builder, a mise task, or the Tart VM, which wait for M3). Follows Homebrew's `gcc.rb` at `4a334d2f` without Homebrew (D33): builds gmp, mpfr, mpc and isl in-tree from GCC's `contrib/prerequisites.sha512`, passes `--without-zstd`, uses `/usr/bin/make`, reads configure flags from `macos/configure-args.txt`, refuses a host that differs from `macos/build-inputs.json` (exit 3), runs a three-stage bootstrap, and installs into `~/.local/share/gcc-d33/16.2.0-<id>` (build id `71abf0a170ab`; `--check` stops after stage 1 prerequisites). Certified on the Mac host (`docs/standard/macos.md` G1, G2, G4, G6); M3 adds the Tart VM smoke test (recording Tart digest and CLT patch level) and builder integration. |
+| `toolchains/gcc-macos/pins.toml` **(P)** | Landed early on `main` (checked by `pins:validate`): `upstream = "16.2.0"`, `salt = 0`, `apt_compiler = false` (D162, bootstraps with Apple clang), `host_tools = []` (Xcode 27.2 and `/usr/bin/make` only), `[source]` (GCC 16.2.0 tarball URL and sha256), and `[macos]` (Darwin patch URL and sha256, `homebrew_core_commit`, in-tree `prerequisites_url` and `prerequisites` list for gmp/mpfr/mpc/isl, `zstd = "without"`, `make`, `xcode`, `sdk_major`, `bootstrap_cc`, `ld`) (D33, D85). |
+| `toolchains/gcc-macos/macos/{build-inputs.json,configure-args.txt,d33-inputs.json,d33-configure-args.txt}` **(O)** | Landed early on `main` alongside `build.sh`: `build-inputs.json` (the no-Homebrew inputs record whose sha256 prefix is build id `71abf0a170ab`; kept byte-exact, excluded in `hk.pkl`), `configure-args.txt` (the configure flags `build.sh` reads), and `d33-inputs.json` and `d33-configure-args.txt` (byte-exact records of the first D33 build `9f99e2b94d93`, which used Homebrew libraries). |
+| `toolchains/gcc-macos/README.md` | Landed early on `main`: documents the no-Homebrew recipe, in-tree prerequisites, host certification evidence (Mac host and Ubuntu 26.10 cross-check), host guards, limits (rpath, no TSan or LSan, ASan hanging with `detect_leaks=1`, LTO incompatibility with zstd-built GCC, Darwin patch not upstream), and that mise task and Tart VM runs wait for M3. Not a hash input. |
 
 ### M4: the canary
 
@@ -2375,6 +2562,27 @@ that `pins:validate` checks (§11 mise version, #252).
 | `docs/standard/agent-auth/**` | D155 | the `agent-secrets` user service on the PC (from `mise.pc.toml`), a container on the Mac | the PC's apply; `agents:up --host mac` on the Mac | a registered container's `/run/agent-secrets/gh-token` is under one hour old |
 | `agents:app-create`, `agents:pc-doppler`, `agents:agy-login` **(O)** | D155, D166, D167 | done once; `agents:agy-login` once per project per machine | the owner (the first two); an agent or the owner (`agents:agy-login`) | the "Done when" of each step under Project agent containers in [GitHub and host setup](#github-and-host-setup-steps-1-8-before-m1a-steps-9-10-in-m1a-pr-6) |
 
+### Workflow tools and repository checks (outside the Level 1 gate)
+
+These files are already on `main` and support the repository's Python
+gates (§5), agent safety guards (§9), host/certification fragments (§3)
+and workflow tooling (§13). None is a C++ Level 1 gate item.
+
+| File | What and why |
+|---|---|
+| `.mise/conf.d/{build,docker,llvm,python,vm}.toml` | Non-pin host and certification fragments listed under `other_fragments` in `pins-allowlist.toml` (§3, D161); never copied into Linux images. |
+| `python/repo/`, `python/workflow/` | `repotools` and `workflowtools`, moved from dotfiles as mise monorepo config roots (`//repo:*`, `//workflow:*`, §13, D160, D163). |
+| `repotools.toml` | Sets `[pr-merge] gate = "required-checks"`, read from origin's default branch by `//repo:pr-merge` (§13, D169). |
+| `mise.ci.toml`, `mise.ci.lock`, `.mise/locks/mise.ci/pipx-datamodel-code-generator/0.89.0/` | Linux-only tools loaded under `MISE_ENV=ci` by CI's `lint` job: Python 3.14.8 and 3.15.2, `datamodel-code-generator` 0.89.0 (with uv lock sidecar), `uv` 0.13.9, `ast-grep` 0.51.3 and `conda:zsh` 5.9.2 (§13, D163, D168). |
+| `.mise/tasks/privacy/scan` **(O)** | `privacy:scan [--outgoing]`: runs `repotools privacy-scan` with runtime `$HOME` and `$USER` patterns (§13). |
+| `.mise/tasks/uv/cache-warm` **(O)** | `uv:cache-warm`: warms uv's cache online into a temporary directory for `repotools`' offline tests; run in CI's `lint` job and after any `uv` pin bump (§13, D168). |
+| `.github/workflows/author-email.yml` **(O)** | Advisory push-to-`main` check (`permissions: {}`, no checkout or token): refuses any pushed commit whose author or committer email is not a GitHub noreply address (§6, §13, D169). |
+| `docs/agents/{domain,issue-tracker,triage-labels}.md` | Project conventions read by agent skills, linked from `AGENTS.md` (§13). |
+| `python/README.md`, `.mise/tasks/{agents,artifact,pins,suites}/cov` **(O)**, `.mise/tasks/pctools/{check,codegen,lock,sync,test}` **(O)** | Per-package Python coverage floors (`python/README.md`), coverage tasks for standard-library scripts, and `pctools`' own lint/codegen/test gate (§5). |
+| `python/suites/{record,record_check}.py`, `.mise/tasks/test/times` **(O)** | Standard-library suite timing recorder wrapping `repo`, `workflow` and `pctools` pytest suites, and `test:times [--markdown]` reader (§5). |
+| `.mise/tasks/slot/{check,grant,release,clear-expired,guard-check}` **(O)**, `.mise/agent-bin/{docker,docker-compose}`, `python/agents/{slot,slot_check}.py` | Per-host (`mac`, `pc`) heavy-run slot grant tasks, Docker shim and Claude Code `PreToolUse` guard with load lines and no-`--privileged`-on-PC refusal (§9). |
+| `.mise/tasks/agents/{testtab,testtab-check}` **(O)**, `python/agents/{testtab,testtab_check,testguard}.py`, `.agents/skills/run-testtab/`, `.claude/skills/run-testtab` | Guarded live-test Claude Code tab launcher, fail-closed `PreToolUse` tool/recipient guard, offline check and `run-testtab` project skill with `testtab-run.sh` (§9). |
+
 ### Files changed elsewhere
 
 - `docs/designs/*`: this design, the brief, the decisions log and the review
@@ -2387,10 +2595,9 @@ that `pins:validate` checks (§11 mise version, #252).
   (§11).
 - Optional, owner's call: jouet's enforced rules in `/etc/jouet/rules`, which
   needs root (D64).
-- The machine and agent-container files of §11 and §12 are in
-  [Machine configuration and agent containers](#machine-configuration-and-agent-containers-outside-the-level-1-gate)
-  above, outside the Level 1 gate. The three shared repositories of §7 are
-  outside it too.
+- The machine, agent-container and workflow-tool files of §11, §12 and §13
+  are in the two tables above, outside the Level 1 gate. The three shared
+  repositories of §7 are outside it too.
 
 --------------------------------------------------------------------------------
 
