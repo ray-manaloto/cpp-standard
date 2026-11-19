@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #MISE description="Start an agy worker in a ticket's worktree from the reviewed rules file, after a sign-in preflight (#278)"
-#USAGE arg "<worktree>" help="The ticket's worktree, a folder directly under cpp-standard.worktrees/"
+#USAGE arg "<worktree>" help="The ticket's linked git worktree, a folder directly under the repository's worktrees root (<repo>.worktrees/, or AGY_WORKTREE_ROOT from its mise env)"
 #USAGE arg "<brief>" help="The brief file the worker reads first"
 #USAGE flag "--plan <id>" help="The ticket's PLAN_ID (default: the PLAN_ID variable); its plan folder is added with --add-dir"
 #USAGE flag "--model <model>" help="agy's model (default: gemini-pro-orchestrator-neon)"
 #USAGE flag "--dry-run" help="Check the paths and print the launch line; start no agy"
 #
 # The launcher is python/agents/agy_worker.py (standard library only); its docstring has the checks. It refuses a
-# worktree outside cpp-standard.worktrees/, a missing brief or plan folder, and an agy that shows "Sign-in update
+# worktree that is not a linked worktree directly under the repository's worktrees root (AGY_WORKTREE_ROOT, default
+# <repo>.worktrees/; plans root PWF_PLAN_ROOT, default <repo>.plans/), a missing brief or plan folder, and an agy that shows "Sign-in update
 # needed" or is not signed in. The rules are .agents/agy-worker-settings.json, passed with --settings (session
 # only). docs/agents/agy-workers.md says how the lead routes tickets and answers the worker's prompts.
 set -euo pipefail
