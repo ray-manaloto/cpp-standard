@@ -277,9 +277,10 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
     branch.chmod(0o755)
     (copy.parent / "bin").mkdir()
     gh = install_gh(copy.parent / "bin", copy.parent / "scenario.json", copy.parent / "calls.jsonl")
-    # gh is a mise tool, which mise puts ahead of PATH in a task; the copy's own wrapper runs the stand-in instead.
+    jouet = install_gh(copy.parent / "bin", copy.parent / "scenario.json", copy.parent / "calls.jsonl", "jouet", JOUET)
+    # gh and jouet are mise tools, which mise puts ahead of PATH in a task; the copy's own wrappers run the stand-ins.
     with (copy / "mise.local.toml").open("a") as local:
-        local.write(f'\n[wrappers.gh]\ncommand = "{gh}"\n')
+        local.write(f'\n[wrappers.gh]\ncommand = "{gh}"\n\n[wrappers.jouet]\ncommand = "{jouet}"\n')
     title = 'feat: it\'s "$(touch pwned)" `touch pwned2`; touch pwned3 && echo $HOME'
     body_file = "body; touch pwned4.md"  # beside the copy's files, and ignored by its allowlisted .gitignore
     (copy / body_file).write_text(BODY)
@@ -297,4 +298,5 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
     assert [call for call in calls if call[:2] == ["pr", "merge"]] == [
         ["pr", "merge", "7", "--match-head-commit", head]
     ]
+    assert ["jouet", "wait", "ci", "7", "--sha", head] in [call[:6] for call in calls]
     assert not list(copy.parent.rglob("pwned*"))

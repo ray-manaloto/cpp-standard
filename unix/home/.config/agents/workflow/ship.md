@@ -39,7 +39,8 @@ and the commit belong to the coordinator or the owner.
    A repository may instead name its required CI checks as its merge gate (`[pr-merge] gate = "required-checks"` in
    its committed `repotools.toml`, read from the default branch; cpp-standard does, D169). Then no local hk run is
    the gate: the hosted required checks are, and they are not advisory. `mise run //repo:pr-merge` checks every
-   other gate and runs `gh pr merge N --match-head-commit <sha>`, which puts the pull request in the merge queue;
+   other gate, waits for the pull request's required checks to pass, then runs
+   `gh pr merge N --match-head-commit <sha>`, which puts the pull request in the merge queue;
    the queue runs the required checks and squashes, and the task reports it queued, not merged. The rest of this
    step is the default gate, `local-hk`. The merge is
    `gh pr merge N --merge --match-head-commit <sha> --author-email 1428022+sortakool@users.noreply.github.com`,

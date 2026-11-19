@@ -1,8 +1,8 @@
 """repotools pr-merge's merge gate setting: repotools.toml's [pr-merge] gate, read from origin's default branch.
 
 `local-hk` (the default, and what a missing file or table means) is today's gate: hk check --pr, then the merge.
-`required-checks` runs every gate but hk, runs no hk, and puts the pull request in the merge queue, whose required
-checks are then the gate (#213).
+`required-checks` runs every gate but hk, runs no hk, waits for the pull request's required checks to pass, and puts
+it in the merge queue, whose required checks are then the gate (#213).
 """
 
 import json
@@ -57,8 +57,20 @@ def test_required_checks_runs_no_hk_and_queues_in_the_queue_form(
     # The exact argument list: no --merge (the ruleset allows only the queue's squash), no --author-email (the
     # queue's squash takes the pull request's author), no --auto.
     assert merges == [queue_form(queued)]
-    assert not any(call[0] == "jouet" for call in calls)  # the queue runs the required checks, not this command
-    assert not any(call[:2] == ["api", "graphql"] for call in calls)  # queued, not waited for
+    # The required checks pass on the head first, then the queue call; the merge itself is not waited for.
+    checks = next(i for i, call in enumerate(calls) if call[:3] == ["jouet", "wait", "ci"])
+    assert calls[checks][3:6] == ["7", "--sha", queued.head]
+    assert calls.index(queue_form(queued)) > checks
+    assert not any(call[:2] == ["api", "graphql"] for call in calls)
+
+
+def test_required_checks_failing_stops_before_the_queue(queued: World, capsys: pytest.CaptureFixture[str]) -> None:
+    """A red required check fails the command at once, naming it, rather than leaving an auto-merge armed."""
+    queued.set(checks=1, checks_said="lint failed")
+    said = pr_refusal_of(capsys, "pr-merge", merge_args())
+    assert said == f"the checks of pull request #7 on {queued.head} did not pass (jouet wait ci exit 1): lint failed"
+    assert not queued.merged()
+    assert not queued.ran.exists()
 
 
 def test_required_checks_still_refuses_a_dirty_checkout(

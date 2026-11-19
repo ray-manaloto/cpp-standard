@@ -5,9 +5,9 @@
 # - local-hk, the default (dotfiles): hk check --pr passes on the exact head, then
 #   `gh pr merge --merge --match-head-commit <sha>` with the account's noreply address as the merge author, then a wait
 #   until it has merged and a check of the merge commit's author.
-# - required-checks (cpp-standard): every gate but hk, no local hk run, then `gh pr merge <number> --match-head-commit
-#   <sha>`, which puts the pull request in the merge queue; the queue runs the required CI checks and squashes. The
-#   author of the squash commit is checked after the fact by the author-email workflow on main.
+# - required-checks (cpp-standard): every gate but hk, no local hk run, a wait for the pull request's checks to pass,
+#   then `gh pr merge <number> --match-head-commit <sha>`, which puts the pull request in the merge queue; the queue
+#   runs the required CI checks and squashes. The author-email workflow on main checks the squash commit's author.
 # No review is required (owner ruling, 2026-11-17).
 
 import json
@@ -247,14 +247,17 @@ def check_only(options: PrMerge, head: str) -> None:
 def merge(options: PrMerge) -> None:
     """Refuse at the first gate that fails; merge only after all of them and the pull request's passing checks, wait
     until GitHub has merged it (a merge queue may hold it a while), then check the merge commit's author. With
-    check_only, run and report every gate and merge nothing. Under required-checks, queue it after every gate but hk
-    and report it queued."""
+    check_only, run and report every gate and merge nothing. Under required-checks, after every gate but hk and its
+    passing checks, queue it and report it queued."""
     head = git("rev-parse", "HEAD").strip()
     if options.check_only:
         check_only(options, head)
         return
     gates(options, head)
     if merge_gate(default_branch()) == REQUIRED_CHECKS:
+        # The required checks pass on head first: a red one fails here, naming it, and gh then queues at once rather
+        # than arming an auto-merge on pending checks.
+        checks_pass(options, head, CLOCK.now() + options.time_limit)
         # The one form the ruleset allows: the queue picks the squash, so no --merge; its squash takes the pull
         # request's author, so no --author-email. With a merge queue gh enables auto-merge for it, which queues it.
         gh("pr", "merge", str(options.number), "--match-head-commit", head)
