@@ -14,7 +14,8 @@ set(_p2996_prefix "$ENV{CPPSTD_P2996_PREFIX}")
 # vcpkg's detect_compiler enables C too, and the image has no `cc`.
 set(CMAKE_C_COMPILER "${_p2996_prefix}/bin/clang")
 set(CMAKE_CXX_COMPILER "${_p2996_prefix}/bin/clang++")
-string(APPEND CMAKE_CXX_FLAGS_INIT " -stdlib=libc++ -freflection-latest")
+string(APPEND CMAKE_CXX_FLAGS_INIT
+       " -std=c++26 -stdlib=libc++ -freflection-latest")
 set(_p2996_link
     "-stdlib=libc++ -Wl,-rpath,${_p2996_prefix}/lib/aarch64-unknown-linux-gnu")
 string(APPEND CMAKE_EXE_LINKER_FLAGS_INIT " ${_p2996_link}")
