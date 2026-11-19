@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#MISE description="Run gh as the cpp-standard agent App: refuses an empty token or a person's login; prints the author after gh issue create (#295)"
+#USAGE arg "<args>..." var=#true help="arguments for gh"
+#
+#   mise run -q agent:gh issue create --title T --body-file F
+#   mise run -q agent:gh pr comment 12 --body-file F
+#
+# Mints the token with agent:token, stops when it is empty, and checks the token's login is an App (a [bot]
+# login) before any gh call. `gh api user` answers 403 for an App token, so the check asks GraphQL `viewer`.
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+[[ -n "${usage_args:-}" ]] || {
+  echo "agent:gh: no gh arguments" >&2
+  exit 2
+}
+eval "set -- $usage_args"
+
+token="$(mise -C "$root" run -q agent:token || true)"
+if [[ -z "$token" ]]; then
+  echo "agent:gh: empty token; the task that mints it is agent:token (mise -C $root run -q agent:token)" >&2
+  exit 1
+fi
+login="$(GH_TOKEN="$token" gh api graphql -f query='{viewer{login}}' --jq .data.viewer.login || true)"
+if [[ "$login" != *"[bot]" ]]; then
+  echo "agent:gh: the token resolves to '${login:-nothing}', not an App ([bot]); mint it with agent:token" >&2
+  exit 1
+fi
+
+if [[ "$1 ${2:-}" == "issue create" ]]; then
+  out="$(GH_TOKEN="$token" gh "$@")"
+  printf '%s\n' "$out"
+  url="$(printf '%s\n' "$out" | tail -n 1)"
+  author="$(GH_TOKEN="$token" gh issue view "$url" --json author --jq .author.login || true)"
+  echo "agent:gh: author $author" >&2
+  [[ "$author" == *"[bot]" || "$author" == "app/"* ]] || {
+    echo "agent:gh: $url was not authored by the App" >&2
+    exit 1
+  }
+  exit 0
+fi
+GH_TOKEN="$token" exec gh "$@"

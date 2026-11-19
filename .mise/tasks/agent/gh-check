@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Check agent:gh offline: stand-in mise and gh logging every argument list, never GitHub (#295)"
+set -euo pipefail
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/gh_check.py"

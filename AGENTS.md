@@ -58,7 +58,9 @@ Routing tickets to agy workers and starting them: `docs/agents/agy-workers.md`.
 - Worktrees: one worktree and one branch per agent (D23). An agent works only in its own worktree, never in the
   main checkout or another agent's worktree.
 - Identity: an agent's pushes and pull requests carry the agent App, not the owner's login. On the Mac host that
-  is `cpp-standard-agents` (D40): `GH_TOKEN="$(mise run -q agent:token)" gh ...` for `gh`, and for git:
+  is `cpp-standard-agents` (D40): `mise run -q agent:gh <gh arguments>` for every `gh` write (`gh issue create`,
+  `gh pr ...`). The wrapper mints the token, stops on an empty one or a login that is not an App (`[bot]`), and prints
+  the author after an issue create (#295). For git:
 
   ```sh
   git -c credential.https://github.com.helper= \
