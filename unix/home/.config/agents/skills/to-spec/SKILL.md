@@ -57,6 +57,8 @@ Stop, publishing nothing, and tell the owner why, when any of these fails:
    spec's number and stop). Add the output of `workflowtools tickets --rebuild --spec <N>` as the spec's section of
    the roadmap, `task_plan.md` in the main checkout (`git worktree list`, first line). Then
    `workflowtools tickets --spec <N> --require-github` must exit 0; if not, show its output and stop.
+   The section heading must be `## … spec #<N> …`; a line anywhere else makes `workflowtools tickets` fail and
+   name the line.
    `/to-tickets` comes next, in the same session.
 
 <spec-template>

@@ -118,4 +118,5 @@ the installed `workflowtools`; replaying a command adds nothing.
 
 The roadmap lives in the main checkout; ticket plans live in a sibling `<repo>.plans/` folder,
 outside every checkout. The coordinator creates each plan and is the only one who writes the
-roadmap. A worker starts with `PLAN_ID` set to its plan and never re-creates it.
+roadmap. A worker starts with `PLAN_ID` set to its plan and never re-creates it. In the roadmap, the section heading must be `## … spec #<N> …`; a line anywhere else
+makes `workflowtools tickets` fail and name the line.

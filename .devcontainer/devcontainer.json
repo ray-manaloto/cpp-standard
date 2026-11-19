@@ -1,0 +1,9 @@
+{
+  "dockerComposeFile": "compose.yaml",
+  "initializeCommand": "if test \"${CPPSTD_TOOLS_IMAGE+x}${COMPOSE_ENV_FILES+x}${COMPOSE_DISABLE_ENV_FILE+x}\"; then echo 'initialize: unset CPPSTD_TOOLS_IMAGE, COMPOSE_ENV_FILES and COMPOSE_DISABLE_ENV_FILE so Compose uses the verified image' >&2; exit 1; fi; mise run image:verify tools --env-file .devcontainer/.env",
+  "name": "cpp-standard",
+  "postCreateCommand": "mise trust /workspaces/cpp-standard && { gh auth status >/dev/null 2>&1 || { echo 'postCreate: gh is not logged in. Run gh auth login in the container, then follow .devcontainer/README.md.' >&2; exit 1; }; } && fetched=$(mise run -q toolchain:fetch --release-only) && prefix=$(printf '%s\\n' \"$fetched\" | sed -n 's/^prefix=//p') && { test -n \"$prefix\" || { echo 'postCreate: toolchain:fetch returned no prefix' >&2; exit 1; }; } && export CPPSTD_P2996_PREFIX=\"$prefix\" && mise run vcpkg:bootstrap && mise run doctor",
+  "service": "cpp-standard",
+  "updateRemoteUserUID": false,
+  "workspaceFolder": "/workspaces/cpp-standard"
+}

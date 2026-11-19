@@ -40,6 +40,7 @@ jobs:
     permissions:
       contents: read
       actions: read  # the builder run's artifacts and caches (section 6, D135)
+      packages: read  # GHCR probes
     env:
       MISE_TASK_RUN_AUTO_INSTALL: 'false'
     steps:
@@ -124,6 +125,7 @@ jobs:
     permissions:
       contents: read
       attestations: read  # gh attestation verify of the toolchain release
+      packages: read  # pull the toolchain image
     container:
       # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
       image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]
@@ -193,6 +195,7 @@ jobs:
     permissions:
       contents: read
       attestations: read  # gh attestation verify in the toolchain fixtures
+      packages: read  # pull the toolchain image
     container:
       # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
       image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]

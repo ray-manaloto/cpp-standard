@@ -1,0 +1,1 @@
+{ "name": "session-name", "version": "0.1.0", "license": "MIT", "description": "Names each Claude session after its herdr tab (one stamped name for both, kept across resume and fork) and stores the session id as the terminal's session label." }

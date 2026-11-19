@@ -1,9 +1,9 @@
 """shell:apply and shell:rollback: link the zsh startup files after a private backup, and put it back."""
 
 # The first apply that links keeps the backup as pre-apply; a later one keeps it as replaced-<time>, and a
-# repeat with nothing to change makes neither. A rollback restores pre-apply byte for byte (a path it lacks did
-# not exist then, so it goes), after moving what was live to replaced-<time>. The XDG history stays: it holds
-# commands newer than the backup.
+# repeat with nothing to change makes neither: needs_link() judges that by mise's exit status, not stdout.
+# A rollback restores pre-apply byte for byte (a path it lacks did not exist then, so it goes), after moving
+# what was live to replaced-<time>. The XDG history stays: it holds commands newer than the backup.
 
 import os
 import shutil
@@ -91,15 +91,33 @@ def tree(root: Path) -> dict[str, tuple[str, bytes]]:
     return found
 
 
-def link(*args: str) -> str:
+def link() -> None:
     # --force: a symlink entry never replaces a real file without it, even an identical one.
-    command = ["mise", "dot", "apply", "--force", "--yes", *args, *TARGETS]
-    return subprocess.run(command, capture_output=bool(args), check=True, text=True).stdout or ""
+    command = ["mise", "dot", "apply", "--force", "--yes", *TARGETS]
+    subprocess.run(command, check=True)
 
 
 def refuse(reason: str) -> None:
     msg = f"shell:apply: {reason}; nothing changed"
     raise ValueError(msg)
+
+
+def needs_link() -> bool:
+    """Whether a link is due, judged by the exit status of `mise dot status --missing`, never its stdout.
+
+    mise prints dry-run output even when every target is applied, so stdout cannot tell a repeat run from a
+    first one. The status can: 0 says every target is applied, 1 says some target is missing, differs or has a
+    missing source, and anything else is mise failing, which must not count as either answer.
+    """
+    done = subprocess.run(
+        ["mise", "dot", "status", "--missing", *TARGETS],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode not in (0, 1):
+        refuse(f"mise dot status exited {done.returncode}: {done.stderr.strip()}")
+    return done.returncode == 1
 
 
 def started(scratch: Path) -> str:
@@ -204,7 +222,7 @@ def apply() -> None:
     if Path(".git").is_file():
         msg = "shell:apply: this is a linked git worktree; run it from the main checkout"
         raise ValueError(msg)
-    if link("--dry-run"):
+    if needs_link():
         back_up(paths)
         keep_history()
         link()
