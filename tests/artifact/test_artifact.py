@@ -6,6 +6,7 @@ nothing here needs the network, Docker or GitHub. Run: python3 -I tests/artifact
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -23,6 +24,7 @@ sys.path.insert(0, str(ROOT / "python/artifact"))
 import artifact
 
 PUBLISH = ROOT / ".github/workflows/publish.yml"
+BUILDER = ROOT / ".github/workflows/builder.yml"
 BASE = "base-arm64-0123456789abcdef"
 TOOLS = "tools-arm64-fedcba9876543210"
 TOOLCHAIN = "p2996-linux-arm64-00112233445566aa"
@@ -231,6 +233,14 @@ class FakeApi(artifact.Toolchains):
         return None
 
 
+def ready_release(tag: str = TOOLCHAIN, **overrides: object) -> dict[str, object]:
+    return {
+        "draft": False,
+        "name": tag,
+        "assets": [{"name": f"{tag}.tar.zst"}],
+    } | overrides
+
+
 class ToolchainWait(unittest.TestCase):
     """artifact-check waits for a toolchain tag (#130): main's release, else in a pull-request or
     merge-queue run the builder's cache entry on the run's ref; never a cache entry elsewhere."""
@@ -240,7 +250,7 @@ class ToolchainWait(unittest.TestCase):
     REF = "refs/heads/gh-readonly-queue/main/pr-7-" + "a" * 40
 
     def test_release_counts(self) -> None:
-        api = FakeApi(None, {self.REL: {"draft": False}})
+        api = FakeApi(None, {self.REL: ready_release()})
         self.assertEqual(api.where(TOOLCHAIN), f"release {TOOLCHAIN}")
 
     def test_draft_release_does_not_count(self) -> None:
@@ -270,7 +280,7 @@ class ToolchainWait(unittest.TestCase):
         )
 
     def test_wait_finds_the_toolchain(self) -> None:
-        api = FakeApi(None, {self.REL: {"draft": False}})
+        api = FakeApi(None, {self.REL: ready_release()})
         missing = artifact.check(
             [TOOLCHAIN],
             FakeRegistry({}),
@@ -287,7 +297,7 @@ class ToolchainWait(unittest.TestCase):
         answers = [
             urllib.error.HTTPError("u", 502, "bad gateway", {}, None),  # type: ignore[arg-type]
             urllib.error.URLError("reset"),
-            io.BytesIO(b'{"draft": false}'),
+            io.BytesIO(json.dumps(ready_release()).encode()),
         ]
 
         def urlopen(req, timeout):
@@ -341,6 +351,40 @@ class ToolchainWait(unittest.TestCase):
         with self.assertRaises(artifact.ArtifactError):
             artifact.check(
                 [TOOLCHAIN], FakeRegistry({}), None, False, 0, 1, log=lambda _: None
+            )
+
+    def test_release_with_wrong_title_is_not_ready(self) -> None:
+        bad = ready_release(name="wrong-title")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(FakeApi(None, {self.REL: bad}).where(TOOLCHAIN))
+        self.assertIn("wrong-title", err.getvalue())
+        self.assertIn(TOOLCHAIN, err.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertIsNone(FakeApi(self.REF, {self.REL: bad}).where(TOOLCHAIN))
+            caches = {"actions_caches": [{"key": f"toolchain-{TOOLCHAIN}"}]}
+            self.assertEqual(
+                FakeApi(self.REF, {self.REL: bad, self.CACHES: caches}).where(
+                    TOOLCHAIN
+                ),
+                f"cache toolchain-{TOOLCHAIN} on {self.REF}",
+            )
+
+    def test_release_without_archive_is_not_ready(self) -> None:
+        for assets in ([{"name": "inputs-hash.txt"}], []):
+            with self.subTest(assets=assets):
+                bad = ready_release(assets=assets)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertIsNone(FakeApi(None, {self.REL: bad}).where(TOOLCHAIN))
+                self.assertIn(f"{TOOLCHAIN}.tar.zst", err.getvalue())
+        caches = {"actions_caches": [{"key": f"toolchain-{TOOLCHAIN}"}]}
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                FakeApi(
+                    self.REF, {self.REL: ready_release(assets=[]), self.CACHES: caches}
+                ).where(TOOLCHAIN),
+                f"cache toolchain-{TOOLCHAIN} on {self.REF}",
             )
 
 
@@ -431,6 +475,75 @@ class PublisherReleaseCheck(unittest.TestCase):
             ]
         )
         self.assertEqual(rc, 1)
+
+
+def _strip_yaml_comment(value: str) -> str:
+    quote: str | None = None
+    for i, ch in enumerate(value):
+        if quote is None and ch in ('"', "'"):
+            quote = ch
+        elif quote == ch:
+            quote = None
+        elif quote is None and ch == "#" and (i == 0 or value[i - 1].isspace()):
+            return value[:i].rstrip()
+    return value.strip()
+
+
+def job_concurrency(text: str, job: str) -> dict[str, str]:
+    """Read `jobs.<job>.concurrency` from a workflow YAML file with standard-library Python."""
+    lines = text.splitlines()
+    jobs_idx = next(i for i, line in enumerate(lines) if line.rstrip() == "jobs:")
+    job_indent: int | None = None
+    job_idx: int | None = None
+    for i in range(jobs_idx + 1, len(lines)):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            break
+        if job_indent is None:
+            job_indent = indent
+        if indent == job_indent and line.strip().split(":", 1)[0] == job:
+            job_idx = i
+            break
+    assert job_idx is not None and job_indent is not None, f"job {job!r} not found"
+    conc_idx: int | None = None
+    conc_indent: int | None = None
+    for i in range(job_idx + 1, len(lines)):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= job_indent:
+            break
+        if conc_indent is None:
+            conc_indent = indent
+        if indent == conc_indent and line.strip().split(":", 1)[0] == "concurrency":
+            conc_idx = i
+            break
+    assert conc_idx is not None and conc_indent is not None, (
+        f"concurrency not found in {job!r}"
+    )
+    out: dict[str, str] = {}
+    for i in range(conc_idx + 1, len(lines)):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= conc_indent:
+            break
+        k, _, v = line.strip().partition(":")
+        out[k.strip()] = _strip_yaml_comment(v)
+    return out
+
+
+class BuilderWorkflow(unittest.TestCase):
+    def test_toolchain_concurrency_keeps_every_pending_run(self) -> None:
+        conc = job_concurrency(BUILDER.read_text(), "toolchain")
+        self.assertEqual(conc.get("group"), "builder-${{ needs.tags.outputs.p2996 }}")
+        self.assertEqual(conc.get("cancel-in-progress"), "false")
+        self.assertEqual(conc.get("queue"), "max")
 
 
 if __name__ == "__main__":

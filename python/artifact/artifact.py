@@ -215,7 +215,20 @@ class Toolchains:
     def where(self, tag: str) -> str | None:
         rel = self._get(f"repos/{REPO}/releases/tags/{urllib.parse.quote(tag)}")
         if rel and not rel.get("draft"):
-            return f"release {tag}"
+            archive = f"{tag}.tar.zst"
+            title = rel.get("name")
+            assets = {a.get("name") for a in (rel.get("assets") or [])}
+            defects: list[str] = []
+            if title != tag:
+                defects.append(f"title is {title!r}, expected {tag!r}")
+            if archive not in assets:
+                defects.append(f"missing asset {archive}")
+            if not defects:
+                return f"release {tag}"
+            print(
+                f"release {tag} is not ready: {'; '.join(defects)}",
+                file=sys.stderr,
+            )
         if self.ref:
             key = urllib.parse.quote(CACHE_PREFIX + tag, safe="")
             ref = urllib.parse.quote(self.ref, safe="")
