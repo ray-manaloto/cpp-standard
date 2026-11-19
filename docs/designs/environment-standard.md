@@ -1688,9 +1688,10 @@ on the Mac, D155).
   agent's own plugin commands, `install` at image build and `refresh` in a
   running container, and no tracked config file is replayed there (D171,
   which amends D147). Claude Code gets the egm and `ray-manaloto/skills`
-  marketplaces, Codex and the Antigravity CLI get egm only, and OpenCode
-  gets neither. The Antigravity CLI's plugins come back because the script
-  installs them again at build and at refresh. The image makes no
+  marketplaces and the plugins egm, skills and fleet-agents (the lead's
+  `scout` and `implementer` subagents), Codex and the Antigravity CLI get
+  egm only, and OpenCode gets neither. The Antigravity CLI's plugins come
+  back because the script installs them again at build and at refresh. The image makes no
   `~/.agents/skills`, so in a container a skill reaches an agent only
   through a plugin; D145's shared folder exists on the Mac host only.
 - **Updates.** The agent CLIs and their plugins have no pins: they come at
