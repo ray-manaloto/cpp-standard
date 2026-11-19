@@ -10,6 +10,16 @@
         ],
         "matcher": "Bash"
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "d=\"$CLAUDE_PROJECT_DIR/.mise/agent-bin\"; [ -n \"$CLAUDE_ENV_FILE\" ] && [ -x \"$d/docker\" ] || exit 0; printf 'export PATH=\"%s:$PATH\"\\n' \"$d\" >> \"$CLAUDE_ENV_FILE\"",
+            "type": "command"
+          }
+        ]
+      }
     ]
   }
 }
