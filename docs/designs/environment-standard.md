@@ -335,7 +335,7 @@ Settled questions are at the end of the Technical Plan
   GitHub Actions, or a toolchain input such as the p2996 commit; or
   `mise run pins:apt-bump` finds newer apt packages (D165).
 - **When**: Renovate opens its daily PRs (D31, D61), and the daily apt
-  bump job opens its one PR (D165, #193).
+  bump job opens one PR per group (D165, D173, #193).
 - **Then**: the §7 merge rule decides. Linux artifacts build on hosted
   runners before merge, Mac toolchains after (D62). A red PR does not
   merge.
@@ -1071,11 +1071,19 @@ fails if the queue stops being required.
   - The apt pins are not Renovate's (D165): `mise run pins:apt-bump`,
     and the skill of the same name, move every pin in `apt.toml`,
     `apt-toolchain-host.toml` and `mise.ubuntu.toml` to the newest version
-    in its index. A daily job runs it, opens one PR and merges it on its
-    checks, LLVM lines in a group of their own, so the image tags change
-    and the daily build rebuilds; a daily check fails when a pinned
-    version is gone from its index (#193). Until the job lands, the
-    coordinator runs the bump by hand.
+    in its index. It reads the Ubuntu archive and apt.llvm.org for arm64
+    and amd64, refuses an index that does not match its release file's
+    checksum (SHA512 on Ubuntu, SHA256 on apt.llvm.org) and a package whose
+    newest version differs between the two, and moves `mise.ubuntu.toml`'s
+    snapshot date with that file's Ubuntu pins. It trusts TLS and the
+    release file's checksums; it does not yet verify the release file's
+    signature or its Valid-Until (a follow-up ticket). The daily
+    `apt-bump.yml` runs it once per group, LLVM and Ubuntu, so a red Ubuntu
+    bump never holds an LLVM bump back: each group with changes gets one PR
+    from its own branch (`apt-bump/llvm`, `apt-bump/ubuntu`), opened and
+    queued as the agent App (D40), which merges on its checks, so the image
+    tags change and the daily build rebuilds. Its `check` job fails, naming
+    the package, when a pinned version is gone from its index (#193).
   - A change to `apt-toolchain-host.toml` or a toolchain's `pins.toml`
     changes the toolchain hash, so the builder rebuilds the Linux toolchain
     in that PR; nothing is written back (D75, D85). One PR bumps every OS;

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-#MISE description="Check the pins (D51, D72) and run the pin and artifact-tag golden vectors (D90)"
-# The required `pins-validate` check (environment-standard.md section 3). It runs three parts
+#MISE description="Check the pins (D51, D72) and run the pin, artifact-tag (D90) and apt-bump (D165) vectors"
+# The required `pins-validate` check (environment-standard.md section 3). It runs four parts
 # and fails if any fails: the content check of this tree's pins, the pin-validation vectors in
-# tests/pins_validate/ and the artifact-tag vectors in tests/artifact_tag/. Standard-library
-# Python 3.11 or later only (python/pins/pins.py).
+# tests/pins_validate/, the artifact-tag vectors in tests/artifact_tag/ and the offline
+# `pins:apt-bump` vectors in tests/apt_bump/ (their must-fail fixtures: a gone version, a
+# tampered index). Standard-library Python 3.11 or later only (python/pins/pins.py,
+# python/pins/apt_bump.py).
 set -euo pipefail
 
 # tomllib needs Python 3.11 or later.
@@ -19,4 +21,5 @@ status=0
 "${pins[@]}" validate --root "$root" || status=1
 "${pins[@]}" vectors pins "$root/tests/pins_validate/vectors.toml" || status=1
 "${pins[@]}" vectors tags "$root/tests/artifact_tag/vectors.toml" || status=1
+python3 -I "$root/python/pins/apt_bump.py" vectors "$root/tests/apt_bump/vectors.toml" || status=1
 exit "$status"

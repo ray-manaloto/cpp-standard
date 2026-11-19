@@ -1,11 +1,12 @@
 # The Ubuntu 26.10 machine module: what `mise -E ubuntu bootstrap` installs on a fresh
 # Ubuntu 26.10 container or host, as root, after the bare minimum (ca-certificates, curl,
 # mise). Only loaded with `-E ubuntu` (MISE_ENV=ubuntu), so the Mac and CI never apply it.
-# Source of truth for the versions: docs/standard/ubuntu-cert.Dockerfile and ubuntu.md
-# "The end state", minus gnupg, which the image needs only to check the LLVM key (mise checks
-# the fingerprint itself). Measured on the PC on 2026-11-16: 10 min from the live mirror,
-# 31 min with the snapshot below (slow downloads from snapshot.ubuntu.com); a second run takes
-# seconds and changes nothing.
+# The package set is ubuntu.md's "The end state", minus gnupg, which the image needs only to
+# check the LLVM key (mise checks the fingerprint itself). The versions are the newest in the
+# apt indexes: `mise run pins:apt-bump` and its daily job move them with the image pins (D165),
+# so they no longer follow docs/standard/ubuntu-cert.Dockerfile. Measured on the PC on
+# 2026-11-16: 10 min from the live mirror, 31 min with the snapshot below (slow downloads from
+# snapshot.ubuntu.com); a second run takes seconds and changes nothing.
 #
 # Not here yet (built from source or fetched elsewhere today, see ubuntu.md): clang-p2996,
 # IWYU 0.27, the clang 23 OpenMP NVPTX runtime, the CUDA redistributables.
@@ -25,8 +26,10 @@ phase = "pre-packages"
 # The Ubuntu archive pins below are exact, and several are -updates/-security versions, which
 # Ubuntu's live indexes drop when the next update ships. apt reads the archive as it was at this
 # snapshot (snapshot.ubuntu.com) instead, so the pins keep installing. `mise run pins:apt-bump`
-# (#193, D165) moves the date with the pins to take newer security fixes. apt.llvm.org has no
-# snapshots.
+# (D165) moves the date whenever it moves an Ubuntu pin here, to the newest Date of the release
+# files it read, so the snapshot serves exactly those indexes. apt fetches every architecture's
+# snapshot from snapshot.ubuntu.com/ubuntu/ (its Origin rule, docs/standard/ubuntu.md), which
+# carries arm64 as well. apt.llvm.org has no snapshots.
 [bootstrap.files."/etc/apt/apt.conf.d/50-snapshot"]
 content = """
 APT::Snapshot "20261116T000000Z";
@@ -61,8 +64,8 @@ fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 "apt:gcc-16-offload-nvptx" = "16.2.0-3ubuntu1"
 "apt:nvptx-tools" = "0.20260402-1"
 # LLVM 23 from apt.llvm.org: exact pins (D27, D165). apt.llvm.org deletes old snapshots within
-# days and has no snapshot service, so `mise run pins:apt-bump` (#193) moves these pins to its
-# newest build, daily, together with the Ubuntu pins and the snapshot date above.
+# days and has no snapshot service, so `mise run pins:apt-bump` and its daily job
+# (.github/workflows/apt-bump.yml) move these pins to its newest build.
 "apt:clang-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
 "apt:clang-tools-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
 "apt:llvm-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"

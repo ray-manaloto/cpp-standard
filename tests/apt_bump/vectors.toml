@@ -1,0 +1,448 @@
+# Offline vectors for `mise run pins:apt-bump` (D165, #193), run by `mise run pins:validate`.
+# [tree] holds small pin files; [index] holds Packages stanzas per "<source>/<suite>/<component>/<arch>", from which
+# the runner builds each source's dists/ tree with a release file that lists the right checksums (SHA512 for
+# ubuntu, inside a clearsigned InRelease; SHA256 for llvm). A vector runs `cmd` (bump or check) on a copy of the
+# tree with its `change`d files and `index` entries, and may set `corrupt` (flip one byte of that index after its
+# checksum is listed) or `algo` (the llvm release file's only checksum). `exit`, `stdout` (exact lines), `stderr`
+# (substrings), `unchanged` and `contains` are what must hold. [[order]] vectors check dpkg's version order.
+# The must-fail fixtures are "check-gone-version" (#193: a pinned version not in the index fails the daily check
+# and names the package) and "checksum-mismatch" (#193: an index that does not match its checksum is refused).
+
+date = "Wed, 18 Nov 2026 14:41:27 UTC"
+
+[tree]
+".mise/conf.d/apt-sources.toml" = '''
+[bootstrap.apt.sources.llvm]
+uris = "https://apt.llvm.org/resolute/"
+suites = "llvm-toolchain-resolute-23"
+components = "main"
+key = "https://apt.llvm.org/llvm-snapshot.gpg.key"
+fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+'''
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = { version = "16.2.0-3ubuntu1", os = ["linux"] }
+'''
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96", os = [
+  "linux",
+] }
+"apt:curl" = { version = "8.20.0-2ubuntu11.1", os = ["linux"] }
+'''
+"mise.ubuntu.toml" = '''
+[bootstrap.files."/etc/apt/apt.conf.d/50-snapshot"]
+content = """
+APT::Snapshot "20261116T000000Z";
+"""
+phase = "pre-packages"
+
+[bootstrap.packages]
+"apt:curl" = "8.20.0-2ubuntu11.1"
+"apt:g++-16" = "16.2.0-3ubuntu1"
+"apt:clang-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+'''
+
+[index]
+"ubuntu/stonking/main/arm64" = '''
+Package: curl
+Version: 8.20.0-2ubuntu11
+
+Package: g++-16
+Version: 16.2.0-3ubuntu1
+'''
+"ubuntu/stonking/main/amd64" = '''
+Package: curl
+Version: 8.20.0-2ubuntu11
+
+Package: g++-16
+Version: 16.2.0-3ubuntu1
+'''
+"ubuntu/stonking-updates/main/arm64" = '''
+Package: curl
+Version: 8.20.0-2ubuntu11.1
+'''
+"ubuntu/stonking-updates/main/amd64" = '''
+Package: curl
+Version: 8.20.0-2ubuntu11.1
+'''
+"llvm/llvm-toolchain-resolute-23/main/arm64" = '''
+Package: clang-23
+Version: 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95
+
+Package: clang-23
+Version: 1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96
+'''
+"llvm/llvm-toolchain-resolute-23/main/amd64" = '''
+Package: clang-23
+Version: 1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96
+
+Package: clang-23
+Version: 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95
+'''
+
+[[vector]]
+name = "nothing-to-change"
+cmd = "bump"
+stdout = []
+unchanged = true
+
+[[vector]]
+name = "lowered-pins-restored"
+cmd = "bump"
+rerun = true
+stdout = [
+  "clang-23 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95 -> 1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96",
+  "curl 8.20.0-2ubuntu11 -> 8.20.0-2ubuntu11.1",
+  "APT::Snapshot 20261116T000000Z -> 20261118T144127Z",
+]
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95", os = [
+  "linux",
+] }
+"apt:curl" = { version = "8.20.0-2ubuntu11.1", os = ["linux"] }
+'''
+"mise.ubuntu.toml" = '''
+[bootstrap.files."/etc/apt/apt.conf.d/50-snapshot"]
+content = """
+APT::Snapshot "20261116T000000Z";
+"""
+phase = "pre-packages"
+
+[bootstrap.packages]
+"apt:curl" = "8.20.0-2ubuntu11"
+"apt:g++-16" = "16.2.0-3ubuntu1"
+"apt:clang-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+'''
+
+[vector.contains]
+".mise/conf.d/apt.toml" = [
+  '"apt:clang-23" = { version = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96", os = [',
+]
+"mise.ubuntu.toml" = ['APT::Snapshot "20261118T144127Z";', '"apt:curl" = "8.20.0-2ubuntu11.1"']
+
+[[vector]]
+name = "llvm-group-alone"
+cmd = "bump"
+group = "llvm"
+stdout = [
+  "clang-23 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95 -> 1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96",
+]
+
+[vector.change]
+"mise.ubuntu.toml" = '''
+[bootstrap.files."/etc/apt/apt.conf.d/50-snapshot"]
+content = """
+APT::Snapshot "20261116T000000Z";
+"""
+phase = "pre-packages"
+
+[bootstrap.packages]
+"apt:curl" = "8.20.0-2ubuntu11"
+"apt:g++-16" = "16.2.0-3ubuntu1"
+"apt:clang-23" = "1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95"
+'''
+
+[vector.contains]
+"mise.ubuntu.toml" = ['APT::Snapshot "20261116T000000Z";', '"apt:curl" = "8.20.0-2ubuntu11"']
+
+[[vector]]
+name = "snapshot-stays-without-a-machine-pin-change"
+cmd = "bump"
+group = "ubuntu"
+stdout = ["curl 8.20.0-2ubuntu11 -> 8.20.0-2ubuntu11.1"]
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96", os = [
+  "linux",
+] }
+"apt:curl" = { version = "8.20.0-2ubuntu11", os = ["linux"] }
+'''
+
+[vector.contains]
+"mise.ubuntu.toml" = ['APT::Snapshot "20261116T000000Z";']
+
+[[vector]]
+name = "check-passes"
+cmd = "check"
+unchanged = true
+stdout = ["PASS: every apt pin is in its index"]
+
+[[vector]]
+name = "check-gone-version"
+cmd = "check"
+exit = 1
+stderr = [
+  "mise.ubuntu.toml: curl 8.20.0-2ubuntu10 is no longer in the ubuntu index for arm64",
+  "mise.ubuntu.toml: curl 8.20.0-2ubuntu10 is no longer in the ubuntu index for amd64",
+]
+
+[vector.change]
+"mise.ubuntu.toml" = '''
+[bootstrap.packages]
+"apt:curl" = "8.20.0-2ubuntu10"
+'''
+
+[[vector]]
+name = "checksum-mismatch"
+cmd = "bump"
+corrupt = "ubuntu/stonking-updates/main/amd64"
+exit = 1
+stderr = ["main/binary-amd64/Packages.xz: does not match the SHA512 checksum and size in its release file; refused"]
+unchanged = true
+
+[[vector]]
+name = "checksum-mismatch-llvm-check"
+cmd = "check"
+corrupt = "llvm/llvm-toolchain-resolute-23/main/arm64"
+exit = 1
+stderr = ["main/binary-arm64/Packages.gz: does not match the SHA256 checksum"]
+
+[[vector]]
+name = "no-strong-checksum"
+cmd = "bump"
+algo = "MD5Sum"
+exit = 1
+stderr = ["lists no SHA512 or SHA256 checksums; refused"]
+unchanged = true
+
+[[vector]]
+name = "architectures-differ"
+cmd = "bump"
+exit = 1
+stderr = ["clang-23: the newest version differs between architectures"]
+stdout = ["curl 8.20.0-2ubuntu11 -> 8.20.0-2ubuntu11.1"]
+
+[vector.index]
+"llvm/llvm-toolchain-resolute-23/main/amd64" = '''
+Package: clang-23
+Version: 1:23.1.7~++20261118000000+0000000000aa-1~exp1~20261118000000.97
+'''
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96", os = [
+  "linux",
+] }
+"apt:curl" = { version = "8.20.0-2ubuntu11", os = ["linux"] }
+'''
+
+[vector.contains]
+".mise/conf.d/apt.toml" = ['"apt:clang-23" = { version = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"']
+
+[[vector]]
+name = "missing-on-one-architecture"
+cmd = "bump"
+exit = 1
+stderr = ["g++-16: not in the ubuntu index for amd64; refused"]
+unchanged = true
+
+[vector.index]
+"ubuntu/stonking/main/amd64" = '''
+Package: curl
+Version: 8.20.0-2ubuntu11
+'''
+
+[[vector]]
+name = "in-no-index"
+cmd = "bump"
+exit = 1
+stderr = ["zstd: in no index; refused"]
+unchanged = true
+
+[vector.change]
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages]
+"apt:g++-16" = { version = "16.2.0-3ubuntu1", os = ["linux"] }
+"apt:zstd" = { version = "1.5.7+dfsg-4", os = ["linux"] }
+'''
+
+[[vector]]
+name = "unreadable-pin-shape"
+cmd = "bump"
+exit = 1
+stderr = ["apt-toolchain-host.toml: its apt pin lines are not one per line"]
+unchanged = true
+
+[vector.change]
+".mise/conf.d/apt-toolchain-host.toml" = '''
+[bootstrap.packages."apt:g++-16"]
+version = "16.2.0-3ubuntu1"
+'''
+
+[[vector]]
+name = "llvm-group-not-failed-by-an-ubuntu-refusal"
+cmd = "bump"
+group = "llvm"
+stdout = [
+  "clang-23 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95 -> 1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96",
+]
+
+[vector.index]
+"ubuntu/stonking/main/amd64" = '''
+Package: curl
+Version: 8.20.0-2ubuntu11
+'''
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95", os = [
+  "linux",
+] }
+"apt:curl" = { version = "8.20.0-2ubuntu11.1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "ubuntu-unreadable-llvm-still-bumps"
+cmd = "bump"
+group = "llvm"
+corrupt = "ubuntu/stonking-updates/main/amd64"
+stdout = [
+  "clang-23 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95 -> 1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96",
+]
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95", os = [
+  "linux",
+] }
+"apt:curl" = { version = "8.20.0-2ubuntu11.1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "ubuntu-unreadable-fails-the-ubuntu-group"
+cmd = "bump"
+corrupt = "ubuntu/stonking-updates/main/amd64"
+exit = 1
+stderr = ["ubuntu: ", "does not match the SHA512 checksum"]
+stdout = [
+  "clang-23 1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95 -> 1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96",
+]
+
+[vector.change]
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95", os = [
+  "linux",
+] }
+"apt:curl" = { version = "8.20.0-2ubuntu11.1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "never-backwards"
+cmd = "bump"
+exit = 1
+stderr = ["mise.ubuntu.toml: curl 8.20.0-2ubuntu12 is newer than the index's newest 8.20.0-2ubuntu11.1; refused"]
+unchanged = true
+
+[vector.change]
+"mise.ubuntu.toml" = '''
+[bootstrap.files."/etc/apt/apt.conf.d/50-snapshot"]
+content = """
+APT::Snapshot "20261116T000000Z";
+"""
+phase = "pre-packages"
+
+[bootstrap.packages]
+"apt:curl" = "8.20.0-2ubuntu12"
+"apt:g++-16" = "16.2.0-3ubuntu1"
+"apt:clang-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+'''
+
+[[vector]]
+name = "snapshot-never-backwards"
+cmd = "bump"
+stdout = ["curl 8.20.0-2ubuntu11 -> 8.20.0-2ubuntu11.1"]
+
+[vector.change]
+"mise.ubuntu.toml" = '''
+[bootstrap.files."/etc/apt/apt.conf.d/50-snapshot"]
+content = """
+APT::Snapshot "20261201T000000Z";
+"""
+phase = "pre-packages"
+
+[bootstrap.packages]
+"apt:curl" = "8.20.0-2ubuntu11"
+"apt:g++-16" = "16.2.0-3ubuntu1"
+"apt:clang-23" = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+'''
+
+[vector.contains]
+"mise.ubuntu.toml" = ['APT::Snapshot "20261201T000000Z";']
+
+[[vector]]
+name = "same-size-tampered-index"
+cmd = "bump"
+tamper = "ubuntu/stonking-updates/main/arm64"
+exit = 1
+stderr = ["main/binary-arm64/Packages.xz: does not match the SHA512 checksum and size in its release file; refused"]
+unchanged = true
+
+[[vector]]
+name = "malformed-release-line"
+cmd = "check"
+exit = 1
+stderr = ["malformed SHA256 line 'deadbeef'; refused"]
+unchanged = true
+
+[vector.release_extra]
+llvm = "\n deadbeef"
+
+[[order]]
+a = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+b = "1:23.1.6~++20261115084239+551bf48cf74f-1~exp1~20261115204336.95"
+want = 1
+
+[[order]]
+a = "1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96"
+b = "1:23.1.6-1"
+want = -1
+
+[[order]]
+a = "1:1.0"
+b = "9.9"
+want = 1
+
+[[order]]
+a = "8.20.0-2ubuntu11.1"
+b = "8.20.0-2ubuntu11"
+want = 1
+
+[[order]]
+a = "1.0~rc1-1"
+b = "1.0-1"
+want = -1
+
+[[order]]
+a = "1.0-1"
+b = "1.0-1"
+want = 0
+
+[[order]]
+a = "1.010"
+b = "1.9"
+want = 1
+
+[[order]]
+a = "1.0"
+b = "1.0-0"
+want = 0
+
+[[order]]
+a = "1.0a"
+b = "1.0+"
+want = -1
+
+[[order]]
+a = "20260816ubuntu0.26.10.2"
+b = "20260816ubuntu0.26.10.10"
+want = -1

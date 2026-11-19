@@ -1,0 +1,163 @@
+# The daily apt pin bump (D165, #193). `check` compares every apt pin with the live indexes and fails, naming the
+# package, when a pinned version is no longer published. `bump` runs `mise run pins:apt-bump` once per group
+# (llvm: the apt.llvm.org pins; ubuntu: the Ubuntu archive pins and mise.ubuntu.toml's snapshot date), so a red
+# Ubuntu bump never holds an LLVM bump back. A group with changes gets one pull request from its own branch,
+# apt-bump/<group>, opened and queued as the cpp-standard-agents App (D40): a GITHUB_TOKEN pull request would start
+# no required checks. The merge queue merges it on its checks; the merge's push to main changes the image tags, and
+# builder.yml, which runs on every push to main, builds the new images.
+#
+# The App's credential lives only in the `apt-bump` environment, whose deployment branches are `main` alone, so no
+# pull-request workflow can read it: the variable APT_BUMP_CLIENT_ID (the App's client ID) and the secret
+# APT_BUMP_PRIVATE_KEY. The token is minted per run and scoped down to contents and pull requests.
+name: apt-bump
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.9
+          install: false
+      - name: Compare the pins with the live indexes
+        run: mise run pins:apt-bump --check
+
+  bump:
+    name: bump (${{ matrix.group }})
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 15
+    environment: apt-bump
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [llvm, ubuntu]
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: 'false'
+      GROUP: ${{ matrix.group }}
+    steps:
+      - name: Check the App credential
+        env:
+          CLIENT_ID: ${{ vars.APT_BUMP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.APT_BUMP_PRIVATE_KEY != '' }}
+        run: |
+          missing=0
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::error::environment apt-bump has no variable APT_BUMP_CLIENT_ID (the cpp-standard-agents App's client ID)"
+            missing=1
+          fi
+          if [[ "$HAS_KEY" != "true" ]]; then
+            echo "::error::environment apt-bump has no secret APT_BUMP_PRIVATE_KEY (the cpp-standard-agents App's private key)"
+            missing=1
+          fi
+          exit "$missing"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        with:
+          version: 2026.11.9
+          install: false
+      - name: Move the group's pins
+        id: bump
+        run: |
+          mise run pins:apt-bump --group "$GROUP" | tee "$RUNNER_TEMP/changes.txt"
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No $GROUP pin changed."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Mint the App token
+        id: app
+        if: ${{ steps.bump.outputs.changed == 'true' }}
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc  # v3.4.0
+        with:
+          client-id: ${{ vars.APT_BUMP_CLIENT_ID }}
+          private-key: ${{ secrets.APT_BUMP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Push the branch, open or update the pull request and queue it
+        if: ${{ steps.bump.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          branch="apt-bump/$GROUP"
+          title="chore(pins): move the $GROUP apt pins to the newest versions"
+          user_id="$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)"
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${user_id}+${SLUG}[bot]@users.noreply.github.com"
+          gh auth setup-git
+          pins=(.mise/conf.d/apt.toml .mise/conf.d/apt-toolchain-host.toml mise.ubuntu.toml)
+          git switch -c "$branch"
+          git add -- "${pins[@]}"
+          {
+            echo "$title"
+            echo
+            cat "$RUNNER_TEMP/changes.txt"
+          } > "$RUNNER_TEMP/message.txt"
+          git commit -q -F "$RUNNER_TEMP/message.txt"
+          # The branch belongs to this job. When a still-open bump from an earlier day already holds these exact pin
+          # files, leave its commit alone, so it keeps its checks and its place in the queue (the queue tests it on
+          # top of main). Otherwise replace it, with a lease on the commit just fetched.
+          push=true
+          lease=""
+          if git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null; then
+            lease="$(git rev-parse "origin/$branch")"
+            if git diff --quiet "origin/$branch" HEAD -- "${pins[@]}"; then
+              echo "origin/$branch already holds this bump; not pushing."
+              push=false
+            fi
+          fi
+          head="$lease"
+          if [[ "$push" == true ]]; then
+            git push --force-with-lease="refs/heads/$branch:$lease" origin "HEAD:refs/heads/$branch"
+            head="$(git rev-parse HEAD)"
+          fi
+          {
+            echo "The daily apt-bump workflow ran \`mise run pins:apt-bump --group $GROUP\` (D165):"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/changes.txt"
+            echo '```'
+            echo
+            echo "It merges through the merge queue on its required checks."
+          } > "$RUNNER_TEMP/body.md"
+          pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr" ]]; then
+            gh pr create --base main --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          elif [[ "$push" == false ]]; then
+            echo "Pull request #$pr is unchanged; it keeps its checks and queue place."
+            exit 0
+          else
+            gh pr edit "$pr" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi
+          gh pr merge "$pr" --auto --match-head-commit "$head"
