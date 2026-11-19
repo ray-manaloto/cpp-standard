@@ -44,6 +44,8 @@ and the commit belong to the coordinator or the owner.
 
 After the merge: close the issue with a comment, tick the roadmap line, remove the
 worktree, and recompute the frontier (a GitHub blocked-by link only drops when its blocker closes).
+When that ends the round, close it: `workflowtools round-close --round <ID> --session <session> ...
+--plan <plan or lane page>` (see Rounds in [the workflow](workflow.md)).
 
 After a mise tool bump merges and local `main` fast-forwards, run `mise run roll:all`: sessions opened
 earlier keep the old install on their PATH, and its plan lists them as stale. `--apply` stops and
@@ -54,6 +56,8 @@ one pull request merges. Then a ticket closes only after its commits were pushed
 branch on the remote and seen there. The closing comment names each commit and says it is
 not merged yet. Those commits are never rewritten: later changes are new commits, and the pull
 request merges with a merge commit, never squashed or rebased. On an early close, tick the roadmap
-line and recompute the frontier, but keep the worktree until the merge. The spec stays open until
+line and recompute the frontier, but keep the worktree until the merge. An early close also closes
+the ticket's round with `workflowtools round-close`, which records the shared branch's head commit
+at that moment as the ticket's own. The spec stays open until
 the merge. If the branch or pull request is abandoned, or later work undoes a ticket, reopen the
 ticket and recompute the frontier.

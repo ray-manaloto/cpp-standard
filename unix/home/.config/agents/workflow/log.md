@@ -8,3 +8,8 @@
 * **Added**: cross-review's "Waiting on the pane" section. It says to wait with `hc wait` or
   `hc send --wait`, not with a sleep loop over `hc read`, which can miss the answer. It also says to
   word a brief's limits so the pane's read-only shell stays allowed.
+
+## 2026-11-18
+* **Added**: the Rounds section in workflow.md and the round close in ship.md's close-out (#159). The
+  coordinator opens a round at the hand-off, adds its pull requests and closes it with
+  `workflowtools round-open`, `round-pr` and `round-close`; `workflowtools report` lists open rounds.

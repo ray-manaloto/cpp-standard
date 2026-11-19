@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from pydantic import TypeAdapter, ValidationError
 
 from . import git, roadmap
-from .models import Check, Finding, GitHubIssue, IssueState, IssueTicket, Unavailable
+from .models import Check, Finding, GitHubIssue, GitHubPull, IssueState, IssueTicket, Unavailable
 
 ORIGIN = re.compile(r"github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
 PAGES = TypeAdapter(list[list[GitHubIssue]])
@@ -21,18 +21,30 @@ def origin() -> tuple[str, str] | None:
     return (match[1], match[2]) if match else None
 
 
-def unavailable(repo: tuple[str, str], detail: str) -> Unavailable:
-    return Unavailable(kind="github-unavailable", check=Check.tickets, repo="/".join(repo), detail=detail)
+def unavailable(repo: tuple[str, str], detail: str, check: Check = Check.tickets) -> Unavailable:
+    return Unavailable(kind="github-unavailable", check=check, repo="/".join(repo), detail=detail)
 
 
-def api(repo: tuple[str, str], *args: str) -> str | Unavailable:
+def api(repo: tuple[str, str], *args: str, check: Check = Check.tickets) -> str | Unavailable:
     try:
         done = subprocess.run(["gh", "api", *args], capture_output=True, text=True, check=False)
     except FileNotFoundError:
-        return unavailable(repo, "gh is not installed")
+        return unavailable(repo, "gh is not installed", check)
     if done.returncode:
-        return unavailable(repo, done.stderr.partition("\n")[0])
+        return unavailable(repo, done.stderr.partition("\n")[0], check)
     return done.stdout
+
+
+def head(repo: str, number: int) -> str | Unavailable:
+    """A pull request's head commit now, for a round's close."""
+    owner, name = repo.split("/")
+    result = api((owner, name), f"repos/{repo}/pulls/{number}", check=Check.rounds)
+    if isinstance(result, Unavailable):
+        return result
+    try:
+        return GitHubPull.model_validate_json(result).head.sha
+    except ValidationError:
+        return unavailable((owner, name), "gh returned output that is not the expected JSON", Check.rounds)
 
 
 def issue(owner: str, repo: str, number: int) -> GitHubIssue | Unavailable:

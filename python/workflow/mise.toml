@@ -29,6 +29,32 @@ depends = ["sync"]
 dir = "{{ config_root }}/../.."
 run = "uv run --project python/workflow --locked workflowtools tickets"
 
+# Rounds (#159): one JSON-lines file per lane under $XDG_STATE_HOME/workflowtools/rounds. A replay prints the stored
+# event and writes nothing. The coordinator runs the installed copy (`workflowtools round-open ...`) from any repo.
+[tasks.round-open]
+description = "Open a round: --round <repo-or-lane>-<yyyymmdd>-<slug>"
+depends = ["sync"]
+dir = "{{ config_root }}/../.."
+run = "uv run --project python/workflow --locked workflowtools round-open"
+
+[tasks.round-pr]
+description = "Add a pull request to an open round: --round ID --repo owner/name --number N"
+depends = ["sync"]
+dir = "{{ config_root }}/../.."
+run = "uv run --project python/workflow --locked workflowtools round-pr"
+
+[tasks.round-close]
+description = "Close a round with --session (repeat) and --plan; records each pull request's head commit now"
+depends = ["sync"]
+dir = "{{ config_root }}/../.."
+run = "uv run --project python/workflow --locked workflowtools round-close"
+
+[tasks.report]
+description = "Print open rounds, or unknown with the reason when the store cannot be read"
+depends = ["sync"]
+dir = "{{ config_root }}/../.."
+run = "uv run --project python/workflow --locked workflowtools report"
+
 # Another repository's hk runs the installed copy (//workflow:install), so it needs no checkout of this one.
 [tasks.install]
 description = "Install this checkout's workflowtools as a uv tool, the copy other repositories' hk steps run"

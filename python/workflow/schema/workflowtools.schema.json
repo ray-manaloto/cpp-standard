@@ -67,6 +67,30 @@
     },
     "unavailable": {
       "$ref": "#/$defs/Unavailable"
+    },
+    "round_open": {
+      "$ref": "#/$defs/RoundOpen"
+    },
+    "round_pr": {
+      "$ref": "#/$defs/RoundPr"
+    },
+    "round_close": {
+      "$ref": "#/$defs/RoundClose"
+    },
+    "report": {
+      "$ref": "#/$defs/Report"
+    },
+    "round_event": {
+      "$ref": "#/$defs/RoundEvent"
+    },
+    "github_pull": {
+      "$ref": "#/$defs/GitHubPull"
+    },
+    "open_round": {
+      "$ref": "#/$defs/OpenRound"
+    },
+    "report_section": {
+      "$ref": "#/$defs/ReportSection"
     }
   },
   "$defs": {
@@ -77,8 +101,352 @@
         "frontmatter",
         "skill-table",
         "tickets",
-        "settings-local"
+        "settings-local",
+        "round-open",
+        "round-pr",
+        "round-close",
+        "report"
       ]
+    },
+    "RoundId": {
+      "description": "<repo-or-lane>-<yyyymmdd>-<slug>; the part before the first -<8 digits>- names the lane's store file.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*-[0-9]{8}-[a-z0-9][a-z0-9-]*$"
+    },
+    "Repo": {
+      "description": "A GitHub repository, owner/name; never . or .., since it goes into a gh api path.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+/\\.?[A-Za-z0-9_-][A-Za-z0-9_.-]*$"
+    },
+    "RoundOpen": {
+      "description": "Open a round; a replay prints the stored open event and writes nothing.",
+      "type": "object",
+      "properties": {
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        }
+      },
+      "required": [
+        "round"
+      ],
+      "additionalProperties": false
+    },
+    "RoundPr": {
+      "description": "Add a pull request to an open round; a replay prints the stored pr event and writes nothing.",
+      "type": "object",
+      "properties": {
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "round",
+        "repo",
+        "number"
+      ],
+      "additionalProperties": false
+    },
+    "RoundClose": {
+      "description": "Close a round with the retro's inputs and each pull request's head commit read from GitHub now.",
+      "type": "object",
+      "properties": {
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "session": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "description": "A session that did the work; repeat the flag for each"
+        },
+        "plan": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The plan or lane page the retro starts from"
+        }
+      },
+      "required": [
+        "round",
+        "session",
+        "plan"
+      ],
+      "additionalProperties": false
+    },
+    "Report": {
+      "description": "Print the report: open rounds, or unknown with the reason when the store cannot be read.",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "OpenEvent": {
+      "description": "A round was opened.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "open"
+        },
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "at": {
+          "type": "string",
+          "description": "UTC time written, ISO 8601"
+        }
+      },
+      "required": [
+        "kind",
+        "round",
+        "at"
+      ],
+      "additionalProperties": false
+    },
+    "PrEvent": {
+      "description": "A pull request was added to a round.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "pr"
+        },
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": {
+          "type": "string",
+          "description": "UTC time written, ISO 8601"
+        }
+      },
+      "required": [
+        "kind",
+        "round",
+        "repo",
+        "number",
+        "at"
+      ],
+      "additionalProperties": false
+    },
+    "ClosedPr": {
+      "description": "A round's pull request and its head commit when the round closed.",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "head": {
+          "type": "string",
+          "description": "The head commit SHA at close"
+        }
+      },
+      "required": [
+        "repo",
+        "number",
+        "head"
+      ],
+      "additionalProperties": false
+    },
+    "CloseEvent": {
+      "description": "A round was closed, with the retro's inputs.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "close"
+        },
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "at": {
+          "type": "string",
+          "description": "UTC time written, ISO 8601"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The sessions that did the work"
+        },
+        "plan": {
+          "type": "string",
+          "description": "The plan or lane page"
+        },
+        "prs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClosedPr"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "round",
+        "at",
+        "sessions",
+        "plan",
+        "prs"
+      ],
+      "additionalProperties": false
+    },
+    "RoundEvent": {
+      "description": "One line of a lane's store file.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OpenEvent"
+        },
+        {
+          "$ref": "#/$defs/PrEvent"
+        },
+        {
+          "$ref": "#/$defs/CloseEvent"
+        }
+      ]
+    },
+    "PullHead": {
+      "description": "The head of a pull request, the part read here.",
+      "type": "object",
+      "properties": {
+        "sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha"
+      ],
+      "additionalProperties": true
+    },
+    "GitHubPull": {
+      "description": "The pull request fields read from GitHub; other API fields pass.",
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer"
+        },
+        "head": {
+          "$ref": "#/$defs/PullHead"
+        }
+      },
+      "required": [
+        "number",
+        "head"
+      ],
+      "additionalProperties": true
+    },
+    "PrRef": {
+      "description": "A pull request of a round.",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "number": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "repo",
+        "number"
+      ],
+      "additionalProperties": false
+    },
+    "OpenRound": {
+      "description": "A report line: a round opened and not closed.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "open-round"
+        },
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "opened_at": {
+          "type": "string"
+        },
+        "prs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PrRef"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "round",
+        "opened_at",
+        "prs"
+      ],
+      "additionalProperties": false
+    },
+    "SectionName": {
+      "description": "A report section.",
+      "type": "string",
+      "enum": [
+        "open-rounds"
+      ]
+    },
+    "ReportSection": {
+      "description": "A report section's last line: how many lines it printed, or unknown with the reason.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "section"
+        },
+        "section": {
+          "$ref": "#/$defs/SectionName"
+        },
+        "count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lines printed; null when unknown"
+        },
+        "unknown": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the section's input could not be read; null when it was read"
+        }
+      },
+      "required": [
+        "kind",
+        "section",
+        "count",
+        "unknown"
+      ],
+      "additionalProperties": false
     },
     "Frontmatter": {
       "description": "Check every SKILL.md and okf concept file's frontmatter, and that every YAML file parses, as the index has them.",
@@ -176,6 +544,18 @@
         },
         {
           "$ref": "#/$defs/SettingsLocal"
+        },
+        {
+          "$ref": "#/$defs/RoundOpen"
+        },
+        {
+          "$ref": "#/$defs/RoundPr"
+        },
+        {
+          "$ref": "#/$defs/RoundClose"
+        },
+        {
+          "$ref": "#/$defs/Report"
         }
       ]
     },
@@ -186,7 +566,8 @@
         "frontmatter",
         "skill-table",
         "tickets",
-        "settings-local"
+        "settings-local",
+        "rounds"
       ]
     },
     "Finding": {

@@ -8,14 +8,30 @@ import yaml
 from pydantic import BaseModel
 from pydantic_settings import CliApp, CliSettingsSource
 
-from . import frontmatter, settings_local, skill_table, tickets
-from .models import Command, Failure, Frontmatter, Options, SettingsLocal, SkillTable, Tickets
+from . import frontmatter, rounds, settings_local, skill_table, tickets
+from .models import (
+    Command,
+    Failure,
+    Frontmatter,
+    Options,
+    Report,
+    RoundClose,
+    RoundOpen,
+    RoundPr,
+    SettingsLocal,
+    SkillTable,
+    Tickets,
+)
 
 OPTIONS: dict[Command, type[Options]] = {
     Command.frontmatter: Frontmatter,
     Command.skill_table: SkillTable,
     Command.tickets: Tickets,
     Command.settings_local: SettingsLocal,
+    Command.round_open: RoundOpen,
+    Command.round_pr: RoundPr,
+    Command.round_close: RoundClose,
+    Command.report: Report,
 }
 
 
@@ -58,6 +74,16 @@ def run(options: Options) -> None:
             emit([result] if isinstance(result, BaseModel) else result)
         case SettingsLocal():
             emit(found := settings_local.findings())
+        case RoundOpen() | RoundPr() | RoundClose():
+            # The event written or replayed, or why none was: exit 1 on a finding, 2 when GitHub could not answer.
+            emit(lines := [rounds.run(options)])
+            if status := tickets.code(lines, require_github=False):
+                raise SystemExit(status)
+            return
+        case Report():
+            # Report-only: unknown is a line in the report, never a failing exit.
+            emit(rounds.open_rounds())
+            return
         case _:
             emit(found := frontmatter.findings())
     if found:
