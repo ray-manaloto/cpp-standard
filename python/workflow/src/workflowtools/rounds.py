@@ -1,4 +1,4 @@
-"""Rounds: open, pr, close and retro events in one JSON-lines file per lane, and the report's two round sections."""
+"""Rounds: open, pr, close and retro events in one JSON-lines file per lane, and the report's four sections."""
 
 import fcntl
 import os
@@ -10,17 +10,22 @@ from pathlib import Path
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from . import github, roadmap
+from . import github, receipts, roadmap
 from .models import (
     Check,
     ClosedPr,
     CloseEvent,
     Disposition,
     Finding,
+    GitHubPull,
+    MergeInNoRound,
+    MergeWithoutReceipt,
     OpenEvent,
     OpenRound,
     PrEvent,
     PrRef,
+    Receipt,
+    Report,
     ReportSection,
     RetroChange,
     RetroEvent,
@@ -30,8 +35,10 @@ from .models import (
     RoundOpen,
     RoundPr,
     RoundRetro,
+    RoundWithoutReceipt,
     SectionName,
     Unavailable,
+    VerifyReading,
 )
 
 EVENT: TypeAdapter[RoundEvent] = TypeAdapter(RoundEvent)
@@ -199,8 +206,9 @@ def all_events() -> list[RoundEvent]:
     return [event for path in sorted(directory.iterdir()) if path.suffix == ".jsonl" for event in read(path)]
 
 
-def section_end(section: SectionName, lines: list[BaseModel]) -> list[BaseModel]:
-    return [*lines, ReportSection(kind="section", section=section, count=len(lines), unknown=None)]
+def section_end(section: SectionName, lines: list[BaseModel], unknown: str | None = None) -> list[BaseModel]:
+    count = None if unknown is not None else len(lines)
+    return [*lines, ReportSection(kind="section", section=section, count=count, unknown=unknown)]
 
 
 def open_rounds(events: list[RoundEvent]) -> list[BaseModel]:
@@ -236,7 +244,134 @@ def owing_retro(events: list[RoundEvent]) -> list[BaseModel]:
     return section_end(SectionName.owing_retro, lines)
 
 
-def report() -> list[BaseModel]:
+def report_repos(events: list[RoundEvent], extra: list[str]) -> list[str]:
+    return sorted({*extra, *(event.repo for event in events if isinstance(event, PrEvent))})
+
+
+def pr_rounds(events: list[RoundEvent]) -> dict[tuple[str, int], list[str]]:
+    by_pr: dict[tuple[str, int], list[str]] = {}
+    for event in events:
+        if isinstance(event, PrEvent):
+            by_pr.setdefault((event.repo, event.number), []).append(event.round)
+    return by_pr
+
+
+def closed_pr_heads(events: list[RoundEvent]) -> dict[tuple[str, int], list[tuple[str, str]]]:
+    by_pr: dict[tuple[str, int], list[tuple[str, str]]] = {}
+    for event in events:
+        if isinstance(event, CloseEvent):
+            for pr in event.prs:
+                by_pr.setdefault((pr.repo, pr.number), []).append((event.round, pr.head))
+    return by_pr
+
+
+def read_receipts() -> tuple[dict[str, Receipt] | None, str | None]:
+    try:
+        return receipts.all_receipts(), None
+    # OSError: a file or the directory cannot be read; ValueError: a file is not a verify receipt.
+    except (OSError, ValueError) as error:
+        return None, str(error)
+
+
+def merged_by_repo(repos: list[str]) -> tuple[list[tuple[str, GitHubPull]], str | None]:
+    merged: list[tuple[str, GitHubPull]] = []
+    errors = []
+    for repo in repos:
+        result = github.merged_pulls(repo)
+        if isinstance(result, Unavailable):
+            errors.append(f"{repo}: {result.detail}")
+        else:
+            merged.extend((repo, pull) for pull in result)
+    return merged, "; ".join(errors) or None
+
+
+def evaluate_commit(
+    repo: str,
+    sha: str,
+    stored_receipts: dict[str, Receipt],
+    cache: dict[tuple[str, str], tuple[VerifyReading, str]],
+) -> tuple[VerifyReading, str]:
+    cached = cache.get((repo, sha))
+    if cached is not None:
+        return cached
+    fetched = github.commit(repo, sha)
+    if isinstance(fetched, Unavailable):
+        reading = (VerifyReading.unknown, f"could not read commit {sha}: {fetched.detail}")
+    else:
+        reading = receipts.read_commit(fetched, stored_receipts)
+    cache[(repo, sha)] = reading
+    return reading
+
+
+def without_receipt_lines(
+    merged: list[tuple[str, GitHubPull]],
+    by_pr: dict[tuple[str, int], list[str]],
+    closed_by_pr: dict[tuple[str, int], list[tuple[str, str]]],
+    stored_receipts: dict[str, Receipt],
+) -> list[BaseModel]:
+    cache: dict[tuple[str, str], tuple[VerifyReading, str]] = {}
+    round_lines: list[BaseModel] = []
+    merge_lines: list[BaseModel] = []
+    for repo, pull in merged:
+        key_pr = (repo, pull.number)
+        for round_id, closed_head in closed_by_pr.get(key_pr, ()):
+            reading, reason = evaluate_commit(repo, closed_head, stored_receipts, cache)
+            if reading is not VerifyReading.verified:
+                round_lines.append(
+                    RoundWithoutReceipt(
+                        kind="round-without-receipt",
+                        round=round_id,
+                        repo=repo,
+                        number=pull.number,
+                        head=closed_head,
+                        reading=reading,
+                        reason=reason,
+                    )
+                )
+        reading, reason = evaluate_commit(repo, pull.head.sha, stored_receipts, cache)
+        if reading is not VerifyReading.verified:
+            merge_lines.append(
+                MergeWithoutReceipt(
+                    kind="merge-without-receipt",
+                    repo=repo,
+                    number=pull.number,
+                    head=pull.head.sha,
+                    merged_at=str(pull.merged_at),
+                    rounds=by_pr.get(key_pr, []),
+                    reading=reading,
+                    reason=reason,
+                )
+            )
+    return [*round_lines, *merge_lines]
+
+
+def reconcile(events: list[RoundEvent], extra_repos: list[str]) -> list[BaseModel]:
+    stored_receipts, receipt_error = read_receipts()
+    merged, listing_unknown = merged_by_repo(report_repos(events, extra_repos))
+    by_pr = pr_rounds(events)
+    closed_by_pr = closed_pr_heads(events)
+    verify_lines = (
+        without_receipt_lines(merged, by_pr, closed_by_pr, stored_receipts) if stored_receipts is not None else []
+    )
+    receipt_unknown = "; ".join(part for part in (receipt_error, listing_unknown) if part) or None
+    no_round_lines: list[BaseModel] = [
+        MergeInNoRound(
+            kind="merge-in-no-round",
+            repo=repo,
+            number=pull.number,
+            head=pull.head.sha,
+            merged_at=str(pull.merged_at),
+        )
+        for repo, pull in merged
+        if (repo, pull.number) not in by_pr
+    ]
+    return [
+        *section_end(SectionName.without_receipt, verify_lines, receipt_unknown),
+        *section_end(SectionName.merges_in_no_round, no_round_lines, listing_unknown),
+    ]
+
+
+def report(options: Report) -> list[BaseModel]:
     """Each section from one read of the store; when it cannot be read, every section is unknown with the reason."""
     try:
         events = all_events()
@@ -245,7 +380,7 @@ def report() -> list[BaseModel]:
         return [
             ReportSection(kind="section", section=section, count=None, unknown=str(error)) for section in SectionName
         ]
-    return [*open_rounds(events), *owing_retro(events)]
+    return [*open_rounds(events), *owing_retro(events), *reconcile(events, options.repo)]
 
 
 def run(options: RoundOpen | RoundPr | RoundClose | RoundRetro) -> BaseModel:

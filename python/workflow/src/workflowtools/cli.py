@@ -90,7 +90,7 @@ def run(options: Options) -> None:
         case Report() | VerifyCommit():
             # Report-only: an unknown report section, and a mismatch or no receipt at commit, are lines in the
             # output, never a failing exit; the commit goes ahead.
-            emit(rounds.report() if isinstance(options, Report) else [receipts.commit(options)])
+            emit(rounds.report(options) if isinstance(options, Report) else [receipts.commit(options)])
             return
         case _:
             emit(found := frontmatter.findings())

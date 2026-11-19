@@ -135,13 +135,17 @@ class RoundRetro(BaseModel):
 
 class Report(BaseModel):
     """
-    Print open rounds and closed rounds owing a retro; each section is unknown when the store cannot be read.
+    Print open rounds, closed rounds owing a retro, commits without a matching verify receipt, and merges in no round.
     """
 
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
     )
+    repo: list[Repo] = []
+    """
+    Extra GitHub repository (owner/name) to reconcile merged pull requests for; repeat the flag for each
+    """
 
 
 class OpenEvent(BaseModel):
@@ -308,6 +312,58 @@ class GitHubPull(BaseModel):
     )
     number: int
     head: PullHead
+    merged_at: str | None = None
+
+
+class CommitTree(BaseModel):
+    """
+    The tree of a GitHub commit, the part read here.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+        frozen=True,
+    )
+    sha: str
+
+
+class CommitDetail(BaseModel):
+    """
+    The git commit object fields read from GitHub; other API fields pass.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+        frozen=True,
+    )
+    tree: CommitTree
+    message: str
+
+
+class CommitFile(BaseModel):
+    """
+    One changed file of a GitHub commit, the part read here.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+        frozen=True,
+    )
+    filename: str
+
+
+class GitHubCommit(BaseModel):
+    """
+    The commit fields read from GitHub; other API fields pass.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+        frozen=True,
+    )
+    sha: str
+    commit: CommitDetail
+    files: list[CommitFile] | None = None
 
 
 class PrRef(BaseModel):
@@ -362,6 +418,71 @@ class SectionName(StrEnum):
 
     open_rounds = "open-rounds"
     owing_retro = "owing-retro"
+    without_receipt = "without-receipt"
+    merges_in_no_round = "merges-in-no-round"
+
+
+class VerifyReading(StrEnum):
+    """
+    How a commit reads against the local verify receipts and its own Verify-Receipt trailer.
+    """
+
+    verified = "verified"
+    unknown = "unknown"
+    unverified = "unverified"
+
+
+class RoundWithoutReceipt(BaseModel):
+    """
+    A report line: a closed round's pull request head at close without a matching verify receipt.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    kind: Literal["round-without-receipt"]
+    round: RoundId
+    repo: Repo
+    number: Annotated[int, Field(ge=1)]
+    head: str
+    reading: VerifyReading
+    reason: str
+
+
+class MergeWithoutReceipt(BaseModel):
+    """
+    A report line: a merged pull request's final head commit without a matching verify receipt.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    kind: Literal["merge-without-receipt"]
+    repo: Repo
+    number: Annotated[int, Field(ge=1)]
+    head: str
+    merged_at: str
+    rounds: list[RoundId]
+    reading: VerifyReading
+    reason: str
+
+
+class MergeInNoRound(BaseModel):
+    """
+    A report line: a merged pull request that belongs to no round.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    kind: Literal["merge-in-no-round"]
+    repo: Repo
+    number: Annotated[int, Field(ge=1)]
+    head: str
+    merged_at: str
 
 
 class ReportSection(BaseModel):
@@ -871,8 +992,13 @@ class Workflowtools(BaseModel):
     report: Report | None = None
     round_event: RoundEvent | None = None
     github_pull: GitHubPull | None = None
+    github_commit: GitHubCommit | None = None
     open_round: OpenRound | None = None
     report_section: ReportSection | None = None
+    verify_reading: VerifyReading | None = None
+    round_without_receipt: RoundWithoutReceipt | None = None
+    merge_without_receipt: MergeWithoutReceipt | None = None
+    merge_in_no_round: MergeInNoRound | None = None
     round_retro: RoundRetro | None = None
     retro_owed: RetroOwed | None = None
     verify_receipt: VerifyReceipt | None = None

@@ -14,7 +14,13 @@ ROUND = "cpp-standard-20261118-rounds"
 OTHER = "cpp-standard-20261118-other"
 HEAD_A = "a" * 40
 HEAD_B = "b" * 40
+HEAD_C = "c" * 40
+TREE_A = "1" * 40
+TREE_B = "2" * 40
+TREE_C = "3" * 40
 PULL = "repos/o/r/pulls/5"
+MERGED_AT = "2026-11-18T12:00:00Z"
+LISTING = "repos/o/r/pulls?state=closed&per_page=100"
 
 type GhStandIn = Callable[[dict[str, object], set[str]], Path]
 
@@ -23,9 +29,13 @@ type GhStandIn = Callable[[dict[str, object], set[str]], Path]
 def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gh_stand_in: GhStandIn) -> Path:
     """Every test writes under tmp_path, never the real home, and asks a stand-in gh that knows o/r#3 and #5."""
     pull = {"number": 5, "head": {"sha": HEAD_A}}
-    gh_stand_in({PULL: pull, "repos/o/r/pulls/3": pull, "repos/o/.github/pulls/1": pull}, set())
+    gh_stand_in(
+        {PULL: pull, "repos/o/r/pulls/3": pull, "repos/o/.github/pulls/1": pull, LISTING: [[]]},
+        set(),
+    )
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
     return tmp_path / "state" / "workflowtools" / "rounds"
 
 
@@ -160,6 +170,8 @@ def test_the_report_lists_open_rounds(capsys: pytest.CaptureFixture[str]) -> Non
         {"kind": "section", "section": "open-rounds", "count": 2, "unknown": None},
         {"kind": "retro-owed", "round": OTHER, "sessions": ["lead-1", "w-2"], "plan": "p", "prs": []},
         {"kind": "section", "section": "owing-retro", "count": 1, "unknown": None},
+        {"kind": "section", "section": "without-receipt", "count": 0, "unknown": None},
+        {"kind": "section", "section": "merges-in-no-round", "count": 0, "unknown": None},
         {"exit": "0"},
     ]
 
@@ -168,6 +180,8 @@ def test_a_store_never_written_reports_no_open_round_and_no_debt(capsys: pytest.
     assert run(capsys, "report") == [
         {"kind": "section", "section": "open-rounds", "count": 0, "unknown": None},
         {"kind": "section", "section": "owing-retro", "count": 0, "unknown": None},
+        {"kind": "section", "section": "without-receipt", "count": 0, "unknown": None},
+        {"kind": "section", "section": "merges-in-no-round", "count": 0, "unknown": None},
         {"exit": "0"},
     ]
 
@@ -199,6 +213,8 @@ def test_an_unreadable_store_reads_unknown_with_the_reason(
     assert [(section["section"], section["count"]) for section in sections] == [
         ("open-rounds", None),
         ("owing-retro", None),
+        ("without-receipt", None),
+        ("merges-in-no-round", None),
     ]
     assert all(reason in str(section["unknown"]) for section in sections)
 
@@ -284,6 +300,8 @@ def test_a_closed_round_owes_a_retro_and_an_open_one_does_not(capsys: pytest.Cap
             "prs": [{"repo": "o/r", "number": 5, "head": HEAD_A}],
         },
         {"kind": "section", "section": "owing-retro", "count": 1, "unknown": None},
+        {"kind": "section", "section": "without-receipt", "count": 0, "unknown": None},
+        {"kind": "section", "section": "merges-in-no-round", "count": 0, "unknown": None},
         {"exit": "0"},
     ]
 
@@ -389,3 +407,466 @@ def test_a_change_given_twice_is_refused(state: Path, capsys: pytest.CaptureFixt
         {"exit": "1"},
     ]
     assert owing(capsys) == [ROUND]
+
+
+def receipts_dir(state: Path) -> Path:
+    return state.parent / "receipts"
+
+
+def write_receipt(state: Path, tree: str, verdict: str = "PASS") -> None:
+    directory = receipts_dir(state)
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = {"kind": "receipt", "tree": tree, "verdict": verdict, "at": "2026-11-18T12:00:00+00:00"}
+    (directory / f"{tree}.json").write_text(json.dumps(payload) + "\n")
+
+
+def closed_pull(
+    number: int, head: str, merged_at: str | None = MERGED_AT, *, merge_commit_sha: str | None = None
+) -> dict[str, object]:
+    payload: dict[str, object] = {"number": number, "head": {"sha": head}, "merged_at": merged_at}
+    if merge_commit_sha is not None:
+        payload["merge_commit_sha"] = merge_commit_sha
+    return payload
+
+
+def commit_payload(
+    sha: str, tree: str, message: str = "feat: change\n", files: list[str] | None = None
+) -> dict[str, object]:
+    payload: dict[str, object] = {"sha": sha, "commit": {"tree": {"sha": tree}, "message": message}}
+    if files is not None:
+        payload["files"] = [{"filename": name} for name in files]
+    return payload
+
+
+def setup_closed_round(
+    capsys: pytest.CaptureFixture[str],
+    gh_stand_in: GhStandIn,
+    round_id: str,
+    prs: list[tuple[int, str]],
+) -> None:
+    run(capsys, "round-open", "--round", round_id)
+    for number, head in prs:
+        gh_stand_in({f"repos/o/r/pulls/{number}": {"number": number, "head": {"sha": head}}}, set())
+        run(capsys, "round-pr", "--round", round_id, "--repo", "o/r", "--number", str(number))
+    gh_stand_in({f"repos/o/r/pulls/{number}": {"number": number, "head": {"sha": head}} for number, head in prs}, set())
+    close(capsys, round_id)
+
+
+def test_reconcile_joins_merges_to_rounds_and_lists_merges_in_no_round(
+    state: Path, capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_B)])
+    setup_closed_round(capsys, gh_stand_in, OTHER, [(5, HEAD_B), (6, HEAD_A)])
+    write_receipt(state, TREE_A, "PASS")
+    log = gh_stand_in(
+        {
+            LISTING: [
+                [closed_pull(5, HEAD_B), closed_pull(4, HEAD_C, merged_at=None)],
+                [closed_pull(6, HEAD_A), closed_pull(9, HEAD_C)],
+            ],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A),
+            f"repos/o/r/commits/{HEAD_B}": commit_payload(HEAD_B, TREE_B),
+            f"repos/o/r/commits/{HEAD_C}": commit_payload(HEAD_C, TREE_C),
+        },
+        set(),
+    )
+    lines = run(capsys, "report")
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert all(call[0] == "api" for call in calls)
+    assert not any(flag in call for call in calls for flag in ("-X", "--method", "-f", "-F", "--input"))
+    assert lines == [
+        {"kind": "section", "section": "open-rounds", "count": 0, "unknown": None},
+        {
+            "kind": "retro-owed",
+            "round": ROUND,
+            "sessions": ["lead-1", "w-2"],
+            "plan": "p",
+            "prs": [{"repo": "o/r", "number": 5, "head": HEAD_B}],
+        },
+        {
+            "kind": "retro-owed",
+            "round": OTHER,
+            "sessions": ["lead-1", "w-2"],
+            "plan": "p",
+            "prs": [{"repo": "o/r", "number": 5, "head": HEAD_B}, {"repo": "o/r", "number": 6, "head": HEAD_A}],
+        },
+        {"kind": "section", "section": "owing-retro", "count": 2, "unknown": None},
+        {
+            "kind": "round-without-receipt",
+            "round": ROUND,
+            "repo": "o/r",
+            "number": 5,
+            "head": HEAD_B,
+            "reading": "unverified",
+            "reason": "no Verify-Receipt trailer",
+        },
+        {
+            "kind": "round-without-receipt",
+            "round": OTHER,
+            "repo": "o/r",
+            "number": 5,
+            "head": HEAD_B,
+            "reading": "unverified",
+            "reason": "no Verify-Receipt trailer",
+        },
+        {
+            "kind": "merge-without-receipt",
+            "repo": "o/r",
+            "number": 5,
+            "head": HEAD_B,
+            "merged_at": MERGED_AT,
+            "rounds": [ROUND, OTHER],
+            "reading": "unverified",
+            "reason": "no Verify-Receipt trailer",
+        },
+        {
+            "kind": "merge-without-receipt",
+            "repo": "o/r",
+            "number": 9,
+            "head": HEAD_C,
+            "merged_at": MERGED_AT,
+            "rounds": [],
+            "reading": "unverified",
+            "reason": "no Verify-Receipt trailer",
+        },
+        {"kind": "section", "section": "without-receipt", "count": 4, "unknown": None},
+        {"kind": "merge-in-no-round", "repo": "o/r", "number": 9, "head": HEAD_C, "merged_at": MERGED_AT},
+        {"kind": "section", "section": "merges-in-no-round", "count": 1, "unknown": None},
+        {"exit": "0"},
+    ]
+
+
+def test_report_repo_flag_reconciles_a_repository_with_no_rounds(
+    capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(9, HEAD_B)]],
+            f"repos/o/r/commits/{HEAD_B}": commit_payload(HEAD_B, TREE_B),
+        },
+        set(),
+    )
+    assert run(capsys, "report", "--repo", "o/r") == [
+        {"kind": "section", "section": "open-rounds", "count": 0, "unknown": None},
+        {"kind": "section", "section": "owing-retro", "count": 0, "unknown": None},
+        {
+            "kind": "merge-without-receipt",
+            "repo": "o/r",
+            "number": 9,
+            "head": HEAD_B,
+            "merged_at": MERGED_AT,
+            "rounds": [],
+            "reading": "unverified",
+            "reason": "no Verify-Receipt trailer",
+        },
+        {"kind": "section", "section": "without-receipt", "count": 1, "unknown": None},
+        {"kind": "merge-in-no-round", "repo": "o/r", "number": 9, "head": HEAD_B, "merged_at": MERGED_AT},
+        {"kind": "section", "section": "merges-in-no-round", "count": 1, "unknown": None},
+        {"exit": "0"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("earlier_message", "expected_reading"),
+    [
+        ("wip\n", "unverified"),
+        (f"wip\n\nVerify-Receipt: {TREE_A} {ROUND}\n", "unknown"),
+    ],
+)
+def test_two_rounds_sharing_a_pull_request_only_final_head_has_pass(
+    state: Path,
+    capsys: pytest.CaptureFixture[str],
+    gh_stand_in: GhStandIn,
+    earlier_message: str,
+    expected_reading: str,
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    setup_closed_round(capsys, gh_stand_in, OTHER, [(5, HEAD_B)])
+    write_receipt(state, TREE_B, "PASS")
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_B)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A, earlier_message),
+            f"repos/o/r/commits/{HEAD_B}": commit_payload(HEAD_B, TREE_B),
+        },
+        set(),
+    )
+    lines = run(capsys, "report")
+    without = [line for line in lines if line.get("kind") in {"round-without-receipt", "merge-without-receipt"}]
+    assert len(without) == 1
+    assert without[0]["kind"] == "round-without-receipt"
+    assert without[0]["round"] == ROUND
+    assert without[0]["head"] == HEAD_A
+    assert without[0]["reading"] == expected_reading
+    assert {"kind": "section", "section": "without-receipt", "count": 1, "unknown": None} in lines
+
+
+def test_commit_pushed_after_round_close_is_caught_per_merge(
+    state: Path, capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    write_receipt(state, TREE_A, "PASS")
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_B)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A),
+            f"repos/o/r/commits/{HEAD_B}": commit_payload(HEAD_B, TREE_B),
+        },
+        set(),
+    )
+    lines = run(capsys, "report")
+    without = [line for line in lines if line.get("kind") in {"round-without-receipt", "merge-without-receipt"}]
+    assert without == [
+        {
+            "kind": "merge-without-receipt",
+            "repo": "o/r",
+            "number": 5,
+            "head": HEAD_B,
+            "merged_at": MERGED_AT,
+            "rounds": [ROUND],
+            "reading": "unverified",
+            "reason": "no Verify-Receipt trailer",
+        }
+    ]
+    assert {"kind": "section", "section": "without-receipt", "count": 1, "unknown": None} in lines
+
+
+def test_squash_merge_checks_pr_head_not_landed_commit(
+    state: Path, capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    write_receipt(state, TREE_A, "PASS")
+    log = gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_A, merge_commit_sha=HEAD_B)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A),
+        },
+        {f"repos/o/r/commits/{HEAD_B}"},
+    )
+    lines = run(capsys, "report")
+    assert {"kind": "section", "section": "without-receipt", "count": 0, "unknown": None} in lines
+    assert {"kind": "section", "section": "merges-in-no-round", "count": 0, "unknown": None} in lines
+    assert not any(HEAD_B in line for line in log.read_text().splitlines())
+
+
+def test_squash_merge_without_receipt_on_pr_head_reports_pr_head(
+    state: Path, capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    write_receipt(state, TREE_B, "PASS")
+    log = gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_A, merge_commit_sha=HEAD_B)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A),
+        },
+        {f"repos/o/r/commits/{HEAD_B}"},
+    )
+    lines = run(capsys, "report")
+    without = [line for line in lines if line.get("kind") in {"round-without-receipt", "merge-without-receipt"}]
+    assert [line["head"] for line in without] == [HEAD_A, HEAD_A]
+    assert not any(HEAD_B in line for line in log.read_text().splitlines())
+
+
+def test_skip_receipt_verifies_only_documentation_only_changes(
+    state: Path, capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    setup_closed_round(capsys, gh_stand_in, OTHER, [(6, HEAD_B)])
+    write_receipt(state, TREE_A, "SKIP")
+    write_receipt(state, TREE_B, "SKIP")
+    write_receipt(state, TREE_C, "FAIL")
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_A), closed_pull(6, HEAD_B), closed_pull(7, HEAD_C)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A, files=["docs/guide.md"]),
+            f"repos/o/r/commits/{HEAD_B}": commit_payload(
+                HEAD_B, TREE_B, f"docs: mix\n\nVerify-Receipt: {TREE_B} {OTHER}\n", files=["src/a.py", "README.md"]
+            ),
+            f"repos/o/r/commits/{HEAD_C}": commit_payload(
+                HEAD_C, TREE_C, f"fix: broken\n\nVerify-Receipt: {TREE_C} p\n", files=["src/a.py"]
+            ),
+        },
+        set(),
+    )
+    lines = run(capsys, "report")
+    without = [line for line in lines if line.get("kind") in {"round-without-receipt", "merge-without-receipt"}]
+    assert [(line["kind"], line["number"], line["reading"]) for line in without] == [
+        ("round-without-receipt", 6, "unverified"),
+        ("merge-without-receipt", 6, "unverified"),
+        ("merge-without-receipt", 7, "unverified"),
+    ]
+    assert "not on a documentation-only change" in str(without[0]["reason"])
+    assert "FAIL" in str(without[2]["reason"])
+
+
+def test_matching_trailer_without_local_receipt_reads_unknown(
+    capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_A)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(
+                HEAD_A, TREE_A, f"feat: x\n\nCo-Authored-By: A <a@e>\nVerify-Receipt: {TREE_A} plan-1\n"
+            ),
+        },
+        set(),
+    )
+    lines = run(capsys, "report")
+    without = [line for line in lines if line.get("kind") in {"round-without-receipt", "merge-without-receipt"}]
+    assert len(without) == 2
+    assert all(line["reading"] == "unknown" and "no receipt" in str(line["reason"]) for line in without)
+
+
+@pytest.mark.parametrize("has_receipt", [False, True])
+def test_mismatched_trailer_reads_unverified_changed_after_verification(
+    state: Path, capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn, *, has_receipt: bool
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    if has_receipt:
+        write_receipt(state, TREE_A, "PASS")
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_A)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(
+                HEAD_A, TREE_B, f"feat: edited\n\nVerify-Receipt: {TREE_A} {ROUND}\n"
+            ),
+        },
+        set(),
+    )
+    lines = run(capsys, "report")
+    without = [line for line in lines if line.get("kind") in {"round-without-receipt", "merge-without-receipt"}]
+    assert len(without) == 2
+    assert all(
+        line["reading"] == "unverified" and "changed after verification" in str(line["reason"]) for line in without
+    )
+
+
+def test_commit_without_verify_trailer_reads_unverified(
+    capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(9, HEAD_A)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A, "feat: plain commit\n"),
+        },
+        set(),
+    )
+    lines = run(capsys, "report", "--repo", "o/r")
+    assert lines[2] == {
+        "kind": "merge-without-receipt",
+        "repo": "o/r",
+        "number": 9,
+        "head": HEAD_A,
+        "merged_at": MERGED_AT,
+        "rounds": [],
+        "reading": "unverified",
+        "reason": "no Verify-Receipt trailer",
+    }
+
+
+@pytest.mark.parametrize(
+    ("damage", "reason"),
+    [
+        (lambda directory: (directory / f"{TREE_A}.json").write_text("{not json\n"), "not a verify receipt"),
+        (lambda directory: (directory / f"{TREE_A}.json").mkdir(), "Is a directory"),
+        (lambda directory: directory.rmdir() or directory.write_text(""), "Not a directory"),
+    ],
+)
+def test_an_unreadable_receipts_store_makes_without_receipt_unknown(
+    state: Path, capsys: pytest.CaptureFixture[str], damage: Callable[[Path], object], reason: str
+) -> None:
+    directory = receipts_dir(state)
+    directory.mkdir(parents=True)
+    damage(directory)
+    *lines, code = run(capsys, "report")
+    assert code == {"exit": "0"}
+    assert lines == [
+        {"kind": "section", "section": "open-rounds", "count": 0, "unknown": None},
+        {"kind": "section", "section": "owing-retro", "count": 0, "unknown": None},
+        {"kind": "section", "section": "without-receipt", "count": None, "unknown": lines[2]["unknown"]},
+        {"kind": "section", "section": "merges-in-no-round", "count": 0, "unknown": None},
+    ]
+    assert reason in str(lines[2]["unknown"])
+
+
+def test_non_json_file_in_receipts_store_is_ignored(
+    state: Path, capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    write_receipt(state, TREE_A, "PASS")
+    (receipts_dir(state) / "README.txt").write_text("ignored\n")
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_A)]],
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A),
+        },
+        set(),
+    )
+    lines = run(capsys, "report")
+    assert {"kind": "section", "section": "without-receipt", "count": 0, "unknown": None} in lines
+
+
+@pytest.mark.parametrize(
+    ("responses", "failing", "reason"),
+    [
+        ({}, {LISTING}, "o/r: HTTP 503"),
+        ({LISTING: "<not json>"}, set(), "o/r: gh returned output that is not the expected JSON"),
+    ],
+)
+def test_an_unreadable_github_listing_reads_unknown_with_reason(
+    capsys: pytest.CaptureFixture[str],
+    gh_stand_in: GhStandIn,
+    responses: dict[str, object],
+    failing: set[str],
+    reason: str,
+) -> None:
+    run(capsys, "round-open", "--round", ROUND)
+    run(capsys, "round-pr", "--round", ROUND, "--repo", "o/r", "--number", "5")
+    gh_stand_in(responses, failing)
+    lines = run(capsys, "report")
+    sections = {line["section"]: line for line in lines if line.get("kind") == "section"}
+    assert sections["open-rounds"] == {"kind": "section", "section": "open-rounds", "count": 1, "unknown": None}
+    assert sections["owing-retro"] == {"kind": "section", "section": "owing-retro", "count": 0, "unknown": None}
+    assert sections["without-receipt"] == {
+        "kind": "section",
+        "section": "without-receipt",
+        "count": None,
+        "unknown": reason,
+    }
+    assert sections["merges-in-no-round"] == {
+        "kind": "section",
+        "section": "merges-in-no-round",
+        "count": None,
+        "unknown": reason,
+    }
+
+
+@pytest.mark.parametrize(
+    ("responses", "failing", "reason"),
+    [
+        ({LISTING: [[closed_pull(5, HEAD_A)]]}, {f"repos/o/r/commits/{HEAD_A}"}, "HTTP 503"),
+        (
+            {LISTING: [[closed_pull(5, HEAD_A)]], f"repos/o/r/commits/{HEAD_A}": "<not json>"},
+            set(),
+            "gh returned output that is not the expected JSON",
+        ),
+    ],
+)
+def test_an_unreadable_github_commit_reads_unknown_with_reason(
+    capsys: pytest.CaptureFixture[str],
+    gh_stand_in: GhStandIn,
+    responses: dict[str, object],
+    failing: set[str],
+    reason: str,
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_A)])
+    gh_stand_in(responses, failing)
+    lines = run(capsys, "report")
+    without = [line for line in lines if line.get("kind") in {"round-without-receipt", "merge-without-receipt"}]
+    assert len(without) == 2
+    assert all(
+        line["reading"] == "unknown" and HEAD_A in str(line["reason"]) and reason in str(line["reason"])
+        for line in without
+    )
+    assert {"kind": "section", "section": "merges-in-no-round", "count": 0, "unknown": None} in lines
