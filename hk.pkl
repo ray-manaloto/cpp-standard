@@ -158,6 +158,11 @@ local gateSteps = new Mapping<String, Step> {
   ["git-config-check"] {
     check = "mise run repo:git-config-check"
   }
+  // Tool-skill links under .agents/skills stay ignored and project skills stay tracked (#294).
+  // No glob: the links are per machine and never appear in a changed-file list.
+  ["skill-links-check"] {
+    check = "mise run repo:skill-links-check"
+  }
   ["hook-git-env"] {
     glob =
       List(
