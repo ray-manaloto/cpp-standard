@@ -6,6 +6,7 @@ file fails the build. Synthetic patches, no network. Run: python3 -I tests/toolc
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "toolchains/p2996/build.sh"
+
+# A hook in a linked worktree exports git's repository variables (GIT_DIR, GIT_WORK_TREE,
+# GIT_INDEX_FILE, ...). Under them the scratch `git init` and build.sh's `git apply` act on the
+# real repository: `git init` writes core.worktree into its shared config, pointing the main
+# checkout at this worktree. Every git process here runs without them (git's own list).
+_REPO_VARS = set(
+    subprocess.run(
+        ["git", "rev-parse", "--local-env-vars"],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.split()
+)
+CLEAN_ENV = {k: v for k, v in os.environ.items() if k not in _REPO_VARS}
 
 PATCH = """Header text, as the real patch has.
 
@@ -33,6 +48,7 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        env=CLEAN_ENV,
     )
 
 
@@ -42,7 +58,9 @@ class PatchStep(unittest.TestCase):
         self.outer = Path(self._tmp.name) / "checkout"
         self.outer.mkdir()
         # The enclosing repository: the checkout the scratch directory sits in.
-        subprocess.run(["git", "init", "-q", str(self.outer)], check=True)
+        subprocess.run(
+            ["git", "init", "-q", str(self.outer)], check=True, env=CLEAN_ENV
+        )
         self.src = self.outer / ".work/build/src"
         (self.src / "lib").mkdir(parents=True)
         (self.src / "lib/a.txt").write_text("keep\nold\n")
