@@ -35,6 +35,27 @@ def sections(text: str) -> Iterator[tuple[int, list[tuple[int, str]]]]:
         yield spec, lines
 
 
+ORPHAN = re.compile(r"^- \[( |x)\] #(\d+)\b")
+
+
+def orphans(text: str) -> Iterator[tuple[int, int, str]]:
+    """Ticket-shaped lines outside a spec section: (line number, issue number, heading or "start of file")."""
+    spec = None
+    heading = None
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.startswith(("# ", "## ")):
+            spec = SPEC.match(line)
+            heading = line.rstrip()
+        elif spec is None and (match := ORPHAN.match(line)):
+            yield number, int(match[2]), f'"{heading}"' if heading else "start of file"
+
+
+def orphan_finding(path: str, number: int, issue: int, where: str) -> Finding:
+    return problem(
+        path, f'line {number}: #{issue} is outside a spec section; put it under "## … spec #N" (found under {where})'
+    )
+
+
 def parse_line(text: str, number: int, spec: int, path: str) -> tuple[IssueTicket | None, list[Finding]]:
     match = TICKET.match(text)
     if match is None:
@@ -66,6 +87,7 @@ def parse(text: str, path: str, *, spec: int | None = None) -> tuple[list[IssueT
     specs: list[int] = []
     found: list[Finding] = []
     seen: dict[int, int] = {}
+    found.extend(orphan_finding(path, *orphan) for orphan in orphans(text))
     for section, lines in sections(text):
         if spec is not None and section != spec:
             continue

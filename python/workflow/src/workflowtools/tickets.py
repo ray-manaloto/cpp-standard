@@ -127,6 +127,9 @@ def resolve(path: Path, shown: str) -> list[BaseModel]:
         return [roadmap.problem(shown, f"no roadmap at {path.absolute()}")]
     spec = plan_section(text, plan_id)
     if spec is None:
+        for number, issue, where in roadmap.orphans(text):
+            if any(m[1] == plan_id for m in roadmap.PLAN_ID.finditer(text.splitlines()[number - 1])):
+                return [roadmap.orphan_finding(shown, number, issue, where)]
         return [roadmap.problem(shown, f"PLAN_ID {plan_id} is on no roadmap line")]
     tickets, _, found = roadmap.parse(text, shown, spec=spec)
     found = roadmap.local_findings(tickets, found, shown)

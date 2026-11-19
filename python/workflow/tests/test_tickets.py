@@ -99,6 +99,28 @@ def test_lines_outside_spec_sections_are_not_read(repo: Path, capsys: pytest.Cap
     assert report(capsys, "tickets") == [SKIPPED, {"exit": "0"}]
 
 
+def orphan(number: int, where: str) -> dict[str, str]:
+    return finding(f'line {number}: #10 is outside a spec section; put it under "## … spec #N" (found under {where})')
+
+
+def test_a_ticket_line_under_a_plain_heading_fails(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    write(repo, {"task_plan.md": "## spec #9 Work\n\n" + ticket(9) + "## Misc\n- plain bullet\n" + ticket(10)})
+    assert report(capsys, "tickets") == [orphan(6, '"## Misc"'), SKIPPED, {"exit": "1"}]
+
+
+def test_a_ticket_line_before_any_heading_fails(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    write(repo, {"task_plan.md": ticket(10) + "## spec #9 Work\n\n" + ticket(9)})
+    assert report(capsys, "tickets") == [orphan(1, "start of file"), SKIPPED, {"exit": "1"}]
+
+
+def test_plan_names_a_ticket_line_outside_a_spec_section(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("PLAN_ID", "a")
+    write(repo, {"task_plan.md": "## spec #9 Work\n\n## Misc\n" + ticket(11, plan="b") + ticket(10, plan="a")})
+    assert report(capsys, "tickets", "--plan") == [orphan(5, '"## Misc"'), {"exit": "1"}]
+
+
 def test_the_roadmap_option_reads_that_file(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     write_roadmap(repo, ticket(10), name="other.md")
     assert report(capsys, "tickets", "--roadmap", "other.md") == [SKIPPED, {"exit": "0"}]
@@ -660,7 +682,7 @@ def test_plan_on_no_roadmap_line_fails(
     repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("PLAN_ID", "a")
-    write_roadmap(repo, ticket(10, plan="another") + "## Parked\n" + ticket(11, plan="a"))
+    write_roadmap(repo, ticket(10, plan="another") + ticket(11, plan="b"))
     assert report(capsys, "tickets", "--plan") == [finding("PLAN_ID a is on no roadmap line"), {"exit": "1"}]
 
 
