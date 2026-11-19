@@ -31,8 +31,9 @@ design is `docs/designs/environment-standard.md`. See `docs/agents/domain.md`.
   `gate-linux-arm64` job; on the owner's Mac it is a heavy run.
 - Shipping: a branch and a pull request into `main`, opened with
   `repotools pr-create --title <title> --body-file <body file>`. The merge is
-  `gh pr merge <number> --repo ray-manaloto/cpp-standard`, run alone: it puts the pull request in the merge
-  queue, which squashes it (`.github/rulesets/main.json`). Never `--admin`, never past the queue.
+  `mise run //repo:pr-merge <number> <title> <body file>`, run alone: the local hk gate is not run (D169,
+  `repotools.toml`); it checks the other gates and puts the pull request in the merge queue, whose required
+  checks are the gate and which squashes it (`.github/rulesets/main.json`). Never `--admin`, never past the queue.
 - Worktrees: one worktree and one branch per agent (D23). An agent works only in its own worktree, never in the
   main checkout or another agent's worktree.
 - Identity: an agent's pushes and pull requests carry the agent App, not the owner's login. On the Mac host that

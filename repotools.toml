@@ -1,0 +1,7 @@
+# repotools settings for this repository. pr-merge reads this file from origin's default branch, never from the
+# checkout it merges, so a pull request cannot change its own merge gate (D169).
+
+[pr-merge]
+# required-checks: no local hk run; the merge queue's required CI checks are the gate. dotfiles has no such file
+# and keeps the default, local-hk.
+gate = "required-checks"

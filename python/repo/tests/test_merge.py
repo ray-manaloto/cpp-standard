@@ -12,7 +12,7 @@ from repotools.cli import main
 from repotools.merge import AUTHORS, BOT_CLOSE, BOT_OPEN, NOREPLY
 
 from . import test_gates
-from .test_gates import copy, mise, said
+from .test_gates import copy, mise
 from .test_pr_create import commit, origin, pr, pr_refusal_of, repo
 
 __all__ = ["copy", "repo"]  # the fixtures, used by name
@@ -263,7 +263,8 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
     (where //repo:tools-install puts main's), never the branch venv's, and nothing in them runs.
 
     The pull request on the gh stand-in carries that very title and body, so repotools passes the title and body checks
-    only if both arrived intact, and stops at the next gate: the copy's hk check --all exits 3.
+    only if both arrived intact. The copy is this repository, whose repotools.toml sets the required-checks gate: the
+    copy's hk check, which exits 3, never runs, and the pull request is queued in the queue form (#213).
     """
     tools = copy.parent / "tool-bin"
     tools.mkdir()
@@ -289,7 +290,11 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
     shown = {"headRefOid": head, "state": "OPEN", "baseRefName": "main", "title": title, "body": BODY}
     (copy.parent / "scenario.json").write_text(json.dumps({"pr": shown, "default": "main"}))
     done = mise("//repo:pr-merge", "7", title, body_file)
-    assert done.returncode == 1
-    (error,) = said(done, "{")  # mise adds its own task lines around repotools' one JSON error
-    assert json.loads(error)["error"] == f"hk check --pr failed (exit 3) on {head}"
+    assert done.returncode == 0, done.stderr
+    queued = [json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")]
+    assert queued == [{"number": 7, "head_commit": head, "merged": False}]
+    calls = [json.loads(line) for line in (copy.parent / "calls.jsonl").read_text().splitlines()]
+    assert [call for call in calls if call[:2] == ["pr", "merge"]] == [
+        ["pr", "merge", "7", "--match-head-commit", head]
+    ]
     assert not list(copy.parent.rglob("pwned*"))

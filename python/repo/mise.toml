@@ -17,12 +17,13 @@ depends = ["sync"]
 dir = "{{ config_root }}/../.."
 run = 'uv run --project python/repo --locked repotools pr-create --title "$usage_title" --body-file "$usage_body"'
 
-# A lead's self-merge (owner ruling, 2026-11-15): every gate checked, then the one merge form, from the PR's checkout.
+# A lead's self-merge (owner ruling, 2026-11-15; D169): every gate checked, then the merge form of the repository's
+# merge gate (repotools.toml's [pr-merge] gate on the default branch), from the PR's checkout.
 # It runs the repotools installed from main by //repo:tools-install, by its path in uv's tool bin folder: the venv this
 # file activates puts the branch's own repotools first on PATH, and a pull request that changed the merge gates would
 # then judge itself by them.
 [tasks.pr-merge]
-description = "Merge a pull request whose head is this clean HEAD, once its text matches, hk check --all and its checks pass, and wait until it has merged; --check-only merges nothing"
+description = "Merge a pull request whose head is this clean HEAD once its text matches: under local-hk (the default), once hk check --pr and its checks pass, waiting until it has merged; under required-checks (repotools.toml on the default branch), no hk, queued for the merge queue; --check-only merges nothing"
 usage = '''
 arg "<number>" help="The pull request number"
 arg "<title>" help="The pull request title"

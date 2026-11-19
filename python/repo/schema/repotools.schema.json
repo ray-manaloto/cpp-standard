@@ -225,7 +225,7 @@
       "additionalProperties": false
     },
     "PrMerge": {
-      "description": "A pull request to merge once its head is this clean HEAD, its text is the given one and hk check --all passes.",
+      "description": "A pull request to merge once its head is this clean HEAD, its text is the given one and its merge gate holds.",
       "type": "object",
       "properties": {
         "number": { "type": "integer", "minimum": 1, "description": "The pull request number" },
@@ -257,7 +257,12 @@
       "type": "object",
       "properties": {
         "gate": { "type": "string", "description": "The gate's name" },
-        "refusal": { "type": ["string", "null"], "description": "Why the gate refused; null when it holds" }
+        "refusal": { "type": ["string", "null"], "description": "Why the gate refused; null when it holds" },
+        "skipped": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Why the gate did not run, naming the setting; left out of the line when it ran"
+        }
       },
       "required": ["gate", "refusal"],
       "additionalProperties": false
@@ -271,6 +276,17 @@
         "author_email": { "type": "string", "description": "The merge commit's author email" }
       },
       "required": ["number", "merge_commit", "author_email"],
+      "additionalProperties": false
+    },
+    "Queued": {
+      "description": "What pr-merge printed under the required-checks gate: queued for the merge queue, not merged.",
+      "type": "object",
+      "properties": {
+        "number": { "type": "integer", "description": "The pull request number" },
+        "head_commit": { "type": "string", "description": "The head the queue was told to match" },
+        "merged": { "type": "boolean", "const": false, "description": "Always false: the merge commit does not exist yet" }
+      },
+      "required": ["number", "head_commit", "merged"],
       "additionalProperties": false
     },
     "PrivacyScan": {
@@ -323,6 +339,7 @@
     "pr_merge": { "$ref": "#/$defs/PrMerge" },
     "merged": { "$ref": "#/$defs/Merged" },
     "gate_result": { "$ref": "#/$defs/GateResult" },
+    "queued": { "$ref": "#/$defs/Queued" },
     "zero_bash": { "$ref": "#/$defs/ZeroBash" },
     "privacy_scan": { "$ref": "#/$defs/PrivacyScan" },
     "main_guard": { "$ref": "#/$defs/MainGuard" },
