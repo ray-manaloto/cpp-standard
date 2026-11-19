@@ -5,7 +5,7 @@ import os
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -303,11 +303,17 @@ def evaluate_commit(
     return reading
 
 
+def merged_since(pull: GitHubPull, since: date) -> bool:
+    """Whether the pull request merged on or after the date; GitHub gives merged_at in UTC (Z)."""
+    return str(pull.merged_at)[:10] >= since.isoformat()
+
+
 def without_receipt_lines(
     merged: list[tuple[str, GitHubPull]],
     by_pr: dict[tuple[str, int], list[str]],
     closed_by_pr: dict[tuple[str, int], list[tuple[str, str]]],
     stored_receipts: dict[str, Receipt],
+    since: date,
 ) -> list[BaseModel]:
     cache: dict[tuple[str, str], tuple[VerifyReading, str]] = {}
     round_lines: list[BaseModel] = []
@@ -328,30 +334,33 @@ def without_receipt_lines(
                         reason=reason,
                     )
                 )
-        reading, reason = evaluate_commit(repo, pull.head.sha, stored_receipts, cache)
-        if reading is not VerifyReading.verified:
-            merge_lines.append(
-                MergeWithoutReceipt(
-                    kind="merge-without-receipt",
-                    repo=repo,
-                    number=pull.number,
-                    head=pull.head.sha,
-                    merged_at=str(pull.merged_at),
-                    rounds=by_pr.get(key_pr, []),
-                    reading=reading,
-                    reason=reason,
+        if merged_since(pull, since):
+            reading, reason = evaluate_commit(repo, pull.head.sha, stored_receipts, cache)
+            if reading is not VerifyReading.verified:
+                merge_lines.append(
+                    MergeWithoutReceipt(
+                        kind="merge-without-receipt",
+                        repo=repo,
+                        number=pull.number,
+                        head=pull.head.sha,
+                        merged_at=str(pull.merged_at),
+                        rounds=by_pr.get(key_pr, []),
+                        reading=reading,
+                        reason=reason,
+                    )
                 )
-            )
     return [*round_lines, *merge_lines]
 
 
-def reconcile(events: list[RoundEvent], extra_repos: list[str]) -> list[BaseModel]:
+def reconcile(events: list[RoundEvent], extra_repos: list[str], since: date) -> list[BaseModel]:
     stored_receipts, receipt_error = read_receipts()
     merged, listing_unknown = merged_by_repo(report_repos(events, extra_repos))
     by_pr = pr_rounds(events)
     closed_by_pr = closed_pr_heads(events)
     verify_lines = (
-        without_receipt_lines(merged, by_pr, closed_by_pr, stored_receipts) if stored_receipts is not None else []
+        without_receipt_lines(merged, by_pr, closed_by_pr, stored_receipts, since)
+        if stored_receipts is not None
+        else []
     )
     receipt_unknown = "; ".join(part for part in (receipt_error, listing_unknown) if part) or None
     no_round_lines: list[BaseModel] = [
@@ -363,7 +372,7 @@ def reconcile(events: list[RoundEvent], extra_repos: list[str]) -> list[BaseMode
             merged_at=str(pull.merged_at),
         )
         for repo, pull in merged
-        if (repo, pull.number) not in by_pr
+        if (repo, pull.number) not in by_pr and merged_since(pull, since)
     ]
     return [
         *section_end(SectionName.without_receipt, verify_lines, receipt_unknown),
@@ -380,7 +389,11 @@ def report(options: Report) -> list[BaseModel]:
         return [
             ReportSection(kind="section", section=section, count=None, unknown=str(error)) for section in SectionName
         ]
-    return [*open_rounds(events), *owing_retro(events), *reconcile(events, options.repo)]
+    return [
+        *open_rounds(events),
+        *owing_retro(events),
+        *reconcile(events, options.repo, date.fromisoformat(options.since)),
+    ]
 
 
 def run(options: RoundOpen | RoundPr | RoundClose | RoundRetro) -> BaseModel:

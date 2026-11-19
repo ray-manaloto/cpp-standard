@@ -56,7 +56,7 @@ dir = "{{ config_root }}/../.."
 run = "uv run --project python/workflow --locked workflowtools round-retro"
 
 [tasks.report]
-description = "Print open rounds, closed rounds owing a retro, commits without a verify receipt, and merges in no round"
+description = "Print open rounds, retros owed, merges without a verify receipt or in no round (--since, default 2026-11-19)"
 depends = ["sync"]
 dir = "{{ config_root }}/../.."
 run = "uv run --project python/workflow --locked workflowtools report"

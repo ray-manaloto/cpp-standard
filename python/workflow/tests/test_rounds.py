@@ -19,7 +19,7 @@ TREE_A = "1" * 40
 TREE_B = "2" * 40
 TREE_C = "3" * 40
 PULL = "repos/o/r/pulls/5"
-MERGED_AT = "2026-11-18T12:00:00Z"
+MERGED_AT = "2026-11-20T12:00:00Z"
 LISTING = "repos/o/r/pulls?state=closed&per_page=100"
 
 type GhStandIn = Callable[[dict[str, object], set[str]], Path]
@@ -870,3 +870,84 @@ def test_an_unreadable_github_commit_reads_unknown_with_reason(
         for line in without
     )
     assert {"kind": "section", "section": "merges-in-no-round", "count": 0, "unknown": None} in lines
+
+
+BEFORE = "2026-11-18T23:59:59Z"
+ON_CUTOFF = "2026-11-19T00:00:00Z"
+
+
+def fetched(log: Path) -> list[str]:
+    return [json.loads(line)[-1] for line in log.read_text().splitlines()]
+
+
+def test_a_merge_before_the_cutoff_is_left_out_and_its_commit_never_fetched(
+    capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    log = gh_stand_in(
+        {
+            LISTING: [[closed_pull(8, HEAD_C, BEFORE), closed_pull(9, HEAD_B)]],
+            f"repos/o/r/commits/{HEAD_B}": commit_payload(HEAD_B, TREE_B),
+        },
+        set(),
+    )
+    lines = run(capsys, "report", "--repo", "o/r")
+    assert [line["number"] for line in lines if "number" in line] == [9, 9]
+    assert {"kind": "section", "section": "merges-in-no-round", "count": 1, "unknown": None} in lines
+    assert fetched(log) == [LISTING, f"repos/o/r/commits/{HEAD_B}"]
+
+
+def test_a_merge_on_the_cutoff_date_is_included(capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn) -> None:
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(9, HEAD_B, ON_CUTOFF)]],
+            f"repos/o/r/commits/{HEAD_B}": commit_payload(HEAD_B, TREE_B),
+        },
+        set(),
+    )
+    lines = run(capsys, "report", "--repo", "o/r")
+    assert {"kind": "section", "section": "without-receipt", "count": 1, "unknown": None} in lines
+    assert {"kind": "section", "section": "merges-in-no-round", "count": 1, "unknown": None} in lines
+
+
+def test_since_overrides_the_default_cutoff(capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn) -> None:
+    gh_stand_in(
+        {
+            LISTING: [[closed_pull(8, HEAD_C, BEFORE)]],
+            f"repos/o/r/commits/{HEAD_C}": commit_payload(HEAD_C, TREE_C),
+        },
+        set(),
+    )
+    older = run(capsys, "report", "--repo", "o/r", "--since", "2000-01-01")
+    assert {"kind": "section", "section": "without-receipt", "count": 1, "unknown": None} in older
+    assert {"kind": "section", "section": "merges-in-no-round", "count": 1, "unknown": None} in older
+    later = run(capsys, "report", "--repo", "o/r", "--since", "2026-11-30")
+    assert {"kind": "section", "section": "without-receipt", "count": 0, "unknown": None} in later
+    assert {"kind": "section", "section": "merges-in-no-round", "count": 0, "unknown": None} in later
+
+
+def test_a_closed_rounds_head_is_checked_though_its_pull_request_merged_before_the_cutoff(
+    capsys: pytest.CaptureFixture[str], gh_stand_in: GhStandIn
+) -> None:
+    setup_closed_round(capsys, gh_stand_in, ROUND, [(5, HEAD_B)])
+    setup_calls = len(fetched(gh_stand_in({}, set())))
+    log = gh_stand_in(
+        {
+            LISTING: [[closed_pull(5, HEAD_A, BEFORE)]],
+            f"repos/o/r/commits/{HEAD_B}": commit_payload(HEAD_B, TREE_B),
+            f"repos/o/r/commits/{HEAD_A}": commit_payload(HEAD_A, TREE_A),
+        },
+        set(),
+    )
+    lines = run(capsys, "report")
+    assert [line["kind"] for line in lines if str(line.get("kind", "")).endswith("-receipt")] == [
+        "round-without-receipt"
+    ]
+    assert {"kind": "section", "section": "without-receipt", "count": 1, "unknown": None} in lines
+    assert fetched(log)[setup_calls:] == [LISTING, f"repos/o/r/commits/{HEAD_B}"]
+
+
+def test_a_since_that_is_not_a_date_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as stop:
+        main(["report", "--since", "2026-13-45"])
+    assert stop.value.code == 1
+    assert capsys.readouterr().err.startswith('{"error":')

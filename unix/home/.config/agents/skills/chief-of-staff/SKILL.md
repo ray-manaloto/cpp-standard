@@ -51,7 +51,7 @@ Adapted from mattpocock's in-progress `chief-of-staff` skill (mattpocock-skills 
 
 ## Check-in
 
-Run `workflowtools report --repo <owner/name> ...` on every regular check-in (and never write to GitHub during it). It prints four sections: `open-rounds`, `owing-retro`, `without-receipt` (comparing each closed round's close head and each merged pull request's final head separately against local verify receipts), and `merges-in-no-round`. Any section whose `unknown` field is non-null could not read its input and must be reported as unknown with that reason, never as clean.
+Run `workflowtools report --repo <owner/name> ... [--since YYYY-MM-DD]` on every regular check-in, and never write to GitHub during it. Merges before `--since` (default 2026-11-19) are left out of the two merge sections. It prints four sections: `open-rounds`, `owing-retro`, `without-receipt` (comparing each closed round's close head and each merged pull request's final head separately against local verify receipts), and `merges-in-no-round`. Any section whose `unknown` field is non-null could not read its input and must be reported as unknown with that reason, never as clean.
 
 ## Schedules
 

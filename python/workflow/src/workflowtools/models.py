@@ -146,6 +146,10 @@ class Report(BaseModel):
     """
     Extra GitHub repository (owner/name) to reconcile merged pull requests for; repeat the flag for each
     """
+    since: Annotated[str, Field(pattern="^[0-9]{4}-[0-9]{2}-[0-9]{2}$")] = "2026-11-19"
+    """
+    Reconcile pull requests merged on or after this date (YYYY-MM-DD, UTC); a closed round's heads are always checked
+    """
 
 
 class OpenEvent(BaseModel):
