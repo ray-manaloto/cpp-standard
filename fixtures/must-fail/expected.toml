@@ -1,7 +1,27 @@
 # The must-fail fixtures (environment-standard.md section 5, D37, D42): one table per fixture directory, naming the
 # check that must refuse it. `mise run ci-must-fail` runs `<fixture>/run` for each; a run that exits 0 means the
-# check refused the planted fault as it must. Ticket #130 adds the first one; M1a PR 4 adds the gate's fixtures.
+# check refused the planted fault as it must. Ticket #130 adds the first one; Ticket #132 (M1a PR 4) adds the gate's.
 
 [fixture.toolchain-unattested]
 check = "toolchain:fetch"
 what = "an unattested release, on the code path used outside Actions (spec #122 Testing Decisions)"
+
+[fixture.uncovered-line-gcc16]
+check = "ci:coverage"
+what = "a source with one uncovered line, measured with gcc16's gcov (D88, D131)"
+
+[fixture.uncovered-line-clang23]
+check = "ci:coverage"
+what = "a source with one uncovered line, measured with clang23's llvm-cov gcov (D88, D131)"
+
+[fixture.uncovered-line-p2996]
+check = "ci:coverage"
+what = "a source with one uncovered line, measured with the p2996 toolchain's llvm-cov gcov (D88, D131)"
+
+[fixture.vcpkg-baseline]
+check = "vcpkg:bootstrap"
+what = "a vcpkg checkout at another commit than the pinned baseline (D113)"
+
+[fixture.toolchain-wrong-hash]
+check = "toolchain:fetch"
+what = "a main-attested archive whose inputs-hash.txt differs from its tag's hash (D131)"

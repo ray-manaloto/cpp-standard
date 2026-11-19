@@ -375,7 +375,7 @@ class InstallTest(Case):
             make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root
         )
         self.assertEqual(prefix.stat().st_mode & 0o777, 0o755)
-        # What toolchain:smoke and the gate do: paths under the prefix, through the symlink.
+        # What the gate does: paths under the prefix, through the symlink.
         self.assertTrue((prefix / "bin/marker").is_file())
         self.assertEqual(Path(os.path.realpath(prefix)).parent, self.root.resolve())
 

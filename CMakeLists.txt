@@ -1,9 +1,11 @@
-# The project build (environment-standard.md section 4). The tracer bullet
-# (#125) builds only the stand-in module; M1a PR 4 adds cmake/probes.cmake,
-# the core module and fixtures/must-fail/, and raises the minimum to 4.5
-# with the tools image. Until then the gate runs the CMake of the Ubuntu
-# container (4.3).
-cmake_minimum_required(VERSION 4.3)
+# The project build (environment-standard.md section 4): the stand-in module and
+# the core module,
+# built on three compilers through the presets in cmake/presets/. Dependencies
+# come from vcpkg's
+# manifest (vcpkg.json) through the toolchain file the presets name.
+cmake_minimum_required(VERSION 4.5)
+# `import std` is stable in CMake 4.5; the core module uses it.
+set(CMAKE_CXX_MODULE_STD ON)
 project(cpp_standard LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 26)

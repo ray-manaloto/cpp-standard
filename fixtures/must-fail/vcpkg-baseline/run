@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Ticket #132: a vcpkg checkout at another commit than the baseline of vcpkg-configuration.json is
+# refused by `vcpkg:bootstrap --check` (D113), and a checkout at the baseline passes it. The stand-in
+# checkouts are two empty git repositories, so the fixture needs no network.
+set -euo pipefail
+# Under a git hook GIT_DIR and GIT_WORK_TREE name the outer repository; the stand-in repositories must not inherit them.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+git init --quiet "$work/vcpkg"
+git -C "$work/vcpkg" -c user.name=fixture -c user.email=fixture@example.invalid \
+  commit --quiet --allow-empty -m stand-in
+head="$(git -C "$work/vcpkg" rev-parse HEAD)"
+printf '{"default-registry":{"kind":"builtin","baseline":"%s"}}\n' "$head" >"$work/good.json"
+printf '{"default-registry":{"kind":"builtin","baseline":"%s"}}\n' "$(printf 'f%.0s' {1..40})" >"$work/changed.json"
+check() { # <configuration file>
+  (cd "$root" && CPPSTD_VCPKG_CONFIG="$1" mise run -q vcpkg:bootstrap --check --dir "$work/vcpkg" 2>&1)
+}
+check "$work/good.json" >/dev/null || {
+  echo "the check refused a checkout that is at the baseline" >&2
+  exit 1
+}
+# The build path must end: a checkout at the baseline that already holds a vcpkg binary is done, not
+# re-run (it once re-executed itself forever, #132). A hang is cut off by the time limit.
+touch "$work/vcpkg/vcpkg"
+chmod +x "$work/vcpkg/vcpkg"
+(cd "$root" && CPPSTD_VCPKG_CONFIG="$work/good.json" timeout_s=120 python3 -I -c '
+import os, subprocess, sys
+try:
+    r = subprocess.run(
+        ["mise", "run", "-q", "vcpkg:bootstrap", "--dir", sys.argv[1]],
+        capture_output=True, text=True, timeout=int(os.environ["timeout_s"]),
+    )
+except subprocess.TimeoutExpired:
+    print("vcpkg:bootstrap did not end", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0 if r.returncode == 0 and "PASS: vcpkg is at the baseline" in r.stdout else 1)
+' "$work/vcpkg") || {
+  echo "vcpkg:bootstrap did not finish on a checkout at the baseline" >&2
+  exit 1
+}
+rc=0
+out="$(check "$work/changed.json")" || rc=$?
+echo "$out"
+[[ $rc -ne 0 ]] || {
+  echo "went green: vcpkg:bootstrap --check accepted a checkout at another commit" >&2
+  exit 1
+}
+grep -q 'not the baseline' <<<"$out" || {
+  echo "the check failed, but not for the baseline" >&2
+  exit 1
+}
+exit 0

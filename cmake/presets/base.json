@@ -2,10 +2,20 @@
   "configurePresets": [
     {
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets"
+      },
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear",
+        "VCPKG_DISABLE_METRICS": "1",
+        "VCPKG_FORCE_SYSTEM_BINARIES": "1",
+        "VCPKG_ROOT": "${sourceDir}/.cache/vcpkg"
+      },
       "generator": "Ninja",
       "hidden": true,
       "name": "base"
     }
   ],
-  "version": 10
+  "version": 13
 }

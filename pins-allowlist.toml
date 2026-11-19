@@ -23,6 +23,7 @@ tools = [
   "fnox",
   "gh",
   "ghalint",
+  "github:cmakefmt/cmakefmt",
   "hadolint",
   "hk",
   "jactionlint",

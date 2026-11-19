@@ -3,6 +3,14 @@
     {
       "configurePreset": "gcc16-coverage",
       "name": "gcc16-coverage"
+    },
+    {
+      "configurePreset": "clang23-coverage",
+      "name": "clang23-coverage"
+    },
+    {
+      "configurePreset": "p2996-coverage",
+      "name": "p2996-coverage"
     }
   ],
   "configurePresets": [
@@ -13,6 +21,22 @@
         "coverage"
       ],
       "name": "gcc16-coverage"
+    },
+    {
+      "inherits": [
+        "base",
+        "clang23",
+        "coverage"
+      ],
+      "name": "clang23-coverage"
+    },
+    {
+      "inherits": [
+        "base",
+        "p2996",
+        "coverage"
+      ],
+      "name": "p2996-coverage"
     }
   ],
   "include": [
@@ -27,7 +51,21 @@
       "output": {
         "outputOnFailure": true
       }
+    },
+    {
+      "configurePreset": "clang23-coverage",
+      "name": "clang23-coverage",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "p2996-coverage",
+      "name": "p2996-coverage",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ],
-  "version": 10
+  "version": 13
 }

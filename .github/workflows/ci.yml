@@ -1,7 +1,7 @@
 # The required checks (D93). `lint` runs the hk gate (D102), `pins-validate`
 # the pins check, `artifact-check` and `resolve` pick the tools image (M1a PR 2)
 # and wait for the p2996 toolchain (M1a PR 3), `gate-linux-arm64` runs the gate
-# and the toolchain smoke step in the image, and `must-fail` runs the must-fail
+# on three presets in the image, and `must-fail` runs the must-fail
 # fixtures there (M1a PR 3, #130). Each job's name is its required-check name in
 # .github/rulesets/main.json.
 name: ci
@@ -118,11 +118,10 @@ jobs:
           install: false
       - name: Publisher and artifact:names agree; the wait and resolve cases
         run: python3 -I tests/artifact/test_artifact.py
-      - name: The source table of toolchain:fetch; the recipe's patch and smoke steps
+      - name: The source table of toolchain:fetch; the recipe's patch step
         run: |
           python3 -I tests/toolchain/test_fetch.py
           python3 -I tests/toolchain/test_build_patch.py
-          python3 -I tests/toolchain/test_smoke.py
       - name: Wait for this commit's tools image and p2996 toolchain
         timeout-minutes: 181
         env:
@@ -171,17 +170,17 @@ jobs:
         run: mise run image:resolve --arch arm64
 
   # The gate (#125, M1a PR 2): `mise run ci` in the tools image, by the digest `resolve`
-  # picked. M1a PR 3 (#130) adds the toolchain smoke step: toolchain:fetch installs p2996 and the
-  # stand-in module's test is compiled and run with it. The job never builds a toolchain: in a
+  # picked: toolchain:fetch installs p2996 (#130) and bootstrap installs vcpkg at its baseline, then
+  # the gate builds and covers the core module on three presets (#132). The job never builds a toolchain: in a
   # pull-request or merge-queue run it takes main's release, else the copy the builder staged in
   # this ref's cache (artifact-check waited for one of them); in a run dispatched on main it
-  # takes only main's release (release-only mode). PR 4 adds the other presets.
+  # takes only main's release (release-only mode).
   gate-linux-arm64:
     name: gate-linux-arm64
     needs: [artifact-check, resolve]
     if: ${{ needs.artifact-check.result == 'success' }}
     runs-on: ubuntu-26.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       contents: read
       attestations: read  # gh attestation verify of the toolchain release
@@ -232,11 +231,13 @@ jobs:
             ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
             && '--release-only' || '--no-rebuild' }}
         run: mise run toolchain:fetch "$MODE"
-      - name: Toolchain smoke step (the stand-in module's test with p2996)
-        env:
-          PREFIX: ${{ steps.fetch.outputs.prefix }}
-        run: mise run toolchain:smoke "$PREFIX"
+      - name: Bootstrap vcpkg at the pinned baseline
+        timeout-minutes: 15
+        run: mise run vcpkg:bootstrap
       - name: Run the gate
+        env:
+          # The p2996 preset builds with this toolchain (cmake/toolchains/p2996.cmake).
+          CPPSTD_P2996_PREFIX: ${{ steps.fetch.outputs.prefix }}
         run: mise run ci
 
   # M1a PR 3 (#130): `mise run ci-must-fail` in the tools image, the same command as outside
@@ -246,10 +247,10 @@ jobs:
     needs: [artifact-check, resolve]
     if: ${{ needs.artifact-check.result == 'success' }}
     runs-on: ubuntu-26.04-arm
-    timeout-minutes: 15
+    timeout-minutes: 40
     permissions:
       contents: read
-      attestations: read  # gh attestation verify in the toolchain fixture
+      attestations: read  # gh attestation verify in the toolchain fixtures
     container:
       # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
       image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]
@@ -264,9 +265,28 @@ jobs:
           persist-credentials: false
       - name: Trust the checkout's mise config
         run: mise trust "$GITHUB_WORKSPACE"
+      - id: tag
+        name: The p2996 tag
+        run: echo "p2996=$(mise run -q artifact:tag p2996-linux-arm64)" >> "$GITHUB_OUTPUT"
+      # The p2996 uncovered-line fixture needs the toolchain: the same fetch as the gate's.
+      - if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .cache/toolchains/${{ steps.tag.outputs.p2996 }}
+          key: toolchain-${{ steps.tag.outputs.p2996 }}
+      - id: fetch
+        name: Fetch the p2996 toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CPPSTD_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          MODE: >-
+            ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+            && '--release-only' || '--no-rebuild' }}
+        run: mise run toolchain:fetch "$MODE"
       - name: A fixture that goes green fails the run
         run: python3 -I tests/must_fail/test_ci_must_fail.py
       - name: Run the must-fail fixtures
         env:
+          CPPSTD_P2996_PREFIX: ${{ steps.fetch.outputs.prefix }}
           GH_TOKEN: ${{ github.token }}
         run: mise run ci-must-fail

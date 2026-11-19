@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#MISE description="Check out vcpkg at the baseline of vcpkg-configuration.json into .cache/vcpkg and bootstrap it"
+#USAGE flag "--check" help="Only check that the checkout is at the baseline; change nothing"
+#USAGE flag "--dir <dir>" help="The vcpkg checkout (default: $CPPSTD_VCPKG_DIR, else .cache/vcpkg)"
+#
+# environment-standard.md section 4 (dependencies, D113). The baseline is the one pin: the commit of
+# microsoft/vcpkg in vcpkg-configuration.json, whose ports are the registry. This task makes the
+# checkout at exactly that commit and bootstraps vcpkg's binary from it (metrics off). `--check`,
+# which `mise run ci` and `doctor` run, fails when the checkout is missing or at another commit.
+# Manifest mode, no binary cache: the presets set VCPKG_BINARY_SOURCES=clear.
+set -euo pipefail
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars) # a git hook's GIT_DIR must not reach the vcpkg checkout
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+dir="${usage_dir:-${CPPSTD_VCPKG_DIR:-$root/.cache/vcpkg}}"
+baseline="$(python3 -I -c '
+import json, sys
+print(json.load(open(sys.argv[1]))["default-registry"]["baseline"])
+' "${CPPSTD_VCPKG_CONFIG:-$root/vcpkg-configuration.json}")"
+[[ "$baseline" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "FAIL: the baseline in vcpkg-configuration.json is not a 40-hex commit: $baseline"
+  exit 1
+}
+
+head=""
+if [[ -e "$dir/.git" ]]; then
+  head="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
+fi
+
+if [[ "${usage_check:-false}" == true ]]; then
+  if [[ "$head" != "$baseline" ]]; then
+    echo "FAIL: vcpkg at $dir is at '${head:-nothing}', not the baseline $baseline (run: mise run vcpkg:bootstrap)"
+    exit 1
+  fi
+  echo "PASS: vcpkg is at the baseline $baseline"
+  exit 0
+fi
+
+# A stalled network or download fails after ten minutes instead of holding the job (where `timeout` exists).
+limit() { if command -v timeout >/dev/null; then timeout 600 "$@"; else "$@"; fi; }
+if [[ "$head" != "$baseline" ]]; then
+  # Only a vcpkg checkout, an empty directory or one an interrupted run left holding just .git is
+  # replaced; --dir . must not delete a project.
+  if [[ -d "$dir" && "$(ls -A "$dir")" != "" && "$(ls -A "$dir")" != ".git" && ! -f "$dir/bootstrap-vcpkg.sh" ]]; then
+    echo "FAIL: $dir is neither empty nor a vcpkg checkout; not replacing it"
+    exit 1
+  fi
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  git -C "$dir" init --quiet
+  limit git -C "$dir" fetch --quiet --depth 1 https://github.com/microsoft/vcpkg "$baseline"
+  git -C "$dir" -c advice.detachedHead=false checkout --quiet FETCH_HEAD
+fi
+if [[ ! -x "$dir/vcpkg" ]]; then
+  limit "$dir/bootstrap-vcpkg.sh" -disableMetrics
+fi
+# Check in this process: re-running this script with `exec "$0" --check` lost the flag (mise parses it,
+# the script does not) and looped forever.
+head="$(git -C "$dir" rev-parse HEAD)"
+[[ "$head" == "$baseline" ]] || {
+  echo "FAIL: vcpkg at $dir is at $head, not the baseline $baseline"
+  exit 1
+}
+echo "PASS: vcpkg is at the baseline $baseline"

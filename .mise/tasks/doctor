@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#MISE description="Report whether this machine or the tools image can run the gate: compilers, tools, p2996 toolchain, vcpkg baseline"
+# environment-standard.md section 5 (ticket #132). Read-only; prints one line per check and exits 1 when
+# any is missing. In the tools image every line passes. On the owner's Mac the Linux compilers are
+# absent, so `doctor` is run there only to see what is missing.
+set -uo pipefail
+root="${MISE_PROJECT_ROOT:-$PWD}"
+cd "$root" || exit 1
+failed=0
+ok() { printf 'ok    %s\n' "$1"; }
+bad() {
+  printf 'MISSING %s\n' "$1"
+  failed=1
+}
+
+# A hook step that ran git with the hook's GIT_DIR once left core.worktree set in the shared config; refuse that state.
+if wt="$(git config --file "$(git rev-parse --path-format=absolute --git-common-dir)/config" --get core.worktree)"; then
+  bad "core.worktree is set to $wt in the shared git config (a script ran git with a hook's GIT_DIR)"
+else
+  ok "git: core.worktree is not set in the shared config"
+fi
+
+for tool in cmake ninja gcovr git gh g++-16 gcov-16 clang++-23 llvm-cov-23 clang-scan-deps-23; do
+  if path="$(command -v "$tool")"; then ok "$tool: $path"; else bad "$tool is not on PATH"; fi
+done
+
+prefix="${CPPSTD_P2996_PREFIX:-}"
+if [[ -x "$prefix/bin/clang++" && -x "$prefix/bin/llvm-cov" ]]; then
+  ok "p2996 toolchain: $prefix"
+else
+  bad "CPPSTD_P2996_PREFIX names no p2996 toolchain (mise run toolchain:fetch)"
+fi
+
+if out="$(mise run -q vcpkg:bootstrap --check 2>&1)"; then ok "vcpkg: $out"; else bad "vcpkg: $out"; fi
+
+for tag in tools p2996-linux-arm64; do
+  if out="$(mise run -q artifact:tag --arch arm64 "$tag" 2>&1)"; then ok "artifact tag: $out"; else bad "artifact:tag $tag: $out"; fi
+done
+
+[[ $failed -eq 0 ]] && echo "PASS: doctor" || echo "FAIL: doctor found missing pieces"
+exit "$failed"
