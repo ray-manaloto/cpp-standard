@@ -1,7 +1,8 @@
 """Open one live-test Claude tab in a herdr-app space, guarded, and never answer its workspace-trust dialog (#178).
 
   python -I testtab.py --space S --run RUNDIR --folder DIR --name N --names a,b --tools T1,T2 [--prompt TEXT]
-                       [--model haiku] [--effort low] [--mode default] [--extra FILE] [--no-tools-flag] [--wait 20]
+                       [--model haiku] [--effort low] [--mode default] [--extra FILE] [--no-tools-flag] [--plugin-dir DIR]... [--allow-monitor CMD]
+                       [--wait 20]
 
 Trust is the owner's decision. Before launch the folder must already be trusted in the client's own record
 (projects[<key>].hasTrustDialogAccepted in $CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json), where the key is
@@ -109,6 +110,7 @@ def settings(
             str(run / "log" / "testguard.jsonl"),
             "--tools",
             ",".join(tools),
+            *(["--allow-monitor", args.allow_monitor] if args.allow_monitor else []),
             *names,
         ]
     )
@@ -157,6 +159,17 @@ def parse() -> argparse.Namespace:
         "--no-tools-flag",
         action="store_true",
         help="omit the --tools launch flag; the guard stays",
+    )
+    parser.add_argument(
+        "--plugin-dir",
+        action="append",
+        default=[],
+        help="a plugin or mod folder to load for this tab only (repeatable)",
+    )
+    parser.add_argument(
+        "--allow-monitor",
+        metavar="CMD",
+        help="let the guard allow the Monitor tool for this exact command only (Bash stays refused)",
     )
     parser.add_argument(
         "--wait",
@@ -208,6 +221,7 @@ def main() -> None:
         *([] if args.no_tools_flag else ["--tools", ",".join(tools)]),
         "--settings",
         str(path),
+        *[x for d in args.plugin_dir for x in ("--plugin-dir", str(Path(d).resolve()))],
         *([args.prompt] if args.prompt else []),
     ]
     out = subprocess.run(
