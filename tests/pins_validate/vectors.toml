@@ -1,6 +1,7 @@
-# Golden vectors for `mise run pins:validate` (D51, D72, environment-standard.md section 3).
+# Golden vectors for `mise run pins:validate` (D51, D72, D175, environment-standard.md sections 3 and 11).
 # [tree] is a valid tree; each vector applies `change` (files replaced or added) and `remove`
-# to it, and `reject` names the one rule that must fail. A vector without `reject` must pass.
+# to it, and `reject` names the one rule that must fail (and `path`, when set, a path that a
+# failing message must name). A vector without `reject` must pass.
 # The rules come from the design, not from the implementation.
 
 [tree]
@@ -72,6 +73,63 @@ salt = 0
 apt_compiler = false
 host_tools = ["cmake"]
 source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+"docs/standard/agents.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_VER=2026.11.9
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+'''
+"docs/standard/ubuntu-cert.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7 AS base
+LABEL org.opencontainers.image.base.digest=sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_VER=2026.11.9
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+FROM base
+'''
+".github/workflows/ci.yml" = '''
+jobs:
+  lint:
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          version: 2026.11.9
+  pins-validate:
+    steps:
+      - name: Setup mise
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          install: false
+          version: "2026.11.9"  # pinned
+'''
+".github/workflows/builder.yml" = '''
+jobs:
+  build:
+    steps:
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          version: 2026.11.9
+          install: false
+'''
+".github/workflows/apt-bump.yml" = '''
+jobs:
+  check:
+    steps:
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          version: 2026.11.9
+'''
+"docs/standard/ubuntu.md" = '''
+```sh
+# mise 2026.11.9 (mise.toml's min_version), checked against the release's SHASUMS256.txt
+v=2026.11.9 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+```
+Note: historical prose tested with mise 2026.11.8 stays untouched.
+| Ubuntu 26.10 "stonking" | `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7` | no | base |
+| mise 2026.11.9 | the release tarball | no | pin |
+Expected: the digest of `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7`.
 '''
 
 [[vector]]
@@ -750,4 +808,334 @@ sha256 = "abcd"
 [osx-arm64]
 url = "https://github.com/actions/runner/releases/download/v2.330.0/actions-runner-osx-arm64-2.330.0.tar.gz"
 sha256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd02"
+'''
+
+# D175 (section 11): the mise version, mise SHA-256 and Ubuntu base digest copy group.
+
+[[vector]]
+name = "group: agents.Dockerfile MISE_VER differs"
+reject = "group"
+path = "docs/standard/agents.Dockerfile"
+
+[vector.change]
+"docs/standard/agents.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_VER=2026.11.8
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+'''
+
+[[vector]]
+name = "group: ubuntu-cert.Dockerfile MISE_VER differs"
+reject = "group"
+path = "docs/standard/ubuntu-cert.Dockerfile"
+
+[vector.change]
+"docs/standard/ubuntu-cert.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7 AS base
+LABEL org.opencontainers.image.base.digest=sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_VER=2026.11.8
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+FROM base
+'''
+
+[[vector]]
+name = "group: ci.yml second mise-action version differs"
+reject = "group"
+path = ".github/workflows/ci.yml"
+
+[vector.change]
+".github/workflows/ci.yml" = '''
+jobs:
+  lint:
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          version: 2026.11.9
+  pins-validate:
+    steps:
+      - name: Setup mise
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          install: false
+          version: "2026.11.8"  # stale
+'''
+
+[[vector]]
+name = "group: builder.yml mise-action version differs"
+reject = "group"
+path = ".github/workflows/builder.yml"
+
+[vector.change]
+".github/workflows/builder.yml" = '''
+jobs:
+  build:
+    steps:
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          version: 2026.11.8
+          install: false
+'''
+
+[[vector]]
+name = "group: apt-bump.yml mise-action version differs"
+reject = "group"
+path = ".github/workflows/apt-bump.yml"
+
+[vector.change]
+".github/workflows/apt-bump.yml" = '''
+jobs:
+  check:
+    steps:
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          version: 2026.11.8
+'''
+
+[[vector]]
+name = "group: another workflow using mise-action at another version"
+reject = "group"
+path = ".github/workflows/extra.yml"
+
+[vector.change]
+".github/workflows/extra.yml" = '''
+jobs:
+  extra:
+    steps:
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          version: 2026.11.8
+'''
+
+[[vector]]
+name = "group: ubuntu.md install comment mise version differs"
+reject = "group"
+path = "docs/standard/ubuntu.md"
+
+[vector.change]
+"docs/standard/ubuntu.md" = '''
+```sh
+# mise 2026.11.8 (mise.toml's min_version), checked against the release's SHASUMS256.txt
+v=2026.11.9 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+```
+| Ubuntu 26.10 "stonking" | `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7` | no | base |
+| mise 2026.11.9 | the release tarball | no | pin |
+Expected: the digest of `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7`.
+'''
+
+[[vector]]
+name = "group: ubuntu.md install command mise version differs"
+reject = "group"
+path = "docs/standard/ubuntu.md"
+
+[vector.change]
+"docs/standard/ubuntu.md" = '''
+```sh
+# mise 2026.11.9 (mise.toml's min_version), checked against the release's SHASUMS256.txt
+v=2026.11.8 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+```
+| Ubuntu 26.10 "stonking" | `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7` | no | base |
+| mise 2026.11.9 | the release tarball | no | pin |
+Expected: the digest of `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7`.
+'''
+
+[[vector]]
+name = "group: ubuntu.md pin table mise version differs"
+reject = "group"
+path = "docs/standard/ubuntu.md"
+
+[vector.change]
+"docs/standard/ubuntu.md" = '''
+```sh
+# mise 2026.11.9 (mise.toml's min_version), checked against the release's SHASUMS256.txt
+v=2026.11.9 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+```
+| Ubuntu 26.10 "stonking" | `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7` | no | base |
+| mise 2026.11.8 | the release tarball | no | pin |
+Expected: the digest of `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7`.
+'''
+
+[[vector]]
+name = "group: agents.Dockerfile Ubuntu digest differs"
+reject = "group"
+path = "docs/standard/agents.Dockerfile"
+
+[vector.change]
+"docs/standard/agents.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:0000000000000000000000000000000000000000000000000000000000000000
+ARG MISE_VER=2026.11.9
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+'''
+
+[[vector]]
+name = "group: ubuntu-cert.Dockerfile FROM Ubuntu digest differs"
+reject = "group"
+path = "docs/standard/ubuntu-cert.Dockerfile"
+
+[vector.change]
+"docs/standard/ubuntu-cert.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS base
+LABEL org.opencontainers.image.base.digest=sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_VER=2026.11.9
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+FROM base
+'''
+
+[[vector]]
+name = "group: ubuntu-cert.Dockerfile base.digest label differs"
+reject = "group"
+path = "docs/standard/ubuntu-cert.Dockerfile"
+
+[vector.change]
+"docs/standard/ubuntu-cert.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7 AS base
+LABEL org.opencontainers.image.base.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
+ARG MISE_VER=2026.11.9
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+FROM base
+'''
+
+[[vector]]
+name = "group: ubuntu.md pin table Ubuntu digest differs"
+reject = "group"
+path = "docs/standard/ubuntu.md"
+
+[vector.change]
+"docs/standard/ubuntu.md" = '''
+```sh
+# mise 2026.11.9 (mise.toml's min_version), checked against the release's SHASUMS256.txt
+v=2026.11.9 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+```
+| Ubuntu 26.10 "stonking" | `ubuntu:26.10@sha256:0000000000000000000000000000000000000000000000000000000000000000` | no | base |
+| mise 2026.11.9 | the release tarball | no | pin |
+Expected: the digest of `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7`.
+'''
+
+[[vector]]
+name = "group: ubuntu.md A2 expected Ubuntu digest differs"
+reject = "group"
+path = "docs/standard/ubuntu.md"
+
+[vector.change]
+"docs/standard/ubuntu.md" = '''
+```sh
+# mise 2026.11.9 (mise.toml's min_version), checked against the release's SHASUMS256.txt
+v=2026.11.9 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+```
+| Ubuntu 26.10 "stonking" | `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7` | no | base |
+| mise 2026.11.9 | the release tarball | no | pin |
+Expected: the digest of `ubuntu:26.10@sha256:0000000000000000000000000000000000000000000000000000000000000000`.
+'''
+
+[[vector]]
+name = "group: ubuntu-cert.Dockerfile MISE_SHA256_AMD64 differs"
+reject = "group"
+path = "docs/standard/ubuntu-cert.Dockerfile"
+
+[vector.change]
+"docs/standard/ubuntu-cert.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7 AS base
+LABEL org.opencontainers.image.base.digest=sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_VER=2026.11.9
+ARG MISE_SHA256_AMD64=6666666666666666666666666666666666666666666666666666666666666666
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+FROM base
+'''
+
+[[vector]]
+name = "group: agents.Dockerfile MISE_SHA256_ARM64 differs"
+reject = "group"
+path = "docs/standard/agents.Dockerfile"
+
+[vector.change]
+"docs/standard/agents.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_VER=2026.11.9
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=7777777777777777777777777777777777777777777777777777777777777777
+'''
+
+[[vector]]
+name = "group: agents.Dockerfile MISE_SHA256_AMD64 is not 64 hex"
+reject = "group"
+path = "docs/standard/agents.Dockerfile"
+
+[vector.change]
+"docs/standard/agents.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_VER=2026.11.9
+ARG MISE_SHA256_AMD64=abcd
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+'''
+
+[[vector]]
+name = "group: removing an expected file fails"
+reject = "group"
+path = "docs/standard/agents.Dockerfile"
+remove = ["docs/standard/agents.Dockerfile"]
+
+[[vector]]
+name = "group: removing an expected copy line fails"
+reject = "group"
+path = "docs/standard/agents.Dockerfile"
+
+[vector.change]
+"docs/standard/agents.Dockerfile" = '''
+FROM ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
+ARG MISE_SHA256_AMD64=4444444444444444444444444444444444444444444444444444444444444444
+ARG MISE_SHA256_ARM64=5555555555555555555555555555555555555555555555555555555555555555
+'''
+
+[[vector]]
+name = "group: removing version from a mise-action step fails"
+reject = "group"
+path = ".github/workflows/builder.yml"
+
+[vector.change]
+".github/workflows/builder.yml" = '''
+jobs:
+  build:
+    steps:
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785
+        with:
+          install: false
+        env:
+          version: 2026.11.9
+'''
+
+[[vector]]
+name = "group: removing mise-action from an expected workflow fails"
+reject = "group"
+path = ".github/workflows/builder.yml"
+
+[vector.change]
+".github/workflows/builder.yml" = '''
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v7
+'''
+
+[[vector]]
+name = "group: min_version below the pinned version passes"
+
+[vector.change]
+"mise.toml" = '''
+min_version = "2026.11.5"
+[settings]
+lockfile = true
+'''
+
+[[vector]]
+name = "group: slot runner Dockerfile outside the group passes"
+
+[vector.change]
+"docs/standard/gha-runner/Dockerfile" = '''
+FROM ubuntu:26.10@sha256:0000000000000000000000000000000000000000000000000000000000000000
+ARG MISE_VER=2026.11.5
 '''

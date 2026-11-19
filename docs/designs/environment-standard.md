@@ -1560,9 +1560,12 @@ running it.
   A `pins:validate` rule fails when any copy in the group differs from
   `image/base.inputs.toml`, so a bump that misses one copy cannot merge.
   `min_version` is outside the rule: it may stay below the pin. The rule is
-  planned, not built; #252 builds it. Until then nothing checks the
-  group. Whether Renovate bumps it as one group waits on its
-  configuration (#222, Q6). The slot runner image's Dockerfile in `mise.pc.toml`
+  built (#252): `pins:validate` reads the copy list from `COPY_GROUP` in
+  `python/pins/pins.py`, checks every copy (and any other workflow using
+  `jdx/mise-action`) against `image/base.inputs.toml` and the Dockerfiles'
+  mise SHA-256 arguments, and fails on any mismatch or missing copy.
+  Whether Renovate bumps it as one group waits on its configuration (#222,
+  Q6). The slot runner image's Dockerfile in `mise.pc.toml`
   (mise 2026.11.5, `docs/standard/gha-runner/`) is outside the group: it is
   a host input for other repositories' slots (#227, #239).
 
