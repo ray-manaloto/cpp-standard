@@ -4,6 +4,10 @@
 #MISE depends=["pctools:sync"]
 #USAGE arg "[args]..." help="Arguments for pytest" var=#true
 set -euo pipefail
+# A git hook exports GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and the rest; clear them so a test or fixture's
+# scratch `git init` or `git commit` cannot reach the real repository (#280).
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
 # Serial: the suite takes seconds, so no xdist worker pool.
 # record.py (#186) passes the output and status through and keeps the wall time, slowest tests and load.
 exec python3 -I ../suites/record.py run pctools -- .venv/bin/python -I -m pytest --durations=25 "$@"
