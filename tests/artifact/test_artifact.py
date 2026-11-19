@@ -1,7 +1,8 @@
 """Tests of python/artifact/artifact.py: the three `artifact-check` cases, the four `resolve`
-cases, and the agreement of publish.yml's inline names with `artifact:names` (environment-standard.md
-file plan; spec #122 Testing Decisions). The registry, the clock and the verifier are fakes, so
-nothing here needs the network, Docker or GitHub. Run: python3 -I tests/artifact/test_artifact.py
+cases, image:verify's devcontainer env file, and the agreement of publish.yml's inline names with
+`artifact:names` (environment-standard.md file plan; spec #122 Testing Decisions). The registry,
+the clock and the verifier are fakes, so nothing here needs the network, Docker or GitHub. Run:
+python3 -I tests/artifact/test_artifact.py
 """
 
 from __future__ import annotations
@@ -160,6 +161,91 @@ class Resolve(unittest.TestCase):
             artifact.pr_from_ref("pull_request", "refs/pull/12/merge"), (12, False)
         )
         self.assertEqual(artifact.pr_from_ref("push", "refs/heads/main"), (None, False))
+
+
+class VerifyEnvFile(unittest.TestCase):
+    """image:verify's --env-file (ticket #137, the file plan's .devcontainer row, D93): the
+    devcontainer's compose starts only the digest image:verify verified; a refusal removes a
+    stale env file and the error names the image."""
+
+    tag_ref = f"{IMG}/tools:arm64-fedcba9876543210"
+
+    def _verify(
+        self,
+        refs: dict[str, str],
+        verified: bool = True,
+        env_file: str | None = None,
+        image: str = tag_ref,
+    ) -> str:
+        def verifier(candidate: str) -> bool:
+            return verified
+
+        return artifact.verify(
+            image,  # type: ignore[arg-type]
+            FakeRegistry(refs),  # type: ignore[arg-type]
+            verifier,
+            env_file,
+        )
+
+    def test_a_verified_tag_is_written_as_image_at_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = str(Path(tmp) / "devcontainer" / ".env")
+            got = self._verify({self.tag_ref: DIGEST}, env_file=env_file)
+            self.assertEqual(got, f"{IMG}/tools@{DIGEST}")
+            self.assertEqual(
+                Path(env_file).read_text(),
+                f"{artifact.DEVCONTAINER_ENV_VAR}={IMG}/tools@{DIGEST}\n",
+            )
+
+    def test_an_explicit_digest_is_verified_and_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = str(Path(tmp) / ".env")
+            got = self._verify({}, image=f"{IMG}/tools@{DIGEST}", env_file=env_file)
+            self.assertEqual(got, f"{IMG}/tools@{DIGEST}")
+            self.assertEqual(
+                Path(env_file).read_text(),
+                f"{artifact.DEVCONTAINER_ENV_VAR}={IMG}/tools@{DIGEST}\n",
+            )
+
+    def test_a_refusal_removes_a_stale_env_file_and_names_the_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / "devcontainer" / ".env"
+            env_file.parent.mkdir()
+            env_file.write_text(f"{artifact.DEVCONTAINER_ENV_VAR}={IMG}/tools@stale\n")
+            with self.assertRaisesRegex(artifact.ArtifactError, f"{IMG}/tools@"):
+                self._verify(
+                    {self.tag_ref: DIGEST}, verified=False, env_file=str(env_file)
+                )
+            self.assertFalse(env_file.exists())
+
+    def test_a_missing_image_removes_a_stale_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("stale\n")
+            with self.assertRaisesRegex(artifact.ArtifactError, self.tag_ref):
+                self._verify({}, env_file=str(env_file))
+            self.assertFalse(env_file.exists())
+
+    def test_a_refusal_without_env_file_just_raises(self) -> None:
+        with self.assertRaisesRegex(artifact.ArtifactError, "attestation refused"):
+            self._verify({self.tag_ref: DIGEST}, verified=False)
+
+    def test_a_registry_error_removes_a_stale_env_file(self) -> None:
+        class ProbeFails(artifact.Registry):
+            def __init__(self) -> None:
+                super().__init__(None)
+
+            def digest(self, ref: str) -> str | None:
+                raise artifact.ArtifactError(f"registry probe of {ref}: HTTP 502")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("stale\n")
+            with self.assertRaisesRegex(artifact.ArtifactError, "registry probe"):
+                artifact.verify(
+                    self.tag_ref, ProbeFails(), lambda _: True, str(env_file)
+                )
+            self.assertFalse(env_file.exists())
 
 
 def publisher_names_scripts(text: str) -> list[str]:

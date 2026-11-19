@@ -155,6 +155,13 @@ local gateSteps = new Mapping<String, Step> {
       )
     check = "\(cleanGitEnv) mise run toolchain:cov"
   }
+  // The devcontainer's host-side chain (#137): image:verify -> the generated .devcontainer/.env ->
+  // compose. Static checks of the generated files and the verify task, plus the task run with a
+  // stand-in python3; artifact.py's env-file unit tests are in tests/artifact/ (artifact-cov).
+  ["devcontainer-test"] {
+    glob = List(".devcontainer/**", "tests/devcontainer/**", ".mise/tasks/image/**")
+    check = "\(cleanGitEnv) python3 -I tests/devcontainer/test_devcontainer.py"
+  }
   // Refuse a repository whose shared common git config has core.worktree set (#280).
   // No glob: this runs on every hk check and pre-commit run, whatever files changed.
   ["git-config-check"] {
