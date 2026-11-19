@@ -23,6 +23,10 @@ The five default roles, each label named as its role: `needs-triage`, `needs-inf
 Single-context. Decisions are the D-rows of `docs/designs/level-1/decisions-log.md` (there is no `docs/adr/`); the
 design is `docs/designs/environment-standard.md`. See `docs/agents/domain.md`.
 
+### agy workers
+
+Routing tickets to agy workers and starting them: `docs/agents/agy-workers.md`.
+
 ## Workflow facts
 
 - Check: `hk check` runs the hk steps on the changed files; it passes before each commit. `mise run check` runs

@@ -171,6 +171,7 @@ local gateSteps = new Mapping<String, Step> {
         ".mise/tasks/suites/cov",
         ".mise/tasks/agents/cov",
         ".mise/tasks/agents/testtab-check",
+        ".mise/tasks/agents/agy-worker-check",
         ".mise/tasks/slot/guard-check",
         ".mise/tasks/artifact/cov",
         ".mise/tasks/toolchain/cov",
