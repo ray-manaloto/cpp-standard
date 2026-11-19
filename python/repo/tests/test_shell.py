@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from repotools import shell
 from repotools.cli import main
 from tests import clean_git_env
 
@@ -123,6 +124,62 @@ def test_a_later_apply_keeps_the_changed_live_files_aside(root: Path) -> None:
     [replaced] = backups(root).glob("replaced-*")
     assert (replaced / ".config/zsh/.zshrc").read_text() == "# installer\n"
     assert not (root / "state/zsh/history").exists()  # there was no history to keep
+
+
+def test_needs_link_reads_the_exit_status_not_stdout(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    status: list[int] = [0]
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(command, status[0], stdout="would link x\n", stderr="")
+
+    monkeypatch.setattr(shell.subprocess, "run", run)
+    for rc, applied in ((0, False), (1, True)):
+        status[0] = rc
+        assert shell.needs_link() is applied  # stdout is non-empty either way; only the exit status decides
+    assert not backups(root).exists()  # deciding makes no backup by itself
+    status[0] = 2
+    with pytest.raises(ValueError, match="mise dot status exited 2"):
+        shell.needs_link()
+
+
+def test_an_apply_with_everything_applied_makes_no_backup_even_when_dry_run_prints(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = shutil.which("mise")
+    assert real  # the stand-in execs it for everything but a dry run
+    assert succeeds("shell-apply")
+    live = snapshot(root / "home")
+    assert [path.name for path in backups(root).iterdir()] == ["pre-apply"]
+    (root / "bin").mkdir()
+    stand_in = root / "bin" / "mise"
+    # mise prints dry-run output even when everything is applied; the old bug took that stdout as work to link.
+    stand_in.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = dot ] && [ "$2" = apply ] && [ "$3" = --force ] && [ "$4" = --yes ]'
+        ' && [ "$5" = --dry-run ]; then\n'
+        "  echo 'would link everything'\n"
+        "  exit 0\n"
+        "fi\n"
+        f'exec {real} "$@"\n',
+    )
+    stand_in.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{root / 'bin'}:{os.environ['PATH']}")
+    assert succeeds("shell-apply")
+    assert [path.name for path in backups(root).iterdir()] == ["pre-apply"]
+    assert not list(backups(root).glob("replaced-*"))
+    assert snapshot(root / "home") == live
+
+
+def test_one_missing_target_links_only_what_is_missing_and_backs_up(root: Path) -> None:
+    assert succeeds("shell-apply")
+    live = snapshot(root / "home")
+    (root / "home/.config/zsh/path.zsh").unlink()
+    assert succeeds("shell-apply")
+    assert (root / "home/.config/zsh/path.zsh").resolve() == root / "repo/unix/home/.config/zsh/path.zsh"
+    assert snapshot(root / "home") == live  # every other link stayed as the first apply left it
+    [replaced] = backups(root).glob("replaced-*")
+    # The backup holds the live state of that run: the same home, minus the link that had gone missing.
+    assert snapshot(replaced) == {name: got for name, got in live.items() if name != ".config/zsh/path.zsh"}
 
 
 def test_a_task_run_without_its_paths_refuses(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
