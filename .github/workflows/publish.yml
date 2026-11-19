@@ -155,6 +155,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           skopeo --version
+          # The attest step reads the registry login from Docker's config file only, so skopeo keeps it there.
+          mkdir -p "$HOME/.docker"
+          export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
           skopeo login ghcr.io --username "$ACTOR" --password-stdin <<<"$GH_TOKEN"
           # Never overwrite (D54): an existing tag must already hold this digest.
           if have="$(skopeo inspect --raw "docker://$REF" 2>err.txt | sha256sum | cut -d' ' -f1)"; then
