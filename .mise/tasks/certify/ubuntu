@@ -101,7 +101,7 @@ else
   }
   export DOCKER_HOST="ssh://$dest"
 fi
-# #179: container work an agent starts needs the coordinator's slot grant, and never the PC until credential isolation.
+# #179, #194: container work an agent starts needs the coordinator's slot grant for the host DOCKER_HOST aims at.
 [[ -z "${CLAUDECODE:-}${CODEX_THREAD_ID:-}" ]] || mise run -q slot:check
 only="${usage_only:-}"
 out="${usage_out:-}"

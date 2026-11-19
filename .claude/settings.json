@@ -4,11 +4,22 @@
       {
         "hooks": [
           {
-            "command": "input=\"$(cat)\"; case \"$input\" in *docker*) f=\"$CLAUDE_PROJECT_DIR/python/agents/slot.py\"; [ -f \"$f\" ] || exit 0; printf '%s' \"$input\" | exec uv run --no-project --quiet python -I \"$f\" hook ;; esac",
+            "command": "input=\"$(cat)\"; case \"$input\" in *docker*) f=\"$CLAUDE_PROJECT_DIR/python/agents/slot.py\"; [ -f \"$f\" ] || { echo \"slot guard: $f is missing, so a command naming docker is blocked\" >&2; exit 2; }; printf '%s' \"$input\" | uv run --no-project --quiet python -I \"$f\" hook; s=$?; [ \"$s\" -eq 0 ] && exit 0; [ \"$s\" -eq 2 ] || echo \"slot guard: the hook could not run (exit $s), so the call is blocked\" >&2; exit 2 ;; esac",
+            "onFailure": "block",
             "type": "command"
           }
         ],
         "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "d=\"$CLAUDE_PROJECT_DIR/.mise/agent-bin\"; [ -n \"$CLAUDE_ENV_FILE\" ] && [ -x \"$d/docker\" ] || exit 0; printf 'export PATH=\"%s:$PATH\"\\n' \"$d\" >> \"$CLAUDE_ENV_FILE\"",
+            "type": "command"
+          }
+        ]
       }
     ]
   }
