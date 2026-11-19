@@ -34,13 +34,15 @@ echo "::group::coverage $label ($gcov)"
 gcovr --version | sed -n 1p
 # gcovr exits 2 when the line threshold is missed. The preset puts --coverage in the flags, so
 # CMake's compiler-identification build under CMakeFiles/<version>/ also leaves a .gcno; it is not
-# project code. gcc attributes a function's exception-cleanup path to its closing brace, which
+# project code. The positional "$dir" limits the search for .gcda files to this build tree: without it
+# gcovr also reads the other presets' trees under build/, which another compiler's gcov rejects.
+# gcc attributes a function's exception-cleanup path to its closing brace, which
 # no test runs; gcovr's --exclude-noncode-lines drops that brace-only line.
 rc=0
 gcovr --root "$root" --object-directory "$dir" --gcov-executable "$gcov" \
   --gcov-exclude-directories '.*/CMakeFiles/[0-9][0-9.]*(/.*)?$' \
   --exclude-noncode-lines --filter "$root/src/" --txt "$report" --csv "$dir/coverage.csv" \
-  --print-summary --fail-under-line 100 || rc=$?
+  --print-summary --fail-under-line 100 "$dir" || rc=$?
 [[ ! -f "$report" ]] || cat "$report"
 echo "::endgroup::"
 if [[ $rc -ne 0 ]]; then
