@@ -26,3 +26,7 @@
 * **Added**: the Rounds section in workflow.md and the round close in ship.md's close-out (#159). The
   coordinator opens a round at the hand-off, adds its pull requests and closes it with
   `workflowtools round-open`, `round-pr` and `round-close`; `workflowtools report` lists open rounds.
+
+## 2026-11-19
+* **Added**: size routing in step 4 of workflow.md (#275): a small ticket goes to a Sonnet worker with the Opus
+  advisor, a read-heavy one to an Opus lead with `scout` and `implementer` from the `fleet-agents` plugin.

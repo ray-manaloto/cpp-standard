@@ -8,7 +8,7 @@
 # marketplaces; agy reinstalls from the URL. OpenCode V2 gets no egm (egm supports V1 only).
 set -euo pipefail
 claude_marketplaces=(google/elephant-goldfish-model ray-manaloto/skills)
-claude_plugins=(egm@egm skills@ray-manaloto-skills)
+claude_plugins=(egm@egm skills@ray-manaloto-skills fleet-agents@ray-manaloto-skills)
 codex_marketplaces=(google/elephant-goldfish-model)
 codex_plugins=(egm@egm)
 agy_plugins=(https://github.com/google/elephant-goldfish-model)

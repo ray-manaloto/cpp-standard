@@ -64,6 +64,13 @@ Before the first ticket in a repository, `/work` runs setup once: `setup-matt-po
 | 7 | Close-out | The coordinator, after the lead merges (or earlier on a shared branch, see [ship](ship.md)) | Issue closed, roadmap line ticked; worktree removed only after the merge | The merge, or a spec's early-close rule in [ship](ship.md) | None |
 | 8 | `/ticket-retro` | The owner | Lessons for the ticket plan; changes as normal pull requests | Approves any change | As any pull request |
 
+Step 4 routes a Claude lead's ticket by size (trial on #251 and #158, one run per arm, so a hint):
+
+- A small ticket with a written acceptance list goes to a Sonnet worker with the Opus advisor.
+- A read-heavy ticket goes to an Opus lead that sends reading to `scout` (Haiku, read-only) and specified edits to
+  `implementer` (Sonnet), both from the `fleet-agents` plugin.
+- The lead reviews every diff itself, and all public text stays with the lead.
+
 `/implement-spec` runs step 4 for every open ticket of a spec, frontier first. Off the chain:
 `triage` is for issues other people filed; `diagnosing-bugs` replaces step 1 for a bug;
 `wayfinder` comes before step 2 when the work spans many sessions.
