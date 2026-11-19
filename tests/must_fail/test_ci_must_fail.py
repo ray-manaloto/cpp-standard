@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,22 @@ _REPO_VARS = subprocess.run(
     ["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True
 ).stdout.split()
 CLEAN_ENV = {k: v for k, v in os.environ.items() if k not in _REPO_VARS}
+_LOCAL_GIT_VARS = frozenset(
+    subprocess.run(
+        ["git", "rev-parse", "--local-env-vars"],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.split()
+)
+
+
+def clean_git_env() -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if k not in _LOCAL_GIT_VARS}
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
 
 
 def run(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -149,6 +166,165 @@ class Runner(unittest.TestCase):
         r = self.local()
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("a.b is not listed", r.stderr)
+
+    def test_fixture_does_not_inherit_repo_git_env(self) -> None:
+        base_env = clean_git_env()
+        repos = self.dir / "repos"
+        main = repos / "main"
+        wt = repos / "wt"
+        repos.mkdir()
+        subprocess.run(
+            ["git", "init", "-q", str(main)], cwd=repos, env=base_env, check=True
+        )
+        for key, val in (
+            ("user.name", "Test User"),
+            ("user.email", "test@example.invalid"),
+            ("commit.gpgsign", "false"),
+        ):
+            subprocess.run(
+                ["git", "config", key, val], cwd=main, env=base_env, check=True
+            )
+        (main / "README.md").write_text("seed\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=main, env=base_env, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "initial"], cwd=main, env=base_env, check=True
+        )
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "-b", "branch-1", str(wt)],
+            cwd=main,
+            env=base_env,
+            check=True,
+        )
+
+        hook_log = self.dir / "hook.log"
+        hook = main / ".git/hooks/pre-commit"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            f'printf "invoked\\n" >> "{hook_log}"\n'
+            f'count=$(wc -l < "{hook_log}" | tr -d " ")\n'
+            'if [ "$count" -gt 2 ]; then\n'
+            "  exit 1\n"
+            "fi\n",
+            encoding="utf-8",
+        )
+        hook.chmod(0o755)
+
+        fixtures_dir = self.dir / "fixtures"
+        planted = fixtures_dir / "planted"
+        planted.mkdir(parents=True)
+        scratch = self.dir / "scratch"
+        (fixtures_dir / "expected.toml").write_text(
+            '[fixture.planted]\ncheck = "some:check"\n', encoding="utf-8"
+        )
+        run_script = planted / "run"
+        run_script.write_text(
+            f"#!{sys.executable}\n"
+            "import subprocess\n"
+            "from pathlib import Path\n"
+            f"scratch = Path({str(scratch)!r})\n"
+            "scratch.mkdir(parents=True, exist_ok=True)\n"
+            'subprocess.run(["git", "init", "-q", str(scratch)], check=True)\n'
+            '(scratch / "planted.txt").write_text("planted\\n", encoding="utf-8")\n'
+            'subprocess.run(["git", "add", "planted.txt"], cwd=scratch, check=True)\n'
+            "subprocess.run(\n"
+            "    [\n"
+            '        "git",\n'
+            '        "-c",\n'
+            '        "user.name=Planted",\n'
+            '        "-c",\n'
+            '        "user.email=planted@example.invalid",\n'
+            '        "-c",\n'
+            '        "commit.gpgsign=false",\n'
+            '        "commit",\n'
+            '        "--allow-empty",\n'
+            '        "-qm",\n'
+            '        "planted commit",\n'
+            "    ],\n"
+            "    cwd=scratch,\n"
+            "    check=True,\n"
+            ")\n",
+            encoding="utf-8",
+        )
+        run_script.chmod(0o755)
+
+        head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=wt,
+            env=base_env,
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+        index_before = subprocess.run(
+            ["git", "ls-files", "--stage"],
+            cwd=wt,
+            env=base_env,
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout
+        config_before = (main / ".git/config").read_text(encoding="utf-8")
+
+        poisoned_env = base_env | {
+            "MISE_PROJECT_ROOT": str(ROOT),
+            "CPPSTD_MUST_FAIL_DIR": str(fixtures_dir),
+            "GIT_DIR": str(main / ".git/worktrees/wt"),
+            "GIT_WORK_TREE": str(wt),
+            "GIT_INDEX_FILE": str(main / ".git/worktrees/wt/index"),
+            "GIT_PREFIX": "",
+        }
+        r = subprocess.run(
+            ["bash", str(TASK)],
+            env=poisoned_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(hook_log.exists(), "throwaway pre-commit hook fired")
+        self.assertEqual(
+            (main / ".git/config").read_text(encoding="utf-8"), config_before
+        )
+        self.assertNotIn("worktree", (main / ".git/config").read_text(encoding="utf-8"))
+        head_after = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=wt,
+            env=base_env,
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+        index_after = subprocess.run(
+            ["git", "ls-files", "--stage"],
+            cwd=wt,
+            env=base_env,
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout
+        self.assertEqual(head_after, head_before)
+        self.assertEqual(index_after, index_before)
+        self.assertTrue((scratch / ".git").is_dir())
+        scratch_msg = subprocess.run(
+            ["git", "log", "-1", "--format=%s"],
+            cwd=scratch,
+            env=base_env,
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+        self.assertEqual(scratch_msg, "planted commit")
+        scratch_files = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+            cwd=scratch,
+            env=base_env,
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.splitlines()
+        self.assertIn("planted.txt", scratch_files)
 
 
 if __name__ == "__main__":
