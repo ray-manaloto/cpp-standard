@@ -3,10 +3,12 @@
   python -I agy_worker.py WORKTREE BRIEF [--plan PLAN_ID] [--model M] [--dry-run]
   python -I agy_worker.py --health
 
-Refuses (exit 3, nothing started) a worktree that is not a folder directly under a `cpp-standard.worktrees`
-folder, a missing brief, a missing plan folder, and an agy that is not signed in. The plan folder is
-`cpp-standard.plans/.planning/<PLAN_ID>` beside `cpp-standard.worktrees`; PLAN_ID comes from --plan or the
-environment. The preflight starts agy in a scratch folder with one trivial prompt and reads the reply: "Sign-in
+Refuses (exit 3, nothing started) a path that is not a linked git worktree (the main checkout, a plain folder), a
+worktree that is not directly under the worktrees root, a missing brief, a missing plan folder, and an agy that is
+not signed in. The layout comes from the target repository's own mise env (`mise -C <main checkout> env --json`):
+`AGY_WORKTREE_ROOT` is the worktrees root (default `<main checkout>.worktrees` beside the main checkout) and
+`PWF_PLAN_ROOT`, the variable workflowtools uses, is the plans root (default `<main checkout>.plans`). The plan
+folder is `<plans root>/.planning/<PLAN_ID>`; PLAN_ID comes from --plan or the environment. The preflight starts agy in a scratch folder with one trivial prompt and reads the reply: "Sign-in
 update needed" or "not signed in" stops the launch and names the fix. The rules are
 `.agents/agy-worker-settings.json`, passed with --settings, so the owner's own agy settings are never written.
 --dry-run prints the launch line and runs no agy. Exit 2 is a usage error.
@@ -19,6 +21,7 @@ keychain entry (upstream antigravity-cli #1610), so the launch refuses while it 
 """
 
 import argparse
+import json
 import os
 import re
 import shlex
@@ -33,8 +36,8 @@ sys.path.insert(0, str(HERE))
 import agy_ide
 
 SETTINGS = HERE.parent.parent / ".agents" / "agy-worker-settings.json"
-WORKTREES = "cpp-standard.worktrees"
-PLANS = "cpp-standard.plans"
+WORKTREE_VAR = "AGY_WORKTREE_ROOT"
+PLANS_VAR = "PWF_PLAN_ROOT"
 MODEL = "gemini-pro-orchestrator-neon"
 PROBE = "Reply with only the word ok. Do not run any tool."
 REFUSED = 3
@@ -158,23 +161,88 @@ def preflight(agy: str = "agy", timeout: float = 180) -> str:
     return state
 
 
+def _git(wt: Path, *args: str) -> str | None:
+    done = subprocess.run(
+        ["git", "-C", str(wt), *args], check=False, capture_output=True, text=True
+    )
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def main_checkout(wt: Path) -> Path:
+    """The main checkout of the repository a linked worktree belongs to; refuses what is not a linked worktree."""
+    git_file = wt / ".git"
+    if not git_file.is_file():
+        raise RefusedError(
+            f"{wt} is not a linked git worktree (its .git is not a file); "
+            "the main checkout and plain folders are refused"
+        )
+    common = _git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    gitdir = _git(wt, "rev-parse", "--path-format=absolute", "--git-dir")
+    if not common or not gitdir or Path(common) == Path(gitdir):
+        raise RefusedError(f"{wt} is not a linked git worktree of a repository")
+    return Path(common).resolve().parent
+
+
+def repo_env(main: Path) -> dict[str, str]:
+    """The target repository's mise env; empty when mise or its config is unavailable."""
+    try:
+        done = subprocess.run(
+            ["mise", "-C", str(main), "env", "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        env = json.loads(done.stdout) if done.returncode == 0 else {}
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return {}
+    return env if isinstance(env, dict) else {}
+
+
+def layout(worktree: Path) -> tuple[Path, Path]:
+    """(worktrees_root, plans_root) for the repository of a linked worktree.
+
+    AGY_WORKTREE_ROOT and PWF_PLAN_ROOT from the repository's mise env win; the defaults are
+    `<main checkout>.worktrees` and `<main checkout>.plans` beside the main checkout.
+    """
+    main = main_checkout(worktree.expanduser().resolve())
+    env = repo_env(main)
+
+    def pick(var: str, default: str) -> Path:
+        value = env.get(var)
+        base = Path(value).expanduser() if value else main.parent / default
+        return (main / base).resolve()
+
+    return (
+        pick(WORKTREE_VAR, f"{main.name}.worktrees"),
+        pick(PLANS_VAR, f"{main.name}.plans"),
+    )
+
+
 def check_launch(
     worktree: Path, brief: Path, plan_id: str | None
 ) -> tuple[Path, Path, Path]:
     """Validate the paths; return the resolved worktree, brief and plan folder."""
     wt = worktree.expanduser().resolve()
-    if wt.parent.name != WORKTREES:
-        raise RefusedError(f"{wt} is not a folder directly under {WORKTREES}/")
     if not wt.is_dir():
         raise RefusedError(f"worktree {wt} does not exist")
+    worktrees_root, plans_root = layout(wt)
+    if wt.parent != worktrees_root:
+        raise RefusedError(
+            f"{wt} is not a folder directly under the worktrees root {worktrees_root} "
+            f"(set by {WORKTREE_VAR} in the repository's mise env, default <main checkout>.worktrees)"
+        )
     br = brief.expanduser().resolve()
     if not br.is_file():
         raise RefusedError(f"brief {br} does not exist")
     if not plan_id:
         raise RefusedError("no plan: pass --plan PLAN_ID or export PLAN_ID")
-    plan = wt.parent.parent / PLANS / ".planning" / plan_id
+    plan = plans_root / ".planning" / plan_id
     if not plan.is_dir():
-        raise RefusedError(f"plan folder {plan} does not exist")
+        raise RefusedError(
+            f"plan folder {plan} does not exist (plans root {plans_root}, "
+            f"set by {PLANS_VAR} in the repository's mise env, default <main checkout>.plans)"
+        )
     return wt, br, plan
 
 

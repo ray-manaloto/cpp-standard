@@ -40,6 +40,35 @@ SCREENS = {
 PLAN = "2026-01-01-1-x"
 
 
+def sh(*cmd: str, cwd: Path) -> None:
+    subprocess.run(cmd, check=True, cwd=cwd, capture_output=True)
+
+
+def git_repo(path: Path) -> Path:
+    path.mkdir(parents=True)
+    sh("git", "init", "-q", "-b", "main", cwd=path)
+    sh(
+        "git",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+        cwd=path,
+    )
+    return path
+
+
+def add_worktree(repo: Path, wt: Path) -> Path:
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    sh("git", "worktree", "add", "-q", "-b", wt.name, str(wt), cwd=repo)
+    return wt.resolve()
+
+
 def run(
     root: Path,
     screen: str,
@@ -61,6 +90,7 @@ def run(
         "STANDIN_IDE": "0" if ide else "1",
         "STANDIN_AGYLOG": agylog,
         "AGY_LOG_DIR": str(root / "logs"),
+        "MISE_TRUSTED_CONFIG_PATHS": str(root),
     }
     shutil.rmtree(root / "logs", ignore_errors=True)
     if plan:
@@ -99,9 +129,9 @@ def main() -> int:
         osa = root / "bin" / "osascript"
         osa.write_text(OSASCRIPT)
         osa.chmod(0o755)
-        wt = root / agy_worker.WORKTREES / "t1"
-        wt.mkdir(parents=True)
-        plan = root / agy_worker.PLANS / ".planning" / PLAN
+        repo = git_repo(root / "demo")
+        wt = add_worktree(repo, root / "demo.worktrees" / "t1")
+        plan = root / "demo.plans" / ".planning" / PLAN
         plan.mkdir(parents=True)
         briefs = root / "briefs"
         briefs.mkdir()
@@ -277,8 +307,74 @@ def main() -> int:
 
         rc, out, argv = run(root, "signed-in", str(root), str(brief))
         case(
-            "worktree outside cpp-standard.worktrees: refused",
-            rc == 3 and argv is None,
+            "a plain folder that is no worktree: refused", rc == 3 and argv is None, out
+        )
+        rc, out, argv = run(root, "signed-in", str(repo), str(brief))
+        case(
+            "the main checkout, no layout variables: refused",
+            rc == 3 and "not a linked git worktree" in out and argv is None,
+            out,
+        )
+        plain = root / "demo.worktrees" / "plain"
+        plain.mkdir()
+        rc, out, argv = run(root, "signed-in", str(plain), str(brief))
+        case(
+            "a plain folder under the worktrees root: refused",
+            rc == 3 and "not a linked git worktree" in out and argv is None,
+            out,
+        )
+        elsewhere = add_worktree(repo, root / "elsewhere" / "t2")
+        rc, out, argv = run(root, "signed-in", str(elsewhere), str(brief))
+        case(
+            "a linked worktree outside the worktrees root: refused, names the root and variable",
+            rc == 3
+            and str(root / "demo.worktrees") in out
+            and "AGY_WORKTREE_ROOT" in out
+            and argv is None,
+            out,
+        )
+        noplan = add_worktree(repo, root / "demo.worktrees" / "t3")
+        rc, out, argv = run(
+            root, "signed-in", str(noplan), str(brief), "--plan", "nope"
+        )
+        case(
+            "missing plan folder: refused, names the plans root and variable",
+            rc == 3
+            and str(root / "demo.plans") in out
+            and "PWF_PLAN_ROOT" in out
+            and argv is None,
+            out,
+        )
+
+        # A kb-shaped layout: the repository sets its own roots in its mise.toml.
+        kb = git_repo(root / "demo-v2")
+        (kb / "mise.toml").write_text(
+            f'[env]\nAGY_WORKTREE_ROOT = "{root / "demo-v2-wt"}"\n'
+        )
+        kbwt = add_worktree(kb, root / "demo-v2-wt" / "t1")
+        kbplan = root / "demo-v2.plans" / ".planning" / PLAN
+        kbplan.mkdir(parents=True)
+        rc, out, argv = run(root, "signed-in", str(kbwt), str(brief))
+        adds = [argv[i + 1] for i, a in enumerate(argv or []) if a == "--add-dir"]
+        case(
+            "kb-shaped layout (AGY_WORKTREE_ROOT, default plans root): starts the worker",
+            rc == 0 and adds[:1] == [str(kbwt)] and adds[-1:] == [str(kbplan)],
+            out + str(adds),
+        )
+        rc, out, argv = run(root, "signed-in", str(kb), str(brief))
+        case(
+            "kb-shaped main checkout, variables set: refused",
+            rc == 3 and "not a linked git worktree" in out and argv is None,
+            out,
+        )
+        (kb / "mise.toml").write_text(
+            f'[env]\nAGY_WORKTREE_ROOT = "{root / "demo-v2-wt"}"\n'
+            f'PWF_PLAN_ROOT = "{root / "plans-elsewhere"}"\n'
+        )
+        rc, out, argv = run(root, "signed-in", str(kbwt), str(brief))
+        case(
+            "PWF_PLAN_ROOT moves the plans root: the old plan folder is refused",
+            rc == 3 and str(root / "plans-elsewhere") in out and argv is None,
             out,
         )
         rc, out, argv = run(root, "signed-in", str(wt), str(briefs / "none.md"))

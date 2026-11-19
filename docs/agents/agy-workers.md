@@ -47,10 +47,14 @@ Every brief carries the Claude brief's lines: heavy runs wait for a slot, docker
 mise run agents:agy-worker <worktree> <brief> [--plan <PLAN_ID>] [--model <model>] [--dry-run]
 ```
 
-- The worktree is a folder directly under `cpp-standard.worktrees/`; the brief is a file. The task adds three folders
-  with `--add-dir`: the worktree, the brief's folder and the ticket's plan folder
-  (`cpp-standard.plans/.planning/<PLAN_ID>`, `PLAN_ID` from `--plan` or the environment). It refuses a worktree
-  elsewhere, a missing brief and a missing plan folder.
+- The worktree is a linked git worktree directly under the repository's worktrees root; the brief is a file. The
+  layout comes from the target repository's own mise env (`mise -C <main checkout> env --json`): `AGY_WORKTREE_ROOT`
+  is the worktrees root (default `<repo>.worktrees` beside the main checkout) and `PWF_PLAN_ROOT`, the variable
+  workflowtools uses, is the plans root (default `<repo>.plans`). cpp-standard sets neither, so its defaults are
+  `cpp-standard.worktrees/` and `cpp-standard.plans/`. The task adds three folders with `--add-dir`: the worktree,
+  the brief's folder and the ticket's plan folder (`<plans root>/.planning/<PLAN_ID>`, `PLAN_ID` from `--plan` or
+  the environment). It refuses, with exit 3 and the root and variable it used, a main checkout or plain folder, a
+  worktree outside the worktrees root, a missing brief and a missing plan folder.
 - The rules are `.agents/agy-worker-settings.json`, passed with `--settings`: session only, never saved to the
   owner's agy settings. They match command prefixes word by word, so a command wrapped in `bash -c`, `env` or a
   script can get past a deny rule. The real limit is the brief and the lead's review of every diff before it is
@@ -95,9 +99,8 @@ so the launch guard and the doctor line look at Antigravity.app only.
 `agents:agy-worker` is the one way to start an agy worker, for cpp-standard and for kb. kb today runs
 `~/.local/bin/agy` directly (`--add-dir <worktree> -i <task>`, with and without `--model gemini-pro-orchestrator-neon
 --mode auto`), so it gets no rules file and no sign-in check. What kb changes: start its agy tabs through
-`mise run agents:agy-worker <worktree> <brief> --plan <PLAN_ID>` from a cpp-standard checkout (it needs a worktree
-under a `cpp-standard.worktrees`-style folder and a plan folder, so kb either keeps that layout or asks for the two
-path checks to become options), and stop starting agy by hand.
+`mise run agents:agy-worker <worktree> <brief> --plan <PLAN_ID>` from a cpp-standard checkout (kb sets `AGY_WORKTREE_ROOT` in its own `mise.toml`;
+its plans root defaults to `knowledge-base-v2.plans`, or set `PWF_PLAN_ROOT`), and stop starting agy by hand.
 
 ## While a worker runs
 
