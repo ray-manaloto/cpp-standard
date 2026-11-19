@@ -642,7 +642,8 @@ run = '{% if os() == "macos" %}mise bootstrap packages apply brew:ruby --yes{% e
 # names them; jouet-init is no longer installed (it needs --init-skill, jouet #581) and setup removes the old copy.
 # OpenCode is not a `jouet setup` target (jouet docs/setup.md) and does not run Claude Code hooks itself
 # (anomalyco/opencode#12472, closed as not planned 2026-11-12). `--skill` puts jouet's skill in ~/.claude/skills,
-# which OpenCode also reads, and agents:opencode-bridge adds the opencode-claude-hooks bridge to opencode.json
+# which OpenCode v2.3.2 does not scan (it reads ~/.agents/skills), so agents:opencode-bridge links it there and adds
+# the opencode-claude-hooks bridge to opencode.json
 # (wiki repos-opencode-claude-hooks), trusting only jouet's handlers, and drops the old hometools jouet block from
 # ~/.config/opencode/AGENTS.md. The two steps run in this order: the bridge's trusted list is made from the hooks the
 # setup just wrote.
