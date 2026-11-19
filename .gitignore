@@ -28,3 +28,6 @@ __pycache__/
 .coverage.*
 .pytest_cache/
 .ruff_cache/
+
+# Generated TypeScript config in each claude-mods package.
+/unix/home/.local/share/claude-mods/*/tsconfig.json

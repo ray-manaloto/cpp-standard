@@ -65,7 +65,7 @@ def pr_refusal_of(capsys: pytest.CaptureFixture[str], command: str, options: lis
     with pytest.raises(SystemExit) as stopped:
         main([command, *options])
     assert stopped.value.code == 1
-    return json.loads(capsys.readouterr().err)["error"]
+    return json.loads(capsys.readouterr().err.splitlines()[-1])["error"]
 
 
 def origin(root: Path, branch: str = "trunk") -> None:

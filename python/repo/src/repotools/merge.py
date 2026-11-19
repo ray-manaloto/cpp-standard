@@ -115,7 +115,7 @@ def checks(options: PrMerge, head: str) -> Iterator[tuple[str, str | None]]:
     """Every gate but hk, in order, each as its name and its refusal or None: a clean checkout at head, and an open
     pull request into GitHub's default branch whose head is head, whose title and body are the given ones. Lazy, so a
     merge that stops at the first refusal asks GitHub nothing for a dirty checkout."""
-    dirty = "the checkout has changes or untracked files, so hk check --pr would not test the head alone"
+    dirty = "the checkout has changes or untracked files"
     yield "clean", dirty if git("status", "--porcelain") else None
     moved = git("rev-parse", "HEAD").strip() != head
     yield "head", f"this checkout's HEAD moved from {head} while pr-merge ran" if moved else None
@@ -147,16 +147,31 @@ def merge_gate(default: str) -> str:
     """The [pr-merge] gate in SETTINGS as origin's default branch has it, so a pull request cannot change its own gate;
     no file, or no table or key in it, means local-hk."""
     ref = f"origin/{default}"
-    listed = subprocess.run(["git", "ls-tree", "--name-only", ref, "--", SETTINGS], capture_output=True, check=False)
-    if listed.returncode != 0:
-        msg = f"{ref} is not in this clone, so its {SETTINGS} cannot be read; run git fetch origin"
-        raise ValueError(msg)
-    if not listed.stdout.strip():
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/remotes/{ref}"], capture_output=True, check=False, text=True
+    )
+    if resolved.returncode == 1:
+        sys.stderr.write(f"{ref} is not in this clone; cannot read its {SETTINGS}, using {LOCAL_HK}\n")
         return LOCAL_HK
-    gate = tomllib.loads(git("show", f"{ref}:{SETTINGS}")).get("pr-merge", {}).get("gate", LOCAL_HK)
+    resolved.check_returncode()
+    commit = resolved.stdout.strip()
+    source = f"{SETTINGS} on {ref} ({commit})"
+    if not git("ls-tree", "--full-tree", "--name-only", commit, "--", SETTINGS).strip():
+        sys.stderr.write(f"no {source}; using {LOCAL_HK}\n")
+        return LOCAL_HK
+    try:
+        section = tomllib.loads(git("show", f"{commit}:{SETTINGS}")).get("pr-merge", {})
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+        msg = f"{source} is not valid TOML: {error}"
+        raise ValueError(msg) from error
+    if not isinstance(section, dict):
+        msg = f"[pr-merge] in {source} must be a table"
+        raise ValueError(msg)  # noqa: TRY004 - malformed settings are CLI input errors
+    gate = section.get("gate", LOCAL_HK)
     if gate not in (LOCAL_HK, REQUIRED_CHECKS):
-        msg = f"{SETTINGS} on {ref} sets [pr-merge] gate = {gate!r}; it takes {LOCAL_HK} or {REQUIRED_CHECKS}"
+        msg = f"{source} sets [pr-merge] gate = {gate!r}; it takes {LOCAL_HK} or {REQUIRED_CHECKS}"
         raise ValueError(msg)
+    sys.stderr.write(f"{source}: using {gate}\n")
     return gate
 
 
@@ -240,10 +255,15 @@ def check_only(options: PrMerge, head: str) -> None:
     required-checks the hk gate is reported as skipped, with the setting that skips it."""
     results = [GateResult(gate=name, refusal=refusal) for name, refusal in checks(options, head)]
     default = default_branch()
-    if merge_gate(default) == REQUIRED_CHECKS:
-        results.append(GateResult(gate="hk", refusal=None, skipped=skipped(default)))
+    try:
+        gate = merge_gate(default)
+    except ValueError as error:
+        results.append(GateResult(gate="hk", refusal=str(error)))
     else:
-        results.append(GateResult(gate="hk", refusal=hk(head)))
+        if gate == REQUIRED_CHECKS:
+            results.append(GateResult(gate="hk", refusal=None, skipped=skipped(default)))
+        else:
+            results.append(GateResult(gate="hk", refusal=hk(head)))
     for result in results:
         sys.stdout.write(result.model_dump_json(exclude_defaults=True) + "\n")
     refused = sum(result.refusal is not None for result in results)
@@ -266,6 +286,7 @@ def merge(options: PrMerge) -> None:
         # The required checks pass on head first: a red one fails here, naming it, and gh then queues at once rather
         # than arming an auto-merge on pending checks.
         checks_pass(options, head, CLOCK.now() + options.time_limit)
+        gates(options, head)
         # The one form the ruleset allows: the queue picks the squash, so no --merge; its squash takes the pull
         # request's author, so no --author-email. With a merge queue gh enables auto-merge for it, which queues it.
         gh("pr", "merge", str(options.number), "--match-head-commit", head)
