@@ -37,5 +37,15 @@ for tag in tools p2996-linux-arm64; do
   if out="$(mise run -q artifact:tag --arch arm64 "$tag" 2>&1)"; then ok "artifact tag: $out"; else bad "artifact:tag $tag: $out"; fi
 done
 
+# agy sign-in health (reads agy's newest log, runs no agy; the Antigravity IDE shares agy's sign-in).
+if command -v uv >/dev/null 2>&1; then
+  if out="$(uv run --no-project --quiet python -I "$root/python/agents/agy_worker.py" --health 2>&1)"; then
+    printf '%s\n' "$out"
+  else
+    printf '%s\n' "$out"
+    failed=1
+  fi
+fi
+
 [[ $failed -eq 0 ]] && echo "PASS: doctor" || echo "FAIL: doctor found missing pieces"
 exit "$failed"

@@ -45,6 +45,23 @@ signed in, or does not answer ok. The fix: type `/logout` in agy, then sign in w
 password, passkey or 2FA step. `agents:agy-login --step status` is not this check: it only sees that a login file
 exists.
 
+The banner "Sign-in update needed" is a TUI warning that `agy -p` never prints, so the probe's reply cannot show it.
+The task therefore also reads the log the probe just wrote (`~/.gemini/antigravity-cli/log/cli-*.log`) and refuses
+when it holds `OAuth token lacks .../auth/aicode`: `owner: run /logout in any agy tab, then sign in with Google
+again`. The Antigravity IDE app shares agy's one keychain entry (upstream antigravity-cli #1610), so when it runs the
+refusal names it; whether the IDE is what drops the scope is not proven yet. `mise run doctor` prints the same
+check from the newest log without running agy (`python/agents/agy_worker.py --health`). Neither reads a token or
+login file, only log text.
+
+## One launcher for every project
+
+`agents:agy-worker` is the one way to start an agy worker, for cpp-standard and for kb. kb today runs
+`~/.local/bin/agy` directly (`--add-dir <worktree> -i <task>`, with and without `--model gemini-pro-orchestrator-neon
+--mode auto`), so it gets no rules file and no sign-in check. What kb changes: start its agy tabs through
+`mise run agents:agy-worker <worktree> <brief> --plan <PLAN_ID>` from a cpp-standard checkout (it needs a worktree
+under a `cpp-standard.worktrees`-style folder and a plan folder, so kb either keeps that layout or asks for the two
+path checks to become options), and stop starting agy by hand.
+
 ## While a worker runs
 
 - Read its tab (`hc read`) at least every 10 minutes, or watch `hc ls` for "blocked". Answer a prompt by these rules;
