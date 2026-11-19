@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -318,32 +319,196 @@ class DuplicateTitleTest(Case):
 
 
 class InstallTest(Case):
-    def test_reinstall_replaces(self) -> None:
-        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
-        fetch.install(make_archive(self.tmp / "b.tar.zst", "two"), TAG, self.root)
-        self.assertEqual(self.installed(), "two")
-        self.assertEqual(sorted(p.name for p in self.root.iterdir()), [TAG])
+    """The install: <root>/<tag> is a symlink to an immutable sibling directory, switched
+    atomically, so it resolves to a complete install at every moment (#130 review)."""
 
-    def test_failed_swap_puts_the_old_install_back(self) -> None:
-        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
-        real = Path.rename
+    def visible(self) -> list[str]:
+        return sorted(p.name for p in self.root.iterdir() if not p.name.startswith("."))
+
+    def targets(self) -> list[str]:
+        return sorted(
+            p.name
+            for p in self.root.iterdir()
+            if p.name.startswith(f".{TAG}.") and p.is_dir() and not p.is_symlink()
+        )
+
+    def assert_complete(self, content: str) -> None:
         dest = self.root / TAG
+        self.assertTrue(dest.is_symlink())
+        self.assertEqual(self.installed(), content)
+        self.assertEqual((dest / fetch.HASH_FILE).read_text().strip(), HASH)
 
-        def rename(src: Path, target):  # the new tree's move into place fails
-            if Path(target) == dest and src.name.startswith(f".{TAG}.new-"):
-                raise OSError("simulated")
-            return real(src, target)
+    def test_reinstall_replaces_and_removes_the_old_target(self) -> None:
+        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        first = os.readlink(self.root / TAG)
+        fetch.install(make_archive(self.tmp / "b.tar.zst", "two"), TAG, self.root)
+        self.assert_complete("two")
+        self.assertNotEqual(os.readlink(self.root / TAG), first)
+        self.assertEqual(self.visible(), [TAG])
+        self.assertEqual(self.targets(), [os.readlink(self.root / TAG)])
 
-        with mock.patch.object(Path, "rename", rename), self.assertRaises(OSError):
-            fetch.install(make_archive(self.tmp / "b.tar.zst", "two"), TAG, self.root)
-        self.assertEqual(self.installed(), "one")
-        self.assertEqual(sorted(p.name for p in self.root.iterdir()), [TAG])
+    def test_the_link_is_relative_and_inside_the_root(self) -> None:
+        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        target = os.readlink(self.root / TAG)
+        self.assertNotIn("/", target)
+        self.assertTrue(target.startswith(f".{TAG}."))
 
     def test_installed_prefix_is_readable(self) -> None:
         prefix = fetch.install(
             make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root
         )
         self.assertEqual(prefix.stat().st_mode & 0o777, 0o755)
+        # What toolchain:smoke and the gate do: paths under the prefix, through the symlink.
+        self.assertTrue((prefix / "bin/marker").is_file())
+        self.assertEqual(Path(os.path.realpath(prefix)).parent, self.root.resolve())
+
+    def test_failure_at_each_step_keeps_a_complete_install(self) -> None:
+        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        for name in ("symlink", "replace"):
+            with self.subTest(name):
+
+                def boom(*a, _step=name, **kw):
+                    raise OSError(f"simulated {_step}")
+
+                with (
+                    mock.patch.object(fetch.os, name, boom),
+                    self.assertRaises(OSError),
+                ):
+                    fetch.install(
+                        make_archive(self.tmp / "b.tar.zst", "two"), TAG, self.root
+                    )
+                self.assert_complete("one")
+                self.assertEqual(self.visible(), [TAG])
+        # Removing the old target after the switch may fail; the new one is installed.
+        with mock.patch.object(fetch.shutil, "rmtree"):
+            fetch.install(make_archive(self.tmp / "c.tar.zst", "three"), TAG, self.root)
+        self.assert_complete("three")
+        # The next install sweeps what was left.
+        fetch.install(make_archive(self.tmp / "d.tar.zst", "four"), TAG, self.root)
+        self.assert_complete("four")
+        self.assertEqual(self.targets(), [os.readlink(self.root / TAG)])
+
+    def kill_during(self, patch: str) -> None:
+        """Install "two" in a child process that kills itself (SIGKILL) at `patch`."""
+        archive = make_archive(self.tmp / "b.tar.zst", "two")
+        code = f"""
+import os, signal, sys
+sys.path.insert(0, {str(ROOT / "python/toolchain")!r})
+import fetch
+def die(*a, **kw):
+    os.kill(os.getpid(), signal.SIGKILL)
+{patch} = die
+fetch.install(fetch.Path({str(archive)!r}), {TAG!r}, fetch.Path({str(self.root)!r}))
+"""
+        r = subprocess.run([sys.executable, "-I", "-c", code], check=False)
+        self.assertEqual(r.returncode, -9)
+
+    def test_killed_before_the_switch_keeps_the_old_install(self) -> None:
+        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        self.kill_during("fetch.os.replace")
+        self.assert_complete("one")
+        fetch.install(make_archive(self.tmp / "c.tar.zst", "three"), TAG, self.root)
+        self.assert_complete("three")
+        self.assertEqual(self.targets(), [os.readlink(self.root / TAG)])
+
+    def test_killed_after_the_switch_has_the_new_install(self) -> None:
+        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        self.kill_during("fetch.shutil.rmtree")
+        self.assert_complete("two")
+
+    def test_concurrent_installs_of_one_tag(self) -> None:
+        archives = [make_archive(self.tmp / f"{i}.tar.zst", f"c{i}") for i in range(4)]
+        code = f"""
+import sys
+sys.path.insert(0, {str(ROOT / "python/toolchain")!r})
+import fetch
+for _ in range(5):
+    fetch.install(fetch.Path(sys.argv[1]), {TAG!r}, fetch.Path({str(self.root)!r}))
+"""
+        procs = [
+            subprocess.Popen([sys.executable, "-I", "-c", code, str(a)])
+            for a in archives
+        ]
+        self.assertEqual([p.wait() for p in procs], [0, 0, 0, 0])
+        self.assertIn(self.installed(), {f"c{i}" for i in range(4)})
+        self.assertEqual((self.root / TAG / fetch.HASH_FILE).read_text().strip(), HASH)
+        self.assertEqual(self.visible(), [TAG])
+        self.assertEqual(self.targets(), [os.readlink(self.root / TAG)])
+
+    def legacy(self, content: str) -> None:
+        """A real directory at <root>/<tag>, as the earlier install wrote it."""
+        d = self.root / TAG
+        (d / "bin").mkdir(parents=True)
+        (d / "bin/marker").write_text(content)
+        (d / fetch.HASH_FILE).write_text(HASH + "\n")
+
+    def test_an_older_real_directory_is_swapped_out(self) -> None:
+        self.legacy("legacy")
+        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        self.assert_complete("one")
+        self.assertEqual(self.visible(), [TAG])
+        self.assertEqual(self.targets(), [os.readlink(self.root / TAG)])
+
+    def test_no_exchange_leaves_the_older_directory_serving(self) -> None:
+        self.legacy("legacy")
+
+        def no_exchange(a, b):
+            raise OSError("simulated: no atomic exchange")
+
+        with (
+            mock.patch.object(fetch, "_exchange", no_exchange),
+            self.assertRaises(OSError),
+        ):
+            fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        self.assertEqual(self.installed(), "legacy")
+        self.assertFalse((self.root / TAG).is_symlink())
+        self.assertEqual(self.visible(), [TAG])
+
+    def test_a_failure_after_the_exchange_keeps_the_new_install(self) -> None:
+        # The exchange made `dest` the link to the new directory; a failure after it (renaming
+        # the swapped-out directory) must not remove the directory `dest` now points at.
+        self.legacy("legacy")
+        real_rename = os.rename
+
+        def failing_rename(src, dst):
+            if ".legacy-" in os.fspath(dst):
+                raise OSError("simulated: rename after the exchange fails")
+            return real_rename(src, dst)
+
+        with (
+            mock.patch.object(fetch.os, "rename", failing_rename),
+            self.assertRaises(OSError),
+        ):
+            fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        self.assert_complete("one")
+
+    def test_exchange_swaps_and_reports_errors(self) -> None:
+        a, b = self.tmp / "a", self.tmp / "b"
+        a.mkdir()
+        b.symlink_to("a")
+        fetch._exchange(a, b)  # this platform's call: renameat2 or renamex_np
+        self.assertTrue(a.is_symlink())
+        self.assertTrue(b.is_dir() and not b.is_symlink())
+        with self.assertRaises(OSError):
+            fetch._exchange(self.tmp / "missing-1", self.tmp / "missing-2")
+
+    def test_a_link_to_outside_the_root_is_not_deleted(self) -> None:
+        outside = self.tmp / "elsewhere"
+        (outside / "bin").mkdir(parents=True)
+        (outside / "bin/marker").write_text("mine")
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / TAG).symlink_to(outside)
+        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        self.assert_complete("one")
+        self.assertEqual((outside / "bin/marker").read_text(), "mine")
+
+    def test_refused_archive_leaves_no_target(self) -> None:
+        fetch.install(make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root)
+        bad = make_archive(self.tmp / "b.tar.zst", "bad", inputs_hash="e" * 16)
+        with self.assertRaises(fetch.Refused):
+            fetch.install(bad, TAG, self.root)
+        self.assert_complete("one")
+        self.assertEqual(self.targets(), [os.readlink(self.root / TAG)])
 
     def test_unknown_machine(self) -> None:
         with (

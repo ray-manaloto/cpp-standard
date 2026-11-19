@@ -19,14 +19,19 @@ wait for the one job of a hosted run that builds.
 Every source is checked the same way before anything is installed: a release must be the only
 non-draft release whose title or tag is the artifact tag (D122), and its archive must pass
 `gh attestation verify` as publish.yml on refs/heads/main (D116, the image policy of
-artifact.verify_flags). Every archive is extracted next to the install directory and must hold an
-`inputs-hash.txt` equal to the tag's hash (D131) before it replaces what is installed, so a refused
-archive is never installed and a toolchain installed before a refusal is left as it was.
+artifact.verify_flags). Every archive is extracted into a new immutable directory
+`<root>/.<tag>.<unique>` and must hold an `inputs-hash.txt` equal to the tag's hash (D131) before
+the public prefix `<root>/<tag>`, a symlink, is switched to it in one atomic step. So a refused
+archive is never installed, a toolchain installed before a refusal is left as it was, and
+`<root>/<tag>` resolves to a complete install at every moment.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ctypes
+import fcntl
 import json
 import os
 import platform
@@ -34,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +51,11 @@ import artifact
 REPO = artifact.REPO
 TAG = artifact.TOOLCHAIN_TAG
 HASH_FILE = "inputs-hash.txt"
+# The atomic exchange of two paths: renameat2(AT_FDCWD, ..., RENAME_EXCHANGE) on Linux,
+# renamex_np(..., RENAME_SWAP) on macOS (both 1 << 1).
+AT_FDCWD = -100
+RENAME_EXCHANGE = 2
+RENAME_SWAP = 2
 PR_EVENTS = artifact.PR_EVENTS
 
 RELEASE, STAGED, REBUILD = "release", "staged", "rebuild"
@@ -215,56 +226,153 @@ def tag_hash(tag: str) -> str:
     return m["hash"]
 
 
+# The platform's call; coverage counts neither arm, so the floor is the same on Linux and macOS
+# (tests/toolchain/ calls _exchange directly on whichever platform runs them).
+if sys.platform == "linux":  # pragma: no cover
+
+    def _exchange_call(libc, a: bytes, b: bytes) -> int:
+        fn = libc.renameat2
+        fn.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        return fn(AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE)
+
+else:  # pragma: no cover
+
+    def _exchange_call(libc, a: bytes, b: bytes) -> int:
+        fn = libc.renamex_np
+        fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        return fn(a, b, RENAME_SWAP)
+
+
+def _exchange(a: Path, b: Path) -> None:
+    """Swap two paths atomically: renameat2(RENAME_EXCHANGE) on Linux, renamex_np(RENAME_SWAP)
+    on macOS. Used once per root, to turn an older install's real directory at `<root>/<tag>`
+    into the symlink with no moment where that path is missing."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if _exchange_call(libc, os.fsencode(a), os.fsencode(b)) != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, f"exchange {a} <-> {b}: {os.strerror(err)}")
+
+
+def _switch(dest: Path, target_name: str) -> Path | None:
+    """Point the symlink `dest` at `target_name` (a sibling directory) atomically; return the
+    directory it pointed at before (to remove), or None. A real directory at `dest`, left by an
+    older install, is swapped out with `_exchange` and returned for removal; if the swap is not
+    possible, it is left in place and the switch fails, so `dest` never goes missing."""
+    link = dest.parent / f".{dest.name}.link-{uuid.uuid4().hex}"
+    os.symlink(target_name, link)
+    try:
+        if dest.is_symlink() or not dest.exists():
+            previous = dest.parent / os.readlink(dest) if dest.is_symlink() else None
+            os.replace(link, dest)
+            return previous
+        # An older install's real directory: swap it with the new link in one step.
+        _exchange(link, dest)
+        legacy = dest.parent / f".{dest.name}.legacy-{uuid.uuid4().hex}"
+        os.rename(link, legacy)  # `link` now names the old directory
+        return legacy
+    finally:
+        if link.is_symlink():
+            link.unlink()
+
+
+@contextlib.contextmanager
+def _locked(root: Path, tag: str):
+    """One writer per tag and root at a time (fcntl lock file under root)."""
+    with open(root / f".{tag}.lock", "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
 def install(archive: Path, tag: str, root: Path) -> Path:
-    """Extract `archive` beside `root/<tag>`, check its inputs-hash.txt, then replace
-    `root/<tag>` with it. On any failure nothing at `root/<tag>` changes."""
+    """Install `archive` as `root/<tag>`, a symlink to an immutable sibling directory
+    `root/.<tag>.<unique>`. The archive is extracted into that new directory and its
+    inputs-hash.txt checked before the symlink is switched (an atomic os.replace), and the
+    directory it pointed at before is removed only after the switch. So `root/<tag>` always
+    resolves to a complete install, the old one or the new one, also when the process is killed
+    at any point; a refused archive never becomes the target. Writers of the same tag are
+    serialized by a lock file; leftovers of a killed writer are removed by the next one."""
     root.mkdir(parents=True, exist_ok=True)
     dest = root / tag
-    tmp = Path(tempfile.mkdtemp(prefix=f".{tag}.new-", dir=root))
-    try:
-        r = subprocess.run(
-            [
-                "tar",
-                "--zstd",
-                "--no-same-owner",
-                "--no-same-permissions",
-                "-xf",
-                str(archive),
-                "-C",
-                str(tmp),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if r.returncode != 0:
-            raise Refused(f"{archive.name} does not extract: {r.stderr.strip()}")
-        hash_file = tmp / HASH_FILE
-        got = hash_file.read_text().strip() if hash_file.is_file() else None
-        if got != tag_hash(tag):
-            raise Refused(
-                f"{archive.name}: {HASH_FILE} is {got!r}, the tag's hash is {tag_hash(tag)}"
-            )
-        # mkdtemp makes the directory 0700; the installed prefix is read by other users too.
-        tmp.chmod(0o755)
-        old = None
-        if dest.exists() or dest.is_symlink():
-            old = Path(tempfile.mkdtemp(prefix=f".{tag}.old-", dir=root))
-            dest.rename(old / "x")
+    with _locked(root, tag):
+        _sweep(root, tag, keep=_target(dest))
+        new = Path(tempfile.mkdtemp(prefix=f".{tag}.", dir=root))
         try:
-            tmp.rename(dest)
-        except OSError:
-            if old is not None:
-                (old / "x").rename(dest)
-                shutil.rmtree(old, ignore_errors=True)
+            r = subprocess.run(
+                [
+                    "tar",
+                    "--zstd",
+                    "--no-same-owner",
+                    "--no-same-permissions",
+                    "-xf",
+                    str(archive),
+                    "-C",
+                    str(new),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if r.returncode != 0:
+                raise Refused(f"{archive.name} does not extract: {r.stderr.strip()}")
+            hash_file = new / HASH_FILE
+            got = hash_file.read_text().strip() if hash_file.is_file() else None
+            if got != tag_hash(tag):
+                raise Refused(
+                    f"{archive.name}: {HASH_FILE} is {got!r}, the tag's hash is {tag_hash(tag)}"
+                )
+            # mkdtemp makes the directory 0700; the installed prefix is read by other users too.
+            new.chmod(0o755)
+            previous = _switch(dest, new.name)
+        except BaseException:
+            # Never remove what `dest` already points at: after a successful exchange of an
+            # older real directory, a later step of _switch can still fail with the switch made.
+            current = _target(dest)
+            if current is None or current.name != new.name:
+                shutil.rmtree(new, ignore_errors=True)
             raise
-        tmp = None
-        if old is not None:
-            shutil.rmtree(old, ignore_errors=True)
-        return dest
-    finally:
-        if tmp is not None:
-            shutil.rmtree(tmp, ignore_errors=True)
+        if previous is not None and previous.name != new.name:
+            if _ours(previous, root, tag):
+                shutil.rmtree(previous, ignore_errors=True)
+            else:  # a link made by hand or another tool: never delete what it pointed at
+                print(
+                    f"{tag}: left the previous target {previous} in place",
+                    file=sys.stderr,
+                )
+    return dest
+
+
+def _ours(path: Path, root: Path, tag: str) -> bool:
+    """Whether `path` is an install directory this module made: `<root>/.<tag>.*`."""
+    return (
+        os.path.abspath(path.parent) == os.path.abspath(root)
+        and path.name.startswith(f".{tag}.")
+        and path.name != f".{tag}.lock"
+    )
+
+
+def _target(dest: Path) -> Path | None:
+    return dest.parent / os.readlink(dest) if dest.is_symlink() else None
+
+
+def _sweep(root: Path, tag: str, keep: Path | None) -> None:
+    """Remove what a killed writer of `tag` left: every `.<tag>.*` entry but the lock file and
+    the current target. Called under the lock, so no other writer is mid-install."""
+    for p in root.glob(f".{tag}.*"):
+        if p.name == f".{tag}.lock" or (keep is not None and p.name == keep.name):
+            continue
+        if p.is_symlink() or p.is_file():
+            p.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(p, ignore_errors=True)
 
 
 # --- the fetch ----------------------------------------------------------------

@@ -14,7 +14,8 @@
 # environment-standard.md section 2 step 5 and the toolchain/fetch row of the file plan (D72, D83,
 # D91, D111, D116, D122, D131, D134); the logic and its source table are python/toolchain/fetch.py,
 # tested by tests/toolchain/ and the must-fail fixture fixtures/must-fail/toolchain-unattested/.
-# It installs into <root>/<tag>/ and prints, and appends to $GITHUB_OUTPUT, prefix=, source= and
+# It installs into <root>/<tag>, a symlink switched atomically to an immutable <root>/.<tag>.<unique>/,
+# and prints, and appends to $GITHUB_OUTPUT, prefix=, source= and
 # tag=. A release is verified with `gh attestation verify` (gh logged in, or GH_TOKEN).
 set -euo pipefail
 root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
