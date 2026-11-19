@@ -5,17 +5,41 @@ stays the author of everything that leaves the machine.
 
 ## Which tickets go to agy
 
-- **Goes to agy:** a ticket of documentation, comments, a lint or typo sweep, or a small mechanical change whose whole
-  check is `typos`, `rumdl`, `ruff` or `mise run pins:validate`, and whose brief fits in one file.
-- **Stays with a Claude session:** a ticket that needs a design choice, a heavy run (`hk check`, the full test
-  suite, a build, an image), a container, ssh, the network, or a live check of agy itself. No slot grant applies to
-  agy, so heavy runs stay out of agy briefs.
+- **Goes to agy:** a ticket of documentation, comments, a lint or typo sweep, or a small mechanical change whose
+  checks are `hk check` on the changed files, `typos`, `rumdl`, `ruff`, `ty`, `pytest` or `mise run pins:validate`,
+  and whose brief fits in one file.
+- **Stays with a Claude session:** a ticket that needs a design choice, a container, ssh, the network, or a live check
+  of agy itself.
+- **Heavy runs** (`hk check --all`, `mise run check`, `mise run ci`, builds, `pytest -n auto`, image builds) need a
+  slot from the coordinator, as for a Claude worker. agy asks before them; the lead approves only after the slot
+  is granted.
+
+## Same privileges as a Claude worker (D178)
+
+The owner ruled on 2026-11-19: "update agy's global settings so ty, hk check, pytest and typos run without asking;
+keep docker, ssh, gh and git push/commit as ask / it should have the same privileges as claude models/agents". The
+rules file `.agents/agy-worker-settings.json` follows it:
+
+- **Allow:** `hk check` on the changed files, `ty`, `pytest`, `typos`, `ruff`, `rumdl`, `git add` by name, the read
+  commands and the mise check tasks.
+- **Ask:** `docker`, `ssh`, `scp`, `gh`, `git commit`, `git push`, `repotools pr-create`,
+  `mise run //repo:pr-merge`, and the heavy runs. A Claude worker also waits for a go-ahead on these.
+- **Deny:** `sudo`; `fnox get`, `fnox exec`, `fnox export`, `fnox set`; `git stash`; `git add -A`, `git add --all`
+  and `git add .`; `--no-verify`; `--admin`; a force push without lease.
+
+agy's rules are `action(target)` entries that match literal word prefixes or a `regex:` pattern; deny beats ask
+beats allow. A flag anywhere in a command (`--no-verify`, `--admin`, `-f`) needs a regex rule. Not expressed:
+`fnox proxy run` is neither allowed nor denied (a prompt), because a rule cannot allow it and deny `fnox get`
+without also listing each; a command with substitution or one agy cannot parse needs a full-line match, so a deny
+prefix may not catch it.
 
 ## What the lead still does
 
-The worker edits and stages files in its worktree. The lead runs `hk check`, commits, pushes, opens the pull request,
-merges and runs /verify. agy's rules deny `hk`, `git commit`, `git push`, `git stash`, `gh`, `fnox`, `sudo`, `ssh`,
-`scp` and `docker`.
+The worker edits, runs the checks and stages files in its worktree. Commit, push, the pull request and the merge
+are asks, so the worker's prompt waits for the lead. The lead reviews the diff, then approves the prompts that ship
+it (commit, push as the App, `repotools pr-create`, `mise run //repo:pr-merge`) or ships the ticket itself, and
+runs /verify. Widening `git commit`, `git push`, `gh` or the merge from ask to allow is a separate owner decision.
+Every brief carries the Claude brief's lines: heavy runs wait for a slot, docker and ssh wait for a go-ahead.
 
 ## Start a worker
 
@@ -49,8 +73,9 @@ exists.
 
 - Read its tab (`hc read`) at least every 10 minutes, or watch `hc ls` for "blocked". Answer a prompt by these rules;
   never choose "always allow" for a broad prefix.
-- Answer "no" to a prompt for docker, ssh, scp, gh, or git push, commit and stash, unless the brief allows it. Any
-  docker also needs the coordinator's slot grant first.
+- A prompt for `gh`, `git commit`, `git push`, `repotools pr-create` or the merge is the shipping step: approve it
+  when the diff is reviewed and the brief says to ship. Answer "no" to docker, ssh and scp unless the brief allows
+  them; any docker also needs the coordinator's go-ahead first. Deny rules never prompt.
 - Never approve a command whose full text is hidden ("⋯ (N lines hidden)"). Expand it first with agy's ctrl+g
   (edit or expand command) and read all of it, or answer No and ask the worker to put the script in a file in its
   worktree and run that file. Approving hidden `python -c` text approves code nobody reviewed.
