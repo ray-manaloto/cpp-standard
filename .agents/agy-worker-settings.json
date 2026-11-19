@@ -1,9 +1,16 @@
 {
   "permissions": {
     "allow": [
-      "command(rumdl)",
+      "command(hk check)",
+      "command(ty)",
+      "command(uv run ty)",
+      "command(uv run --locked ty)",
+      "command(pytest)",
+      "command(uv run pytest)",
+      "command(uv run --locked pytest)",
       "command(typos)",
       "command(ruff)",
+      "command(rumdl)",
       "command(git status)",
       "command(git diff)",
       "command(git log)",
@@ -11,22 +18,41 @@
       "command(git add)",
       "command(mise run pins:validate)",
       "command(mise run pins:cov)",
+      "command(mise run agents:agy-worker-check)",
       "command(ls)",
       "command(grep)",
       "command(rg)",
       "command(wc)"
     ],
-    "deny": [
+    "ask": [
       "command(docker)",
       "command(ssh)",
       "command(scp)",
-      "command(sudo)",
       "command(gh)",
-      "command(git push)",
       "command(git commit)",
+      "command(git push)",
+      "command(repotools pr-create)",
+      "command(mise run //repo:pr-merge)",
+      "command(hk check --all)",
+      "command(mise run check)",
+      "command(mise run ci)",
+      "command(pytest -n)",
+      "command(uv run pytest -n)",
+      "command(uv run --locked pytest -n)"
+    ],
+    "deny": [
+      "command(sudo)",
+      "command(fnox get)",
+      "command(fnox exec)",
+      "command(fnox export)",
+      "command(fnox set)",
       "command(git stash)",
-      "command(fnox)",
-      "command(hk)"
+      "command(git add -A)",
+      "command(git add --all)",
+      "command(git add .)",
+      "command(regex:.*--no-verify.*)",
+      "command(regex:.*--admin( .*)?)",
+      "command(regex:.*git push.* (-f|--force)( .*)?)"
     ]
   }
 }

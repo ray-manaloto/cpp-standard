@@ -1,4 +1,4 @@
-"""Check agy_worker.py against #278's acceptance lines, offline: a stand-in `agy` on PATH, scratch worktree, brief and
+"""Check agy_worker.py against #278's acceptance lines and the rules of D178, offline: a stand-in `agy` on PATH, scratch worktree, brief and
 plan folders. It never starts the real agy or reads its settings. Prints one line per case and exits 1 when any fails.
 """
 
@@ -171,25 +171,54 @@ def main() -> int:
         case("missing plan folder: refused", rc == 3 and argv is None, out)
 
         settings = json.loads(agy_worker.SETTINGS.read_text())["permissions"]
-        denied = {
+        rules = {k: {r[8:-1] for r in settings[k]} for k in ("allow", "ask", "deny")}
+        # The owner's ruling of 2026-11-19 (D178): agy gets a Claude worker's checks; commit, push, gh, docker, ssh
+        # and scp stay asks; what every agent is denied stays denied.
+        want_allow = {"hk check", "ty", "pytest", "typos", "ruff", "rumdl", "git add"}
+        want_ask = {
             "docker",
             "ssh",
             "scp",
-            "sudo",
             "gh",
-            "git push",
             "git commit",
-            "git stash",
-            "fnox",
-            "hk",
+            "git push",
+            "repotools pr-create",
+            "mise run //repo:pr-merge",
+            "hk check --all",
         }
+        want_deny = {
+            "sudo",
+            "fnox get",
+            "fnox exec",
+            "fnox export",
+            "fnox set",
+            "git stash",
+            "git add -A",
+            "git add .",
+        }
+        case("rules: the checks are allowed", want_allow <= rules["allow"])
+        case("rules: commit, push, gh, docker, ssh, scp ask", want_ask <= rules["ask"])
+        case("rules: the shared denies hold", want_deny <= rules["deny"])
         case(
-            "rules: every deny from #278", {r[8:-1] for r in settings["deny"]} == denied
+            "rules: --no-verify, --admin and a force push without lease are denied",
+            all(
+                any(flag in r for r in rules["deny"])
+                for flag in ("--no-verify", "--admin", "(-f|--force)")
+            ),
         )
-        allowed = {r[8:-1] for r in settings["allow"]}
         case(
-            "rules: no allow rule overlaps a deny",
-            not allowed & denied and "git push" not in allowed,
+            "rules: no ask or deny rule is also an allow",
+            not rules["allow"] & (rules["ask"] | rules["deny"]),
+        )
+        case(
+            "rules: nothing that ships is allowed",
+            not any(
+                r.split()[0] in {"gh", "docker", "ssh", "scp", "sudo", "fnox"}
+                or r.startswith(
+                    ("git push", "git commit", "repotools", "mise run //repo")
+                )
+                for r in rules["allow"]
+            ),
         )
 
     print(f"{len(failures)} failed" if failures else "all cases pass")
