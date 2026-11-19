@@ -47,7 +47,7 @@ LACKS = re.compile(r"OAuth token lacks \S*/auth/aicode")
 STALE = ("sign-in update needed",)
 SIGNED_OUT = ("not signed in",)
 FIX = (
-    "type /logout in agy, then sign in with Google again (the owner does any password, passkey or 2FA step); "
+    "type /logout in agy, then quit and restart agy; it opens the Google sign-in (the owner ticks every permission box and does any password, passkey or 2FA step); "
     "`mise run agents:agy-login` --step status only sees that a login file exists, so it does not prove this"
 )
 
@@ -115,7 +115,10 @@ IDE_REFUSAL = (
 
 def scope_refusal() -> str:
     """The refusal for a sign-in that lacks the aicode scope: the owner step, and the IDE when it is running."""
-    msg = "owner: run /logout in any agy tab, then sign in with Google again (tick every permission box)"
+    msg = (
+        "owner: type /logout in agy, then quit and restart agy; it opens the Google sign-in "
+        "(tick every permission box and do any password, passkey or 2FA step)"
+    )
     return f"agy's sign-in lacks the aicode scope; {msg}"
 
 
@@ -130,7 +133,7 @@ def health() -> tuple[int, str]:
     if state == "stale":
         return (
             1,
-            f"MISSING agy sign-in lacks the aicode scope in the newest log; owner: run /logout in any agy tab{ide}",
+            f"MISSING agy sign-in lacks the aicode scope in the newest log; owner: type /logout in agy, then quit and restart agy{ide}",
         )
     if state == "unknown":
         return 0, f"ok    agy sign-in: no agy log yet{ide}"
