@@ -90,6 +90,141 @@ MACOS_SCHEMA: dict[str, re.Pattern[str] | str] = {
 }
 
 
+@dataclass(frozen=True)
+class GroupCopy:
+    """One expected copy in the mise-version / Ubuntu-base group (D175, section 11).
+
+    `kind` is:
+      - "mise": `mise` in image/base.inputs.toml
+      - "ubuntu": `image` in image/base.inputs.toml
+      - "ubuntu-digest": the `sha256:...` digest of `image` in image/base.inputs.toml
+      - "mise-sha256-amd64", "mise-sha256-arm64": 64 hex, equal across all copies
+    `pattern` captures the copy's value in group 1, or is None for a workflow's
+    `jdx/mise-action` steps.
+    """
+
+    kind: str
+    path: str
+    label: str
+    pattern: re.Pattern[str] | None = None
+
+
+# The one list of copies in the mise-version / Ubuntu-base group (D175, section 11).
+# Adding or removing a copy is one entry here; every entry must exist and match at
+# least once, so a missing or renamed file fails instead of skipping.
+COPY_GROUP: tuple[GroupCopy, ...] = (
+    # mise version (reference: `mise` in image/base.inputs.toml)
+    GroupCopy(
+        "mise",
+        "docs/standard/agents.Dockerfile",
+        "ARG MISE_VER",
+        re.compile(r"^ARG[ \t]+MISE_VER=(\S+)", re.MULTILINE),
+    ),
+    GroupCopy(
+        "mise",
+        "docs/standard/ubuntu-cert.Dockerfile",
+        "ARG MISE_VER",
+        re.compile(r"^ARG[ \t]+MISE_VER=(\S+)", re.MULTILINE),
+    ),
+    GroupCopy("mise", ".github/workflows/ci.yml", "jdx/mise-action version"),
+    GroupCopy("mise", ".github/workflows/builder.yml", "jdx/mise-action version"),
+    GroupCopy("mise", ".github/workflows/apt-bump.yml", "jdx/mise-action version"),
+    GroupCopy(
+        "mise",
+        "docs/standard/ubuntu.md",
+        "install command comment",
+        re.compile(r"^# mise (\S+)", re.MULTILINE),
+    ),
+    GroupCopy(
+        "mise",
+        "docs/standard/ubuntu.md",
+        "install command",
+        re.compile(r"^v=(\S+)", re.MULTILINE),
+    ),
+    GroupCopy(
+        "mise",
+        "docs/standard/ubuntu.md",
+        "pin table",
+        re.compile(r"^\| mise (\S+)[ \t]*\|", re.MULTILINE),
+    ),
+    # mise release archive SHA-256 (64 hex and equal across standard Dockerfiles)
+    GroupCopy(
+        "mise-sha256-amd64",
+        "docs/standard/agents.Dockerfile",
+        "ARG MISE_SHA256_AMD64",
+        re.compile(r"^ARG[ \t]+MISE_SHA256_AMD64=(\S+)", re.MULTILINE),
+    ),
+    GroupCopy(
+        "mise-sha256-amd64",
+        "docs/standard/ubuntu-cert.Dockerfile",
+        "ARG MISE_SHA256_AMD64",
+        re.compile(r"^ARG[ \t]+MISE_SHA256_AMD64=(\S+)", re.MULTILINE),
+    ),
+    GroupCopy(
+        "mise-sha256-arm64",
+        "docs/standard/agents.Dockerfile",
+        "ARG MISE_SHA256_ARM64",
+        re.compile(r"^ARG[ \t]+MISE_SHA256_ARM64=(\S+)", re.MULTILINE),
+    ),
+    GroupCopy(
+        "mise-sha256-arm64",
+        "docs/standard/ubuntu-cert.Dockerfile",
+        "ARG MISE_SHA256_ARM64",
+        re.compile(r"^ARG[ \t]+MISE_SHA256_ARM64=(\S+)", re.MULTILINE),
+    ),
+    # Ubuntu 26.10 base digest (reference: `image` in image/base.inputs.toml)
+    GroupCopy(
+        "ubuntu",
+        "docs/standard/agents.Dockerfile",
+        "FROM",
+        re.compile(r"^FROM[ \t]+(?:--\S+[ \t]+)*(ubuntu:\S+)", re.MULTILINE),
+    ),
+    GroupCopy(
+        "ubuntu",
+        "docs/standard/ubuntu-cert.Dockerfile",
+        "FROM",
+        re.compile(r"^FROM[ \t]+(?:--\S+[ \t]+)*(ubuntu:\S+)", re.MULTILINE),
+    ),
+    GroupCopy(
+        "ubuntu-digest",
+        "docs/standard/ubuntu-cert.Dockerfile",
+        "base.digest label",
+        re.compile(
+            r"^LABEL[ \t]+org\.opencontainers\.image\.base\.digest=(\S+)",
+            re.MULTILINE,
+        ),
+    ),
+    GroupCopy(
+        "ubuntu",
+        "docs/standard/ubuntu.md",
+        "pin table",
+        re.compile(r"^\| Ubuntu 26\.10[^|\n]*\|[ \t]*`([^`\n]+)`", re.MULTILINE),
+    ),
+    GroupCopy(
+        "ubuntu",
+        "docs/standard/ubuntu.md",
+        "A2 expected digest",
+        re.compile(r"^Expected: the digest of `([^`\n]+)`", re.MULTILINE),
+    ),
+    # M0 spike workflows: remove these entries when the workflows are deleted after M0.
+    GroupCopy(
+        "ubuntu",
+        ".github/workflows/spike-m0-h.yml",
+        "container image",
+        re.compile(r"^[ \t]+image:[ \t]*['\"]?([^\s'\"#]+)['\"]?", re.MULTILINE),
+    ),
+    GroupCopy(
+        "ubuntu",
+        ".github/workflows/spike-m0-bj.yml",
+        "container image",
+        re.compile(r"^[ \t]+image:[ \t]*['\"]?([^\s'\"#]+)['\"]?", re.MULTILINE),
+    ),
+)
+
+YAML_QUOTED = re.compile(r"""^(['"])(.*?)\1(?:[ \t]+#.*)?$""")
+MISE_ACTION_USES = re.compile(r"""^uses:[ \t]*['"]?jdx/mise-action(?:@|[ \t'"]|$)""")
+
+
 @dataclass(frozen=True, order=True)
 class Problem:
     """One failed rule: `rule` is the stable code the vectors match."""
@@ -125,6 +260,63 @@ def _version(spec: Any) -> str | None:
     if isinstance(spec, dict) and isinstance(spec.get("version"), str):
         return spec["version"]
     return None
+
+
+def _unquote_yaml(raw: str) -> str:
+    s = raw.strip()
+    m = YAML_QUOTED.match(s)
+    if m:
+        return m.group(2)
+    return re.split(r"[ \t]+#", s, maxsplit=1)[0].strip()
+
+
+def _with_version(item: list[tuple[int, str]], step_indent: int) -> str | None:
+    """Return `with.version` from one YAML step item, or None if absent or empty."""
+    in_with = False
+    for indent, text in item:
+        if in_with:
+            if indent <= step_indent:
+                in_with = False
+            else:
+                m = re.match(r"^version:[ \t]*(.*)$", text)
+                if m:
+                    return _unquote_yaml(m.group(1)) or None
+        if indent == step_indent and re.match(r"^with:[ \t]*(?:#.*)?$", text):
+            in_with = True
+    return None
+
+
+def _mise_action_versions(text: str) -> list[str | None]:
+    """Every `jdx/mise-action` step's `with.version` in a workflow (None if missing)."""
+    lines = text.splitlines()
+    versions: list[str | None] = []
+    i = 0
+    while i < len(lines):
+        m = re.match(r"^([ \t]*)-[ \t]+(.*)$", lines[i])
+        if not m:
+            i += 1
+            continue
+        dash_indent = len(m.group(1))
+        step_indent = m.start(2)
+        item = [(step_indent, m.group(2).strip())]
+        i += 1
+        while i < len(lines):
+            nxt = lines[i]
+            stripped = nxt.strip()
+            if not stripped or stripped.startswith("#"):
+                i += 1
+                continue
+            indent = len(nxt) - len(nxt.lstrip(" \t"))
+            if indent <= dash_indent:
+                break
+            item.append((indent, stripped))
+            i += 1
+        if any(
+            indent == step_indent and MISE_ACTION_USES.match(body)
+            for indent, body in item
+        ):
+            versions.append(_with_version(item, step_indent))
+    return versions
 
 
 class Validator:
@@ -295,6 +487,7 @@ class Validator:
     def base_inputs(self) -> None:
         if not (self.root / BASE_INPUTS).exists():
             return
+        before = len(self.problems)
         data = _load(self.root / BASE_INPUTS)
         if set(data) != set(BASE_INPUTS_SCHEMA):
             self.fail(
@@ -310,6 +503,87 @@ class Validator:
                     "inputs", BASE_INPUTS, f"{key} does not match {pattern.pattern}"
                 )
         self.urls(BASE_INPUTS, data)
+        if len(self.problems) == before:
+            self.copy_group(data)
+
+    def _check_mise_action(self, rel: str, ver: str | None, ref_mise: str) -> None:
+        if ver is None:
+            self.fail("group", rel, "jdx/mise-action step has no version")
+        elif ver != ref_mise:
+            self.fail(
+                "group",
+                rel,
+                f"jdx/mise-action version is {ver}, expected {ref_mise} (from {BASE_INPUTS})",
+            )
+
+    def copy_group(self, base: dict[str, Any]) -> None:
+        """D175 (section 11): every copy of the mise version, mise SHA-256 and Ubuntu
+        base digest in COPY_GROUP (and every workflow using jdx/mise-action) agrees."""
+        ref_mise: str = base["mise"]
+        ref_image: str = base["image"]
+        refs: dict[str, tuple[str, str]] = {
+            "mise": (ref_mise, BASE_INPUTS),
+            "ubuntu": (ref_image, BASE_INPUTS),
+            "ubuntu-digest": (ref_image.split("@", 1)[1], BASE_INPUTS),
+        }
+        cache: dict[str, str | None] = {}
+        for copy in COPY_GROUP:
+            if copy.path not in cache:
+                file_path = self.root / copy.path
+                cache[copy.path] = (
+                    file_path.read_text(encoding="utf-8")
+                    if file_path.is_file()
+                    else None
+                )
+            text = cache[copy.path]
+            if text is None:
+                self.fail("group", copy.path, "expected file is missing")
+                continue
+            if copy.pattern is None:
+                versions = _mise_action_versions(text)
+                if not versions:
+                    self.fail("group", copy.path, f"expected {copy.label}, found none")
+                for ver in versions:
+                    self._check_mise_action(copy.path, ver, ref_mise)
+                continue
+            values = [m.group(1) for m in copy.pattern.finditer(text)]
+            if not values:
+                self.fail("group", copy.path, f"expected {copy.label}, found none")
+                continue
+            if copy.kind.startswith("mise-sha256-"):
+                for val in values:
+                    if not HEX64.fullmatch(val):
+                        self.fail(
+                            "group", copy.path, f"{copy.label} is not 64 hex: {val}"
+                        )
+                    elif copy.kind not in refs:
+                        refs[copy.kind] = (val, copy.path)
+                    else:
+                        want, ref_src = refs[copy.kind]
+                        if val != want:
+                            self.fail(
+                                "group",
+                                copy.path,
+                                f"{copy.label} is {val}, expected {want} (from {ref_src})",
+                            )
+            else:
+                want, ref_src = refs[copy.kind]
+                for val in values:
+                    if val != want:
+                        self.fail(
+                            "group",
+                            copy.path,
+                            f"{copy.label} is {val}, expected {want} (from {ref_src})",
+                        )
+        listed_workflows = {c.path for c in COPY_GROUP if c.pattern is None}
+        wf_dir = self.root / ".github/workflows"
+        for ext in ("*.yml", "*.yaml"):
+            for path in sorted(wf_dir.glob(ext)):
+                rel = path.relative_to(self.root).as_posix()
+                if rel in listed_workflows:
+                    continue
+                for ver in _mise_action_versions(path.read_text(encoding="utf-8")):
+                    self._check_mise_action(rel, ver, ref_mise)
 
     def runner_inputs(self) -> None:
         """D164: the exact actions/runner version, and per platform only the
@@ -714,11 +988,16 @@ def run_pin_vectors(spec: dict[str, Any]) -> list[str]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _materialize(root, _vector_files(spec, vector))
-            got = {p.rule for p in validate(root)}
+            problems = validate(root)
+        got = {p.rule for p in problems}
         want = {vector["reject"]} if "reject" in vector else set()
         if got != want:
             failures.append(
                 f"{vector['name']}: want rules {sorted(want)}, got {sorted(got)}"
+            )
+        elif "path" in vector and not any(vector["path"] in str(p) for p in problems):
+            failures.append(
+                f"{vector['name']}: want path {vector['path']} in {[str(p) for p in problems]}"
             )
     return failures
 
