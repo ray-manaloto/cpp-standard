@@ -1,7 +1,8 @@
 # vcpkg triplet for the clang23 build (D113). Layout after glaze-build-setup's
-# x64-linux triplets (ray-manaloto/glaze-build-setup, triplets/); the compiler
-# and flags come from the chainloaded toolchain file, the one the project itself
-# builds with.
+# x64-linux triplets
+# (ray-manaloto/glaze-build-setup, triplets/); the compiler and flags come from
+# the chainloaded
+# toolchain file, the one the project itself builds with.
 set(VCPKG_TARGET_ARCHITECTURE arm64)
 set(VCPKG_CRT_LINKAGE dynamic)
 set(VCPKG_LIBRARY_LINKAGE static)

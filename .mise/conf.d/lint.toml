@@ -17,7 +17,8 @@ tombi = "1.11.2"
 jq = "1.8.2"
 editorconfig-checker = "4.0.2"
 betterleaks = "1.10.1"
+# Rust CMake formatter for CMakeLists.txt, *.cmake and the triplets (hk step cmakefmt; hk has no
+# builtin for a maintained CMake formatter).
+"github:cmakefmt/cmakefmt" = "2.4.0"
 # Dockerfile linter for the image/*.Dockerfile layers (hk hadolint, D102).
 hadolint = "2.15.1"
-# CMake listfile formatter (hk cmake_format, #132, D102); the only CMake builtin of hk 2.13.
-"pipx:cmakelang" = "0.6.13"

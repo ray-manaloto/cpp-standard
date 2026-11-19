@@ -1,9 +1,10 @@
 # The p2996 compiler: the toolchain that `mise run toolchain:fetch` installs,
-# named by its install prefix in CPPSTD_P2996_PREFIX. It builds against its own
-# libc++ and finds it at run time through an rpath. Reflection is behind
-# -freflection-latest.
-if(NOT DEFINED ENV{CPPSTD_P2996_PREFIX} OR NOT IS_DIRECTORY
-                                           "$ENV{CPPSTD_P2996_PREFIX}/bin")
+# named by its install
+# prefix in CPPSTD_P2996_PREFIX. It builds against its own libc++ and finds it
+# at run time through
+# an rpath. Reflection is behind -freflection-latest.
+if(NOT DEFINED ENV{CPPSTD_P2996_PREFIX}
+   OR NOT IS_DIRECTORY "$ENV{CPPSTD_P2996_PREFIX}/bin")
   message(
     FATAL_ERROR
       "CPPSTD_P2996_PREFIX must name an installed p2996 toolchain (mise run toolchain:fetch)"
