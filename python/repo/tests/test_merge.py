@@ -266,8 +266,9 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
     (where //repo:tools-install puts main's), never the branch venv's, and nothing in them runs.
 
     The pull request on the gh stand-in carries that very title and body, so repotools passes the title and body checks
-    only if both arrived intact. With this repository's required-checks setting, the failing hk step must not run.
-    Without the file, the task must run hk, wait for the merge and report its verified author.
+    only if both arrived intact. With this repository's required-checks setting, the failing hk step must not run and
+    the pull request is queued, then waited for until merged (#158). Without the file, the task must run hk, wait for
+    the merge and report its verified author.
     """
     tools = copy.parent / "tool-bin"
     tools.mkdir()
@@ -309,6 +310,6 @@ def test_the_task_runs_the_installed_repotools_with_hostile_text_as_inert_argume
         assert result == [{"number": 7, "merge_commit": "f00d", "author_email": NOREPLY}]
     else:
         assert merges == [["pr", "merge", "7", "--match-head-commit", head]]
-        assert result == [{"number": 7, "head_commit": head, "merged": False}]
+        assert result == [{"number": 7, "merge_commit": "f00d", "author_email": NOREPLY}]
     assert ["jouet", "wait", "ci", "7", "--sha", head] in [call[:6] for call in calls]
     assert not list(copy.parent.rglob("pwned*"))

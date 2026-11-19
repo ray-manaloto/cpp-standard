@@ -210,10 +210,11 @@ jobs:
       actions: read  # the re-probe reads this ref's cache entries
       attestations: read  # gh attestation verify of main's tools image
       packages: read  # pull main's tools image
-    # One build of a tag at a time, across events and refs (D135): a later run waits for it.
+    # One build of a tag at a time, across events and refs (D135): every later run waits for it.
     concurrency:
       group: builder-${{ needs.tags.outputs.p2996 }}
       cancel-in-progress: false
+      queue: max
     env:
       TAG: ${{ needs.tags.outputs.p2996 }}
       TOOLS: ${{ needs.tags.outputs.tools }}

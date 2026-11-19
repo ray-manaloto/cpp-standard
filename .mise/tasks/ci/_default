@@ -32,7 +32,8 @@ build_and_test() { # <preset>
   cmake --build --preset "$1"
   echo "::endgroup::"
   echo "::group::test $1"
-  ctest --preset "$1"
+  # --no-tests=error: a build that registers no test fails (the guard toolchain:smoke had, #271).
+  ctest --preset "$1" --no-tests=error
   echo "::endgroup::"
 }
 

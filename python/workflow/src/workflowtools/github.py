@@ -7,10 +7,11 @@ from collections.abc import Iterable
 from pydantic import TypeAdapter, ValidationError
 
 from . import git, roadmap
-from .models import Check, Finding, GitHubIssue, GitHubPull, IssueState, IssueTicket, Unavailable
+from .models import Check, Finding, GitHubCommit, GitHubIssue, GitHubPull, IssueState, IssueTicket, Unavailable
 
 ORIGIN = re.compile(r"github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
 PAGES = TypeAdapter(list[list[GitHubIssue]])
+PULL_PAGES = TypeAdapter(list[list[GitHubPull]])
 
 
 def origin() -> tuple[str, str] | None:
@@ -43,6 +44,33 @@ def head(repo: str, number: int) -> str | Unavailable:
         return result
     try:
         return GitHubPull.model_validate_json(result).head.sha
+    except ValidationError:
+        return unavailable((owner, name), "gh returned output that is not the expected JSON", Check.rounds)
+
+
+def merged_pulls(repo: str) -> list[GitHubPull] | Unavailable:
+    """A repository's merged pull requests, read-only."""
+    owner, name = repo.split("/")
+    result = api(
+        (owner, name), "--paginate", "--slurp", f"repos/{repo}/pulls?state=closed&per_page=100", check=Check.rounds
+    )
+    if isinstance(result, Unavailable):
+        return result
+    try:
+        pulls = [entry for page in PULL_PAGES.validate_json(result) for entry in page if entry.merged_at is not None]
+    except ValidationError:
+        return unavailable((owner, name), "gh returned output that is not the expected JSON", Check.rounds)
+    return sorted(pulls, key=lambda pull: pull.number)
+
+
+def commit(repo: str, sha: str) -> GitHubCommit | Unavailable:
+    """One commit's tree, message and changed files, read-only."""
+    owner, name = repo.split("/")
+    result = api((owner, name), f"repos/{repo}/commits/{sha}", check=Check.rounds)
+    if isinstance(result, Unavailable):
+        return result
+    try:
+        return GitHubCommit.model_validate_json(result)
     except ValidationError:
         return unavailable((owner, name), "gh returned output that is not the expected JSON", Check.rounds)
 

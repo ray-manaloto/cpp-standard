@@ -49,6 +49,10 @@ Adapted from mattpocock's in-progress `chief-of-staff` skill (mattpocock-skills 
 - Large work goes to-spec, to-tickets, then implement, via the workflow in `~/.config/agents/workflow/`.
 - Strategic view, always: prefer a pit of success (constrained APIs, lint rules that force correctness, written standards), give agents data sources (logs, test environments), and allow no workarounds that bypass established processes.
 
+## Check-in
+
+Run `workflowtools report --repo <owner/name> ... [--since YYYY-MM-DD]` on every regular check-in, and never write to GitHub during it. Merges before `--since` (default 2026-11-19) are left out of the two merge sections. It prints four sections: `open-rounds`, `owing-retro`, `without-receipt` (comparing each closed round's close head and each merged pull request's final head separately against local verify receipts), and `merges-in-no-round`. Any section whose `unknown` field is non-null could not read its input and must be reported as unknown with that reason, never as clean.
+
 ## Schedules
 
 Suggest, with the owner's OK: a morning digest of the queue, lane status and stalled leads; a weekly wiki lint; a weekly retro pick.

@@ -5,16 +5,18 @@ pauses between them are exact on any machine. One test runs on the real clock wi
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
 from repotools import merge
 from repotools.cli import main
 
-from .test_merge import CLOSED, MERGED, QUEUED, WAITING, World, merge_args, world
+from .test_merge import CLOSED, HK_RAN, MERGED, QUEUED, WAITING, World, merge_args
+from .test_merge_gate import REQUIRED, setting
 from .test_pr_create import pr_refusal_of, repo
 
-__all__ = ["repo", "world"]  # the fixtures, used by name
+__all__ = ["repo"]  # the fixture, used by name
 FAST = ["--interval", "2", "--time-limit", "30"]
 
 
@@ -31,6 +33,16 @@ class FakeClock(merge.Clock):
     def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
         self.time += seconds
+
+
+@pytest.fixture(params=["local-hk", "required-checks"])
+def world(request: pytest.FixtureRequest, repo: Path, monkeypatch: pytest.MonkeyPatch) -> World:
+    """Every test here runs under both gates: the wait after the merge call is the same (#158), whether the call
+    merges at once or queues the pull request."""
+    scene = World(repo, monkeypatch, HK_RAN)
+    if request.param == "required-checks":
+        setting(scene, repo, REQUIRED, pushed=True)
+    return scene
 
 
 @pytest.fixture

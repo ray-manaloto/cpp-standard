@@ -10,6 +10,10 @@
   word a brief's limits so the pane's read-only shell stays allowed.
 
 ## 2026-11-18
+* **Added**: reconciliation and verify-receipt reporting (#162). `workflowtools report [--repo ...]`
+  reads merged pull requests from GitHub (never writing), joins them to rounds, and adds the
+  `without-receipt` (per-round close head and per-merge final head) and `merges-in-no-round`
+  sections; `chief-of-staff` and workflow.md check-ins name the report command.
 * **Changed**: ship.md's Verify and Commit steps (#161). `workflowtools verify-receipt` remembers the
   tree before `/verify` and `--verdict` saves the verdict against it; `workflowtools verify-commit`
   compares the staged tree at commit and adds the `Verify-Receipt` trailer. SKIP needs a change that

@@ -86,11 +86,26 @@
     "github_pull": {
       "$ref": "#/$defs/GitHubPull"
     },
+    "github_commit": {
+      "$ref": "#/$defs/GitHubCommit"
+    },
     "open_round": {
       "$ref": "#/$defs/OpenRound"
     },
     "report_section": {
       "$ref": "#/$defs/ReportSection"
+    },
+    "verify_reading": {
+      "$ref": "#/$defs/VerifyReading"
+    },
+    "round_without_receipt": {
+      "$ref": "#/$defs/RoundWithoutReceipt"
+    },
+    "merge_without_receipt": {
+      "$ref": "#/$defs/MergeWithoutReceipt"
+    },
+    "merge_in_no_round": {
+      "$ref": "#/$defs/MergeInNoRound"
     },
     "round_retro": {
       "$ref": "#/$defs/RoundRetro"
@@ -272,9 +287,24 @@
       "additionalProperties": false
     },
     "Report": {
-      "description": "Print open rounds and closed rounds owing a retro; each section is unknown when the store cannot be read.",
+      "description": "Print open rounds, closed rounds owing a retro, commits without a matching verify receipt, and merges in no round.",
       "type": "object",
-      "properties": {},
+      "properties": {
+        "repo": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Repo"
+          },
+          "default": [],
+          "description": "Extra GitHub repository (owner/name) to reconcile merged pull requests for; repeat the flag for each"
+        },
+        "since": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "default": "2026-11-19",
+          "description": "Reconcile pull requests merged on or after this date (YYYY-MM-DD, UTC); a closed round's heads are always checked"
+        }
+      },
       "additionalProperties": false
     },
     "OpenEvent": {
@@ -513,11 +543,96 @@
         },
         "head": {
           "$ref": "#/$defs/PullHead"
+        },
+        "merged_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
         "number",
         "head"
+      ],
+      "additionalProperties": true
+    },
+    "CommitTree": {
+      "description": "The tree of a GitHub commit, the part read here.",
+      "type": "object",
+      "properties": {
+        "sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha"
+      ],
+      "additionalProperties": true
+    },
+    "CommitDetail": {
+      "description": "The git commit object fields read from GitHub; other API fields pass.",
+      "type": "object",
+      "properties": {
+        "tree": {
+          "$ref": "#/$defs/CommitTree"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tree",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "CommitFile": {
+      "description": "One changed file of a GitHub commit, the part read here.",
+      "type": "object",
+      "properties": {
+        "filename": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename"
+      ],
+      "additionalProperties": true
+    },
+    "GitHubCommit": {
+      "description": "The commit fields read from GitHub; other API fields pass.",
+      "type": "object",
+      "properties": {
+        "sha": {
+          "type": "string"
+        },
+        "commit": {
+          "$ref": "#/$defs/CommitDetail"
+        },
+        "files": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CommitFile"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "sha",
+        "commit"
       ],
       "additionalProperties": true
     },
@@ -612,8 +727,135 @@
       "type": "string",
       "enum": [
         "open-rounds",
-        "owing-retro"
+        "owing-retro",
+        "without-receipt",
+        "merges-in-no-round"
       ]
+    },
+    "VerifyReading": {
+      "description": "How a commit reads against the local verify receipts and its own Verify-Receipt trailer.",
+      "type": "string",
+      "enum": [
+        "verified",
+        "unknown",
+        "unverified"
+      ]
+    },
+    "RoundWithoutReceipt": {
+      "description": "A report line: a closed round's pull request head at close without a matching verify receipt.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "round-without-receipt"
+        },
+        "round": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "head": {
+          "type": "string"
+        },
+        "reading": {
+          "$ref": "#/$defs/VerifyReading"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "round",
+        "repo",
+        "number",
+        "head",
+        "reading",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "MergeWithoutReceipt": {
+      "description": "A report line: a merged pull request's final head commit without a matching verify receipt.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "merge-without-receipt"
+        },
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "head": {
+          "type": "string"
+        },
+        "merged_at": {
+          "type": "string"
+        },
+        "rounds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RoundId"
+          }
+        },
+        "reading": {
+          "$ref": "#/$defs/VerifyReading"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "repo",
+        "number",
+        "head",
+        "merged_at",
+        "rounds",
+        "reading",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "MergeInNoRound": {
+      "description": "A report line: a merged pull request that belongs to no round.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "merge-in-no-round"
+        },
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "head": {
+          "type": "string"
+        },
+        "merged_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "repo",
+        "number",
+        "head",
+        "merged_at"
+      ],
+      "additionalProperties": false
     },
     "ReportSection": {
       "description": "A report section's last line: how many lines it printed, or unknown with the reason.",

@@ -29,12 +29,16 @@ HASH = "00112233445566aa"
 HOSTED = {"RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_ACTIONS": "true"}
 
 
-def make_archive(path: Path, content: str, inputs_hash: str | None = HASH) -> Path:
+def make_archive(
+    path: Path, content: str, inputs_hash: str | bytes | None = HASH
+) -> Path:
     """A stand-in toolchain archive: bin/marker holds `content`."""
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "bin").mkdir()
         (Path(d) / "bin/marker").write_text(content)
-        if inputs_hash is not None:
+        if isinstance(inputs_hash, bytes):
+            (Path(d) / fetch.HASH_FILE).write_bytes(inputs_hash)
+        elif inputs_hash is not None:
             (Path(d) / fetch.HASH_FILE).write_text(inputs_hash + "\n")
         path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["tar", "--zstd", "-cf", str(path), "-C", d, "."], check=True)
@@ -290,6 +294,19 @@ class RefusalTest(Case):
         self.assertIsNone(r.prefix)
         self.assertIn("does not extract", r.refusals[0])
 
+    def test_invalid_utf8_inputs_hash_is_refused_and_falls_back(self) -> None:
+        self.stage()
+        rel = FakeReleases(
+            make_archive(self.tmp / "r.tar.zst", "bad-utf8", inputs_hash=b"\xff\xfe\n")
+        )
+        r = self.run_fetch("hosted_pr", rel)
+        self.assertEqual(
+            (r.source, self.installed(), self.rebuilt), ("staged", "staged", 0)
+        )
+        self.assertEqual(len(r.refusals), 1)
+        self.assertIn("inputs-hash.txt", r.refusals[0])
+        self.assertIn("UTF-8", r.refusals[0])
+
 
 class DuplicateTitleTest(Case):
     def test_two_releases_with_the_title_are_refused(self) -> None:
@@ -358,7 +375,7 @@ class InstallTest(Case):
             make_archive(self.tmp / "a.tar.zst", "one"), TAG, self.root
         )
         self.assertEqual(prefix.stat().st_mode & 0o777, 0o755)
-        # What toolchain:smoke and the gate do: paths under the prefix, through the symlink.
+        # What the gate does: paths under the prefix, through the symlink.
         self.assertTrue((prefix / "bin/marker").is_file())
         self.assertEqual(Path(os.path.realpath(prefix)).parent, self.root.resolve())
 
@@ -589,6 +606,45 @@ class SourceErrorTest(Case):
                 self.assertRaises(fetch.SourceError),
             ):
                 fetch.GhReleases().find(TAG)
+
+    def test_download_failure_outside_actions_stops_without_rebuilding(self) -> None:
+        def run(cmd, **kw):
+            if cmd[:2] == ["gh", "api"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, json.dumps([[release_json()]]), ""
+                )
+            if cmd[:3] == ["gh", "release", "download"]:
+                raise subprocess.CalledProcessError(1, cmd, "", "HTTP 502: Bad Gateway")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        order = fetch.sources(fetch.Context("outside"))
+        with mock.patch.object(fetch.subprocess, "run", run):
+            r = fetch.fetch(
+                TAG,
+                self.root,
+                order,
+                fetch.GhReleases(),
+                lambda _: True,
+                self.rebuild_ok,
+                self.staged,
+                self.log.append,
+                stop_on_source_error=True,
+            )
+        self.assertIsNone(r.prefix)
+        self.assertEqual(self.rebuilt, 0)
+        self.assertIn("HTTP 502", r.errors[0])
+        self.assertTrue(any("stopping, no rebuild" in x for x in self.log))
+
+    def test_download_without_gh_is_a_source_error(self) -> None:
+        def missing(cmd, **kw):
+            raise FileNotFoundError("gh")
+
+        rel = fetch.Release(TAG, TAG, (f"{TAG}.tar.zst",))
+        with (
+            mock.patch.object(fetch.subprocess, "run", missing),
+            self.assertRaises(fetch.SourceError),
+        ):
+            fetch.GhReleases().download(rel, f"{TAG}.tar.zst", self.tmp)
 
 
 class GhBoundaryTest(unittest.TestCase):
