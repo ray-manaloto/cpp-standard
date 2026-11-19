@@ -131,21 +131,6 @@ Note: historical prose tested with mise 2026.11.8 stays untouched.
 | mise 2026.11.9 | the release tarball | no | pin |
 Expected: the digest of `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7`.
 '''
-".github/workflows/spike-m0-h.yml" = '''
-jobs:
-  p2996:
-    container:
-      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
-'''
-".github/workflows/spike-m0-bj.yml" = '''
-jobs:
-  gcc:
-    container:
-      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
-  clang:
-    container:
-      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
-'''
 
 [[vector]]
 name = "the valid tree passes"
@@ -1045,35 +1030,6 @@ v=2026.11.9 a="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
 | Ubuntu 26.10 "stonking" | `ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7` | no | base |
 | mise 2026.11.9 | the release tarball | no | pin |
 Expected: the digest of `ubuntu:26.10@sha256:0000000000000000000000000000000000000000000000000000000000000000`.
-'''
-
-[[vector]]
-name = "group: spike-m0-h.yml Ubuntu digest differs"
-reject = "group"
-path = ".github/workflows/spike-m0-h.yml"
-
-[vector.change]
-".github/workflows/spike-m0-h.yml" = '''
-jobs:
-  p2996:
-    container:
-      image: ubuntu:26.10@sha256:0000000000000000000000000000000000000000000000000000000000000000
-'''
-
-[[vector]]
-name = "group: spike-m0-bj.yml second job Ubuntu digest differs"
-reject = "group"
-path = ".github/workflows/spike-m0-bj.yml"
-
-[vector.change]
-".github/workflows/spike-m0-bj.yml" = '''
-jobs:
-  gcc:
-    container:
-      image: ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7
-  clang:
-    container:
-      image: ubuntu:26.10@sha256:0000000000000000000000000000000000000000000000000000000000000000
 '''
 
 [[vector]]

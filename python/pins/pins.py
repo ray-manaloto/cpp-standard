@@ -206,19 +206,6 @@ COPY_GROUP: tuple[GroupCopy, ...] = (
         "A2 expected digest",
         re.compile(r"^Expected: the digest of `([^`\n]+)`", re.MULTILINE),
     ),
-    # M0 spike workflows: remove these entries when the workflows are deleted after M0.
-    GroupCopy(
-        "ubuntu",
-        ".github/workflows/spike-m0-h.yml",
-        "container image",
-        re.compile(r"^[ \t]+image:[ \t]*['\"]?([^\s'\"#]+)['\"]?", re.MULTILINE),
-    ),
-    GroupCopy(
-        "ubuntu",
-        ".github/workflows/spike-m0-bj.yml",
-        "container image",
-        re.compile(r"^[ \t]+image:[ \t]*['\"]?([^\s'\"#]+)['\"]?", re.MULTILINE),
-    ),
 )
 
 YAML_QUOTED = re.compile(r"""^(['"])(.*?)\1(?:[ \t]+#.*)?$""")
