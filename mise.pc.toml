@@ -3,8 +3,10 @@
 # this. Check from the Mac: mise run pc:doctor.
 #
 # A copy of dotfiles' config.pc.toml, its entries unchanged, by Phase 2 of
-# docs/designs/level-1/machine-bootstrap-migration.md (D139, D141); dotfiles' file still applies until Phase 3.
-# Every comment below is dotfiles': issue numbers are dotfiles issues, and "the repository" is dotfiles.
+# docs/designs/level-1/machine-bootstrap-migration.md (D139, D141). Since Phase 3's link switch on 2026-11-17 this
+# file is the PC's declared config: the PC's config.pc.toml links to it in the PC's checkout, which stays on main.
+# Phase 3's steps 2 and 3 (dotfiles drops its copy and points its PC rules here) and a green pc-smoke.yml run are
+# still open. Every comment below is dotfiles': issue numbers are dotfiles issues, and "the repository" is dotfiles.
 #
 # Content is inline, not `source`: dotfiles links its file into the global config folder, and mise resolves a
 # relative source against the link's folder, not the checkout's (mise 2026.11.9, read in a scratch config folder).
