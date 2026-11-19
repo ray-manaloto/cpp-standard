@@ -1,6 +1,7 @@
 """Launch an agy worker in a ticket's worktree from the reviewed rules file, after a sign-in preflight (#278).
 
   python -I agy_worker.py WORKTREE BRIEF [--plan PLAN_ID] [--model M] [--dry-run]
+  python -I agy_worker.py --health
 
 Refuses (exit 3, nothing started) a worktree that is not a folder directly under a `cpp-standard.worktrees`
 folder, a missing brief, a missing plan folder, and an agy that is not signed in. The plan folder is
@@ -9,14 +10,22 @@ environment. The preflight starts agy in a scratch folder with one trivial promp
 update needed" or "not signed in" stops the launch and names the fix. The rules are
 `.agents/agy-worker-settings.json`, passed with --settings, so the owner's own agy settings are never written.
 --dry-run prints the launch line and runs no agy. Exit 2 is a usage error.
+
+The banner "Sign-in update needed" is a TUI warning that `agy -p` never prints, so the preflight also reads agy's own
+log: a launch whose stored sign-in lacks the aicode scope logs "OAuth token lacks .../auth/aicode" (aicode_scope.go).
+Both the guard (after the probe, on the log the probe just wrote) and `--health` (the newest log, no agy run; the
+doctor line) use it. Never reads a token or login file, only the log text. The Antigravity IDE app shares agy's one
+keychain entry (upstream antigravity-cli #1610), so a running IDE is named in the refusal and the health line.
 """
 
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -26,6 +35,9 @@ PLANS = "cpp-standard.plans"
 MODEL = "gemini-pro-orchestrator-neon"
 PROBE = "Reply with only the word ok. Do not run any tool."
 REFUSED = 3
+LOG_DIR = Path.home() / ".gemini" / "antigravity-cli" / "log"
+LACKS = re.compile(r"OAuth token lacks \S*/auth/aicode")
+IDE_PATTERN = "Antigravity.app/Contents/MacOS/Antigravity"
 # Markers from the ticket and the owner's rules; no capture of print mode's own wording exists yet.
 STALE = ("sign-in update needed",)
 SIGNED_OUT = ("not signed in",)
@@ -57,6 +69,8 @@ def refusal_for(state: str) -> str | None:
     """The refusal message for a preflight state, or None when the worker may start."""
     if state == "ok":
         return None
+    if state == "scope":
+        return scope_refusal()
     what = {
         "stale": "agy shows 'Sign-in update needed'",
         "signed-out": "agy is not signed in",
@@ -64,8 +78,65 @@ def refusal_for(state: str) -> str | None:
     return f"{what}; fix: {FIX}"
 
 
+def log_dir() -> Path:
+    return Path(os.environ.get("AGY_LOG_DIR") or LOG_DIR)
+
+
+def newest_log(since: float | None = None) -> Path | None:
+    """agy's newest per-launch log (cli-<date>_<time>.log), or None; with since, only one written at or after it."""
+    logs = sorted(log_dir().glob("cli-[0-9]*.log"))
+    if since is not None:
+        logs = [p for p in logs if p.stat().st_mtime >= since]
+    return logs[-1] if logs else None
+
+
+def scope_state(log: Path | None) -> str:
+    """ "stale" when the launch logged a token without the aicode scope, "ok" when it did not, "unknown" with no log."""
+    if log is None:
+        return "unknown"
+    return "stale" if LACKS.search(log.read_text(errors="replace")) else "ok"
+
+
+def ide_running() -> bool:
+    """True while the Antigravity IDE app runs; it shares agy's keychain sign-in."""
+    try:
+        done = subprocess.run(
+            ["pgrep", "-f", IDE_PATTERN], check=False, capture_output=True
+        )
+    except FileNotFoundError:
+        return False
+    return done.returncode == 0
+
+
+def scope_refusal() -> str:
+    """The refusal for a sign-in that lacks the aicode scope: the owner step, and the IDE when it is running."""
+    msg = "owner: run /logout in any agy tab, then sign in with Google again (tick every permission box)"
+    if ide_running():
+        msg += "; the Antigravity IDE is running and shares agy's sign-in, so quit it first"
+    return f"agy's sign-in lacks the aicode scope; {msg}"
+
+
+def health() -> tuple[int, str]:
+    """The doctor line: exit code and text, from the newest agy log; runs no agy."""
+    state = scope_state(newest_log())
+    ide = (
+        " (the Antigravity IDE is running and shares agy's sign-in)"
+        if ide_running()
+        else ""
+    )
+    if state == "stale":
+        return (
+            1,
+            f"MISSING agy sign-in lacks the aicode scope in the newest log; owner: run /logout in any agy tab{ide}",
+        )
+    if state == "unknown":
+        return 0, f"ok    agy sign-in: no agy log yet{ide}"
+    return 0, f"ok    agy sign-in: newest log shows the aicode scope{ide}"
+
+
 def preflight(agy: str = "agy", timeout: float = 180) -> str:
-    """Start agy in a scratch folder, send the probe, return the sign-in state of what it printed."""
+    """Start agy in a scratch folder, send the probe, return the sign-in state of what it printed and logged."""
+    started = time.time() - 1
     with tempfile.TemporaryDirectory() as scratch:
         try:
             done = subprocess.run(
@@ -81,7 +152,10 @@ def preflight(agy: str = "agy", timeout: float = 180) -> str:
             return "unknown"
         except FileNotFoundError as err:
             raise RefusedError(f"agy is not installed: {err}") from err
-    return signin_state(done.stdout, done.stderr, done.returncode)
+    state = signin_state(done.stdout, done.stderr, done.returncode)
+    if state == "ok" and scope_state(newest_log(started)) == "stale":
+        return "scope"
+    return state
 
 
 def check_launch(
@@ -130,12 +204,19 @@ def build_argv(
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="agents:agy-worker")
-    ap.add_argument("worktree", type=Path)
-    ap.add_argument("brief", type=Path)
+    ap.add_argument("worktree", type=Path, nargs="?")
+    ap.add_argument("brief", type=Path, nargs="?")
+    ap.add_argument("--health", action="store_true")
     ap.add_argument("--plan", default=os.environ.get("PLAN_ID"))
     ap.add_argument("--model", default=MODEL)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    if args.health:
+        code, line = health()
+        print(line)
+        return code
+    if args.worktree is None or args.brief is None:
+        ap.error("WORKTREE and BRIEF are required")
     try:
         wt, brief, plan = check_launch(args.worktree, args.brief, args.plan)
         if not SETTINGS.is_file():

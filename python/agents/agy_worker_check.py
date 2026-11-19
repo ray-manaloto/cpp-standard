@@ -4,6 +4,7 @@ plan folders. It never starts the real agy or reads its settings. Prints one lin
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,12 +17,20 @@ import agy_worker
 STANDIN = """#!{python} -I
 import json, os, sys
 if "-p" in sys.argv:
+    if os.environ.get("STANDIN_AGYLOG"):
+        os.makedirs(os.environ["AGY_LOG_DIR"], exist_ok=True)
+        with open(os.path.join(os.environ["AGY_LOG_DIR"], "cli-20990101_000000.log"), "w") as lg:
+            lg.write(os.environ["STANDIN_AGYLOG"] + "\\n")
     print(open(os.environ["STANDIN_SCREEN"]).read())
     sys.exit(int(os.environ.get("STANDIN_RC", "0")))
 else:
     with open(os.environ["STANDIN_LOG"], "w") as log:
         log.write(json.dumps(sys.argv[1:]))
 """
+PGREP = """#!/bin/sh
+exit ${STANDIN_IDE:-1}
+"""
+LACKS_LINE = "E1119 03:49:29.1 aicode_scope.go:88] OAuth token lacks https://www.googleapis.com/auth/aicode; routing AICode traffic to CCPA"
 SCREENS = {
     "signed-in": "ok\n",
     "stale": "Sign-in update needed\n  Your Google sign-in has expired. Run /logout, then sign in again.\n> \n",
@@ -34,7 +43,13 @@ PLAN = "2026-01-01-1-x"
 
 
 def run(
-    root: Path, screen: str, *args: str, plan: bool = True, rc: int = 0
+    root: Path,
+    screen: str,
+    *args: str,
+    plan: bool = True,
+    rc: int = 0,
+    agylog: str = "",
+    ide: bool = False,
 ) -> tuple[int, str, list[str] | None]:
     log = root / "agy.log"
     log.unlink(missing_ok=True)
@@ -45,7 +60,11 @@ def run(
         "STANDIN_SCREEN": str(root / "screen.txt"),
         "STANDIN_LOG": str(log),
         "STANDIN_RC": str(rc),
+        "STANDIN_IDE": "0" if ide else "1",
+        "STANDIN_AGYLOG": agylog,
+        "AGY_LOG_DIR": str(root / "logs"),
     }
+    shutil.rmtree(root / "logs", ignore_errors=True)
     if plan:
         env["PLAN_ID"] = PLAN
     done = subprocess.run(
@@ -79,6 +98,9 @@ def main() -> int:
         standin = root / "bin" / "agy"
         standin.write_text(STANDIN.format(python=sys.executable))
         standin.chmod(0o755)
+        pgrep = root / "bin" / "pgrep"
+        pgrep.write_text(PGREP)
+        pgrep.chmod(0o755)
         wt = root / agy_worker.WORKTREES / "t1"
         wt.mkdir(parents=True)
         plan = root / agy_worker.PLANS / ".planning" / PLAN
@@ -132,6 +154,66 @@ def main() -> int:
             "classifier: nonzero exit is unknown",
             agy_worker.signin_state("ok", "", 1) == "unknown",
         )
+
+        rc, out, argv = run(root, "signed-in", str(wt), str(brief), agylog=LACKS_LINE)
+        case(
+            "ok reply but the log lacks aicode: refuses with the owner step, starts no worker",
+            rc == 3
+            and "owner: run /logout" in out
+            and "aicode" in out
+            and "IDE" not in out
+            and argv is None,
+            out,
+        )
+        rc, out, argv = run(
+            root, "signed-in", str(wt), str(brief), agylog=LACKS_LINE, ide=True
+        )
+        case(
+            "lacks aicode with the IDE running: the refusal names the IDE",
+            rc == 3 and "Antigravity IDE" in out and argv is None,
+            out,
+        )
+        rc, out, argv = run(
+            root, "signed-in", str(wt), str(brief), agylog="I1119 Auth succeeded"
+        )
+        case(
+            "log without the lacks line: starts the worker",
+            rc == 0 and argv is not None,
+            out,
+        )
+
+        env = {
+            "PATH": f"{root / 'bin'}:{os.environ['PATH']}",
+            "AGY_LOG_DIR": str(root / "hl"),
+        }
+        for name, line, ide, want_rc, want in (
+            ("no log", None, False, 0, "no agy log yet"),
+            ("good log", "I1119 Auth succeeded", False, 0, "shows the aicode scope"),
+            ("lacking log", LACKS_LINE, False, 1, "MISSING"),
+            (
+                "lacking log, IDE running",
+                LACKS_LINE,
+                True,
+                1,
+                "Antigravity IDE is running",
+            ),
+        ):
+            shutil.rmtree(root / "hl", ignore_errors=True)
+            if line:
+                (root / "hl").mkdir()
+                (root / "hl" / "cli-20990101_000000.log").write_text(line + "\n")
+            done = subprocess.run(
+                [sys.executable, "-I", str(HERE / "agy_worker.py"), "--health"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env | {"STANDIN_IDE": "0" if ide else "1"},
+            )
+            case(
+                f"--health: {name}",
+                done.returncode == want_rc and want in done.stdout,
+                done.stdout + done.stderr,
+            )
 
         rc, out, argv = run(root, "signed-in", str(wt), str(brief))
         flags = {
