@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 #MISE description="The gate: configure, build, test and gcov-mode coverage for each gate preset"
 # environment-standard.md section 5. The tracer bullet (#125) runs steps 1,
-# 3, 4 and 5 for the gcc16-coverage preset. M1a PR 4 adds the probes and the
-# capability lock, gate:policy, the other presets and checks; each is a
-# further step or preset in this file.
+# 3, 4 and 5 for the gcc16-coverage preset. M1a PR 4 (#132) adds the clang23 and p2996
+# presets, each with its own coverage report (ci:coverage); the probes, the capability lock and
+# gate:policy are further steps in this file.
 set -euo pipefail
 
-# The gate presets. PR 4 takes the list from the capability lock.
-gate_presets=(gcc16-coverage)
+# The gate presets. A later PR takes the list from the capability lock. ci:fast runs the gate on one
+# of them through CPPSTD_GATE_PRESETS (space-separated).
+read -r -a gate_presets <<<"${CPPSTD_GATE_PRESETS:-gcc16-coverage clang23-coverage p2996-coverage}"
 
 root="${MISE_PROJECT_ROOT:-$PWD}"
 cd "$root"
+
+# Step 0: the dependencies are the pinned ones (vcpkg at the baseline, D113), and the p2996
+# presets have a toolchain (toolchain:fetch prints its prefix; the workflow passes it).
+mise run -q vcpkg:bootstrap --check
+if [[ " ${gate_presets[*]} " == *" p2996-coverage "* && ! -d "${CPPSTD_P2996_PREFIX:-}/bin" ]]; then
+  echo "FAIL: CPPSTD_P2996_PREFIX must name the installed p2996 toolchain (mise run toolchain:fetch)"
+  exit 1
+fi
 
 # Steps 1, 3 and 4: configure, build, run the tests. Each preset starts from
 # an empty build tree, so no cache entry or .gcda of an earlier run counts.
@@ -27,45 +36,9 @@ build_and_test() { # <preset>
   echo "::endgroup::"
 }
 
-# Step 5: gcov-mode coverage of first-party code (src/) with the compiler's
-# own gcov (CPPSTD_GCOV in the preset), 100% lines and no merged report
-# (D88, D131).
-coverage() { # <preset>
-  local dir="build/$1" gcov report
-  gcov="$(sed -n 's/^CPPSTD_GCOV:[A-Z]*=//p' "$dir/CMakeCache.txt")"
-  [[ -n "$gcov" ]] || {
-    echo "FAIL: preset $1 sets no CPPSTD_GCOV"
-    return 1
-  }
-  report="$dir/coverage.txt"
-  echo "::group::coverage $1"
-  gcovr --version | sed -n 1p
-  # gcovr exits 2 when the line threshold is missed. The preset puts
-  # --coverage in CMAKE_CXX_FLAGS, so CMake's compiler-identification build
-  # under CMakeFiles/<version>/ also leaves a .gcno; it is not project code.
-  gcovr --root "$root" --object-directory "$dir" --gcov-executable "$gcov" \
-    --gcov-exclude-directories '.*/CMakeFiles/[0-9][0-9.]*(/.*)?$' \
-    --filter "$root/src/" --txt "$report" --csv "$dir/coverage.csv" \
-    --print-summary --fail-under-line 100
-  cat "$report"
-  echo "::endgroup::"
-  # An empty report also meets the threshold, so each module in src/ must
-  # have its row with a non-zero line count. The CSV report keeps one row
-  # per file (the text report wraps long names).
-  local f missing=0
-  while IFS= read -r f; do
-    awk -F, -v f="$f" '$1 == f && $2 > 0 { found = 1 } END { exit !found }' "$dir/coverage.csv" || {
-      echo "FAIL: $f is not in the coverage report of $1"
-      missing=1
-    }
-  done < <(cd "$root" && find src -name '*.cppm' | sort)
-  [[ $missing -eq 0 ]] || return 1
-  echo "PASS: 100% line coverage of src/ for $1"
-}
-
 for preset in "${gate_presets[@]}"; do
   build_and_test "$preset"
   case "$preset" in
-    *-coverage) coverage "$preset" ;;
+    *-coverage) mise run -q ci:coverage "$preset" ;;
   esac
 done

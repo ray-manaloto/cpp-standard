@@ -1,0 +1,7 @@
+{
+  "dependencies": [
+    "bext-ut"
+  ],
+  "name": "cpp-standard",
+  "version-string": "0"
+}

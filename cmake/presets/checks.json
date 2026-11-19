@@ -2,14 +2,15 @@
   "configurePresets": [
     {
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_FLAGS": "--coverage -O0",
-        "CMAKE_EXE_LINKER_FLAGS": "--coverage",
-        "CMAKE_SHARED_LINKER_FLAGS": "--coverage"
+        "CMAKE_BUILD_TYPE": "Debug"
+      },
+      "environment": {
+        "CXXFLAGS": "--coverage -O0",
+        "LDFLAGS": "--coverage"
       },
       "hidden": true,
       "name": "coverage"
     }
   ],
-  "version": 10
+  "version": 13
 }

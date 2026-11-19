@@ -28,11 +28,19 @@ design is `docs/designs/environment-standard.md`. See `docs/agents/domain.md`.
 - Check: `hk check` runs the hk steps on the changed files; it passes before each commit. `mise run check` runs
   them on every file (`hk check --all`) and is a heavy run.
 - Gate: `mise run ci` configures, builds, tests and measures coverage for each gate preset. CI runs it in the
-  `gate-linux-arm64` job; on the owner's Mac it is a heavy run.
+  `gate-linux-arm64` job; on the owner's Mac it is a heavy run. It needs `CPPSTD_P2996_PREFIX` (the prefix
+  `toolchain:fetch` prints) and a vcpkg checkout at the pinned baseline (`mise run vcpkg:bootstrap`). The coverage
+  rule is `docs/standard/coverage.md`.
+- Fast gate: `mise run ci:fast [preset]` runs the gate on one preset (default `gcc16-coverage`), in the tools image.
+  Same heavy-run rules as the gate.
+- Doctor: `mise run doctor` lists what a machine or the tools image lacks for the gate (compilers, tools, the p2996
+  prefix, the vcpkg baseline, the artifact tags). Read-only, not a heavy run.
 - Must-fail: `mise run ci-must-fail` runs every fixture in `fixtures/must-fail/` (listed in its `expected.toml`) and
   fails when a check accepts its planted fault. CI runs it in the `must-fail` job in the tools image; outside Actions
   it runs in that image as a container run, which waits for the coordinator's go-ahead. The toolchain fixture needs
-  gh, a GitHub token in `GH_TOKEN` (or a gh login) and the network; without them it reports "could not run".
+  gh, a GitHub token in `GH_TOKEN` (or a gh login) and the network (the wrong-hash fixture downloads the newest
+  p2996 release, about 700 MB); without them it reports "could not run". The uncovered-line fixtures need the three
+  compilers and `CPPSTD_P2996_PREFIX`.
 - Toolchain: `mise run toolchain:fetch` installs clang-p2996 by its artifact tag: `main`'s attested release, else a
   rebuild (outside Actions it never takes a staged copy, and it stops, without rebuilding, when it cannot ask
   GitHub, e.g. no token); `--release-only` takes the release or fails.

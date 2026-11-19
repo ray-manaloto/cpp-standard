@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#MISE description="The coverage check: gcov-mode, 100% lines of first-party code (src/) in one build tree"
+#USAGE arg "[preset]" help="The gate preset whose build tree (build/<preset>) is measured"
+#USAGE flag "--build-dir <dir>" help="The build tree (default: build/<preset>)"
+#USAGE flag "--source-root <dir>" help="The tree whose src/ is measured (default: this repository)"
+#USAGE flag "--gcov <cmd>" help="The compiler's own gcov command (default: CPPSTD_GCOV of the preset's CMakeCache.txt)"
+#
+# environment-standard.md section 5 step 5 (D88, D131): one report per compiler build tree, never
+# merged, measured with that compiler's own gcov tool: 100% line coverage of src/ and no exclusion
+# markers. The gate (ci) runs it per preset; the uncovered-line must-fail fixtures run it on a
+# planted fault and expect the failure named "ci:coverage".
+set -euo pipefail
+repo="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+root="${usage_source_root:-$repo}"
+dir="${usage_build_dir:-}"
+if [[ -z "$dir" ]]; then
+  [[ -n "${usage_preset:-}" ]] || {
+    echo "ci:coverage: FAIL give a preset or --build-dir"
+    exit 1
+  }
+  dir="$repo/build/$usage_preset"
+fi
+label="${usage_preset:-$dir}"
+gcov="${usage_gcov:-}"
+if [[ -z "$gcov" ]]; then
+  gcov="$(sed -n 's/^CPPSTD_GCOV:[A-Z]*=//p' "$dir/CMakeCache.txt")"
+fi
+[[ -n "$gcov" ]] || {
+  echo "ci:coverage: FAIL $label sets no gcov command (CPPSTD_GCOV)"
+  exit 1
+}
+report="$dir/coverage.txt"
+echo "::group::coverage $label ($gcov)"
+gcovr --version | sed -n 1p
+# gcovr exits 2 when the line threshold is missed. The preset puts --coverage in the flags, so
+# CMake's compiler-identification build under CMakeFiles/<version>/ also leaves a .gcno; it is not
+# project code.
+rc=0
+gcovr --root "$root" --object-directory "$dir" --gcov-executable "$gcov" \
+  --gcov-exclude-directories '.*/CMakeFiles/[0-9][0-9.]*(/.*)?$' \
+  --filter "$root/src/" --txt "$report" --csv "$dir/coverage.csv" \
+  --print-summary --fail-under-line 100 || rc=$?
+[[ ! -f "$report" ]] || cat "$report"
+echo "::endgroup::"
+if [[ $rc -ne 0 ]]; then
+  echo "ci:coverage: FAIL $label is below 100% line coverage of src/ (gcovr exit $rc)"
+  exit 1
+fi
+# An empty report also meets the threshold, so each first-party source in src/ must have its row
+# with a non-zero line count. The CSV report keeps one row per file (the text report wraps long
+# names).
+missing=0
+while IFS= read -r f; do
+  awk -F, -v f="$f" '$1 == f && $2 > 0 { found = 1 } END { exit !found }' "$dir/coverage.csv" || {
+    echo "ci:coverage: FAIL $f is not in the coverage report of $label"
+    missing=1
+  }
+done < <(cd "$root" && find src \( -name '*.cppm' -o -name '*.cpp' \) | sort)
+[[ $missing -eq 0 ]] || exit 1
+echo "PASS: 100% line coverage of src/ for $label"

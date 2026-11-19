@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Ticket #132: a source with one uncovered line must fail the coverage check on clang23 (D88, D131)
+exec "$(dirname "$0")/../uncovered-line.sh" clang23

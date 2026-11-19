@@ -155,6 +155,10 @@ local gateSteps = new Mapping<String, Step> {
   ["hadolint"] = (Builtins.hadolint) {
     glob = List("**/Dockerfile*", "**/*.Dockerfile")
   }
+  // CMake listfiles and the presets' toolchain files (#132, D102).
+  ["cmake-format"] = (Builtins.cmake_format) {
+    glob = List("**/CMakeLists.txt", "**/*.cmake")
+  }
   ["mise"] = (Builtins.mise) {
     glob = List("mise.toml", "mise.ci.toml", ".mise/conf.d/*.toml")
   }

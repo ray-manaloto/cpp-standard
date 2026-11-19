@@ -14,12 +14,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TASK = ROOT / ".mise/tasks/ci-must-fail"
+# Under a git hook GIT_DIR and GIT_WORK_TREE name the outer repository: every git call and every
+# fixture here runs without them, or a test commit would land in the real repository.
+_REPO_VARS = subprocess.run(
+    ["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True
+).stdout.split()
+CLEAN_ENV = {k: v for k, v in os.environ.items() if k not in _REPO_VARS}
 
 
 def run(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(TASK)],
-        env=os.environ | {"MISE_PROJECT_ROOT": str(ROOT)} | env,
+        env=CLEAN_ENV | {"MISE_PROJECT_ROOT": str(ROOT)} | env,
         capture_output=True,
         text=True,
         check=False,
@@ -85,6 +91,36 @@ class Runner(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("toolchain-unattested went green", r.stderr)
         self.assertIn("installed 'refused'", r.stderr)
+        # The wrong-hash fixture runs in the same planted run; it is green too, or could not run.
+        self.assertRegex(r.stderr, r"toolchain-wrong-hash (went green|could not run)")
+
+    def test_a_fixture_that_moves_head_fails_the_run(self) -> None:
+        repo = self.dir / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=CLEAN_ENV)
+        git = [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+        ]
+        subprocess.run(
+            [*git, "commit", "-q", "--allow-empty", "-m", "one"],
+            check=True,
+            env=CLEAN_ENV,
+        )
+        d = self.dir / "fx"
+        d.mkdir()
+        (d / "run").write_text(
+            f"#!/bin/sh\n{' '.join(git)} commit -q --allow-empty -m two\nexit 0\n"
+        )
+        (d / "run").chmod(0o755)
+        (self.dir / "expected.toml").write_text('[fixture.fx]\ncheck = "some:check"\n')
+        r = run({"CPPSTD_MUST_FAIL_DIR": str(self.dir), "MISE_PROJECT_ROOT": str(repo)})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("fx changed the repository", r.stderr)
 
     def test_no_expected_toml_fails(self) -> None:
         self.fixture("a", 0, listed=False)

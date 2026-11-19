@@ -2,12 +2,28 @@
   "configurePresets": [
     {
       "cacheVariables": {
-        "CMAKE_CXX_COMPILER": "g++-16",
-        "CPPSTD_GCOV": "gcov-16"
+        "CPPSTD_GCOV": "gcov-16",
+        "VCPKG_TARGET_TRIPLET": "arm64-linux-gcc16"
       },
       "hidden": true,
       "name": "gcc16"
+    },
+    {
+      "cacheVariables": {
+        "CPPSTD_GCOV": "llvm-cov-23 gcov",
+        "VCPKG_TARGET_TRIPLET": "arm64-linux-clang23-libcxx"
+      },
+      "hidden": true,
+      "name": "clang23"
+    },
+    {
+      "cacheVariables": {
+        "CPPSTD_GCOV": "$env{CPPSTD_P2996_PREFIX}/bin/llvm-cov gcov",
+        "VCPKG_TARGET_TRIPLET": "arm64-linux-p2996-libcxx"
+      },
+      "hidden": true,
+      "name": "p2996"
     }
   ],
-  "version": 10
+  "version": 13
 }

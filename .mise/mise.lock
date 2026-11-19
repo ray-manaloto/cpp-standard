@@ -358,6 +358,12 @@ url = "https://github.com/suzuki-shunsuke/pinact/releases/download/v5.0.2/pinact
 url_api = "https://api.github.com/repos/suzuki-shunsuke/pinact/releases/assets/675205643"
 provenance = "github-attestations"
 
+[[tools."pipx:cmakelang"]]
+version = "0.6.13"
+backend = "pipx:cmakelang"
+specifiers = ["0.6.13"]
+uv = { path = "locks/pipx-cmakelang/0.6.13", digest = "sha256:a5a8119706041987c2fb2e332772bc7a098388b8ab28f72870bbebaa13db8125" }
+
 [[tools.pkl]]
 version = "0.33.0"
 backend = "aqua:apple/pkl"

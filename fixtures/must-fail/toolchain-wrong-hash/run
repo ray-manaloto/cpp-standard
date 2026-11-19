@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""Must-fail fixture: toolchain:fetch refuses an archive for its inputs hash (ticket #132, spec #122).
+
+The archive is the newest real p2996 release, attested by publish.yml on main, so the real
+`gh attestation verify` accepts it. It is offered under a tag whose hash differs from the one in the
+archive's inputs-hash.txt (D131), on the code path used outside Actions (release, else a rebuild).
+The release store is a local stand-in that serves the real archive; the rebuild and the install
+before are small stand-in archives, so the content installed afterwards tells which one won. It exits 0
+only when:
+
+1. gh accepted the archive (its signer is fine), so the refusal below is for its hash, not its signer;
+2. fetch refused it for its inputs hash;
+3. with a successful rebuild, the rebuilt content is installed, never the refused archive;
+4. with a failed rebuild, the content installed before is unchanged.
+
+No gh, token or network exits 3 ("could not run", see `mise run ci-must-fail`). The download is about
+700 MB. MUST_FAIL_PLANT=accept makes the tag's hash the archive's own, so the archive is installed
+and the fixture goes green: tests/must_fail/ uses it to show that `mise run ci-must-fail` fails then.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "python/toolchain"))
+
+import fetch
+
+PREFIX = "p2996-linux-arm64-"
+WRONG = "0badc0de0badc0de"  # the hash the offered tag claims; never a real one
+COULD_NOT_RUN = 3
+
+
+def archive(path: Path, content: str, hash_: str) -> Path:
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "bin").mkdir()
+        (Path(d) / "bin/marker").write_text(f"{content}\n{os.urandom(16).hex()}\n")
+        (Path(d) / fetch.HASH_FILE).write_text(hash_ + "\n")
+        subprocess.run(["tar", "--zstd", "-cf", str(path), "-C", d, "."], check=True)
+    return path
+
+
+def could_not_run(why: str) -> int:
+    print(
+        f"FIXTURE COULD NOT RUN: {why} (it needs gh, a token in GH_TOKEN or a gh login, and the network)",
+        file=sys.stderr,
+    )
+    return COULD_NOT_RUN
+
+
+class LocalRelease:
+    """A stand-in for GitHub Releases: one release of `tag` holding the real archive."""
+
+    def __init__(self, tag: str, real: Path) -> None:
+        self.tag, self.real = tag, real
+
+    def find(self, tag: str) -> fetch.Release | None:
+        listing = [
+            {
+                "tag_name": self.tag,
+                "name": self.tag,
+                "draft": False,
+                "assets": [{"name": f"{self.tag}.tar.zst"}],
+            }
+        ]
+        return fetch.pick_release(tag, listing)
+
+    def download(self, release: fetch.Release, asset: str, dest: Path) -> Path:
+        target = dest / asset
+        target.symlink_to(self.real)
+        return target
+
+
+def main() -> int:
+    # Under a git hook GIT_DIR names the outer repository; nothing here may reach it.
+    for var in subprocess.run(
+        ["git", "rev-parse", "--local-env-vars"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split():
+        os.environ.pop(var, None)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GITHUB_ACTIONS")}
+    ctx = fetch.Context.from_env(env)
+    order = fetch.sources(ctx)
+    problems: list[str] = []
+    if ctx.kind != "outside" or order != [fetch.RELEASE, fetch.REBUILD]:
+        problems.append(f"not the outside-Actions path: {ctx.kind}, {order}")
+
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        # The newest published p2996 release; no tag is hard-coded, since main's release moves.
+        try:
+            listing = subprocess.run(
+                [
+                    "gh",
+                    "release",
+                    "list",
+                    "--repo",
+                    fetch.REPO,
+                    "--json",
+                    "tagName",
+                    "--limit",
+                    "100",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            real_tag = next(
+                (
+                    r["tagName"]
+                    for r in json.loads(listing)
+                    if r["tagName"].startswith(PREFIX)
+                ),
+                None,
+            )
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            json.JSONDecodeError,
+        ) as e:
+            return could_not_run(f"gh could not list the releases: {e}")
+        if real_tag is None:
+            return could_not_run(f"no published {PREFIX}* release")
+        real_hash = real_tag[len(PREFIX) :]
+        if (
+            subprocess.run(
+                [
+                    "gh",
+                    "release",
+                    "download",
+                    real_tag,
+                    "--repo",
+                    fetch.REPO,
+                    "--pattern",
+                    f"{real_tag}.tar.zst",
+                    "--dir",
+                    str(tmp),
+                    "--clobber",
+                ],
+                check=False,
+            ).returncode
+            != 0
+        ):
+            return could_not_run(f"gh could not download {real_tag}")
+        real = tmp / f"{real_tag}.tar.zst"
+
+        offered = PREFIX + (
+            real_hash if os.environ.get("MUST_FAIL_PLANT") == "accept" else WRONG
+        )
+        verdicts: list[tuple[bool, str]] = []
+
+        def verifier(path: Path) -> bool:
+            try:
+                ok, out = fetch.gh_verify_report(path.resolve())
+            except FileNotFoundError:
+                return False
+            verdicts.append((ok, out))
+            return ok
+
+        rebuilt = archive(tmp / "rebuilt.tar.zst", "rebuilt", offered[len(PREFIX) :])
+        root = tmp / "installed"
+
+        def installed() -> str | None:
+            marker = root / offered / "bin/marker"
+            return marker.read_text().splitlines()[0] if marker.exists() else None
+
+        def rebuild_ok(_tag: str) -> Path:
+            return rebuilt
+
+        def rebuild_fails(tag: str) -> Path:
+            raise subprocess.CalledProcessError(1, ["artifact:build", tag])
+
+        for label, rebuild, want in (
+            ("refusal, then a successful stand-in rebuild", rebuild_ok, "rebuilt"),
+            ("refusal and no rebuild", rebuild_fails, "before"),
+        ):
+            fetch.install(
+                archive(tmp / "before.tar.zst", "before", offered[len(PREFIX) :]),
+                offered,
+                root,
+            )
+            r = fetch.fetch(
+                offered,
+                root,
+                order,
+                LocalRelease(offered, real),
+                verifier,
+                rebuild,
+                tmp / "staged",
+            )
+            got = installed()
+            print(f"{label}: installed {got!r} from {r.source}; refusals {r.refusals}")
+            if got != want and os.environ.get("MUST_FAIL_PLANT") != "accept":
+                problems.append(f"{label}: installed {got!r}, want {want!r}")
+            if not any(fetch.HASH_FILE in x for x in r.refusals):
+                problems.append(
+                    f"{label}: the release was not refused for its inputs hash"
+                )
+            if any("attestation" in x for x in r.refusals):
+                problems.append(f"{label}: refused for its attestation, not its hash")
+
+        if not verdicts:
+            return could_not_run("gh attestation verify did not run")
+        if not all(ok for ok, _ in verdicts):
+            out = next(o for ok, o in verdicts if not ok)
+            if re.search(
+                r"HTTP 401|Bad credentials|gh auth login|no such host|dial tcp|timed out",
+                out,
+                re.IGNORECASE,
+            ):
+                return could_not_run(out.strip())
+            problems.append(
+                f"gh did not accept the main-attested archive: {out.strip()}"
+            )
+
+    for p in problems:
+        print(f"FIXTURE WENT GREEN: {p}", file=sys.stderr)
+    if problems:
+        return 1
+    print("REFUSED as required: an archive with another inputs hash is never installed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
