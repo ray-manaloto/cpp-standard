@@ -249,6 +249,12 @@ local gateSteps = new Mapping<String, Step> {
     exclude = List("python/repo/tests/test_fnox_refs.py")
   }
   ["check-added-large-files"] = Builtins.check_added_large_files
+  // Until cutover the proxy rules in unix/home/.config/fnox/config.toml must equal the live dotfiles copy (dotfiles
+  // #794 moved the Kilo domain); it skips where that checkout is absent (CI).
+  ["fnox-proxy-drift"] {
+    glob = List("unix/home/.config/fnox/config.toml", ".mise/tasks/fnox/proxy-drift")
+    check = "mise run -q fnox:proxy-drift"
+  }
 }
 
 // The repotools and workflowtools suites (#154, D163): lint, types, codegen drift and 100%-coverage tests through each
