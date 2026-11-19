@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#MISE description="Start an agy worker in a ticket's worktree from the reviewed rules file, after a sign-in preflight (#278)"
+#USAGE arg "<worktree>" help="The ticket's worktree, a folder directly under cpp-standard.worktrees/"
+#USAGE arg "<brief>" help="The brief file the worker reads first"
+#USAGE flag "--plan <id>" help="The ticket's PLAN_ID (default: the PLAN_ID variable); its plan folder is added with --add-dir"
+#USAGE flag "--model <model>" help="agy's model (default: gemini-pro-orchestrator-neon)"
+#USAGE flag "--dry-run" help="Check the paths and print the launch line; start no agy"
+#
+# The launcher is python/agents/agy_worker.py (standard library only); its docstring has the checks. It refuses a
+# worktree outside cpp-standard.worktrees/, a missing brief or plan folder, and an agy that shows "Sign-in update
+# needed" or is not signed in. The rules are .agents/agy-worker-settings.json, passed with --settings (session
+# only). docs/agents/agy-workers.md says how the lead routes tickets and answers the worker's prompts.
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+args=("${usage_worktree:?}" "${usage_brief:?}")
+[[ -n "${usage_plan:-}" ]] && args+=(--plan "$usage_plan")
+[[ -n "${usage_model:-}" ]] && args+=(--model "$usage_model")
+[[ "${usage_dry_run:-}" == true ]] && args+=(--dry-run)
+exec uv run --no-project --quiet python -I -u "$root/python/agents/agy_worker.py" "${args[@]}"

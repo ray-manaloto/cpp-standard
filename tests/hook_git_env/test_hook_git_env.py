@@ -60,6 +60,7 @@ TEST_FIXTURE_TASKS = (
     ".mise/tasks/suites/cov",
     ".mise/tasks/agents/cov",
     ".mise/tasks/agents/testtab-check",
+    ".mise/tasks/agents/agy-worker-check",
     ".mise/tasks/slot/guard-check",
 )
 CLEAR_ENV_SNIPPET = "unset $(git rev-parse --local-env-vars)"

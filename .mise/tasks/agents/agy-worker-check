@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Check the agy worker launcher offline: a stand-in agy on PATH, scratch worktree, brief and plan folders; never starts agy (#278)"
+set -euo pipefail
+# A git hook exports GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and the rest; clear them (#280).
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/agy_worker_check.py"

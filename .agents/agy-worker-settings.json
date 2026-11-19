@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "command(rumdl)",
+      "command(typos)",
+      "command(ruff)",
+      "command(git status)",
+      "command(git diff)",
+      "command(git log)",
+      "command(git show)",
+      "command(git add)",
+      "command(mise run pins:validate)",
+      "command(mise run pins:cov)",
+      "command(ls)",
+      "command(grep)",
+      "command(rg)",
+      "command(wc)"
+    ],
+    "deny": [
+      "command(docker)",
+      "command(ssh)",
+      "command(scp)",
+      "command(sudo)",
+      "command(gh)",
+      "command(git push)",
+      "command(git commit)",
+      "command(git stash)",
+      "command(fnox)",
+      "command(hk)"
+    ]
+  }
+}
