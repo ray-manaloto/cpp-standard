@@ -96,7 +96,7 @@ add_dir() {
 }
 
 toolchain() { # <name> <os> <arch>
-  local t="toolchains/$1" f host apt platform
+  local t="toolchains/$1" f host apt platform packages pkg pin
   lines=""
   if [[ ! -f "$dir/$t/pins.toml" ]]; then
     echo "error: no toolchain $1: $t/pins.toml is not in commit HEAD"
@@ -122,7 +122,29 @@ toolchain() { # <name> <os> <arch>
     add_file vm/inputs.toml
     add_dir "$t/macos"
   fi
-  [[ $apt == true ]] && add_file .mise/conf.d/apt.toml
+  if [[ $apt == true ]]; then
+    # D162 as amended by #254: only the pins of the apt packages pins.toml names are
+    # inputs, each one canonical-JSON line keyed .mise/conf.d/apt.toml#<package>.
+    packages="$(yq -p toml -o json '.apt_packages' "$dir/$t/pins.toml" 2>/dev/null |
+      jq -r 'if type == "array" and length > 0 and all(.[]; type == "string") then .[] else "invalid" end')"
+    if [[ -z $packages || $packages == invalid ]]; then
+      echo "error: $t/pins.toml: apt_packages must name the apt packages the build uses"
+      return
+    fi
+    while IFS= read -r pkg; do
+      [[ $pkg == apt:* ]] || {
+        echo "error: $t/pins.toml: apt_packages holds '$pkg', not apt:<name>"
+        return
+      }
+      pin="$(yq -p toml -o json '.' "$dir/.mise/conf.d/apt.toml" 2>/dev/null |
+        jq -cS --arg p "$pkg" '.bootstrap.packages[$p] | if type == "object" then . else "missing" end')"
+      if [[ -z $pin || $pin == missing ]]; then
+        echo "error: .mise/conf.d/apt.toml has no pin for $pkg"
+        return
+      fi
+      add ".mise/conf.d/apt.toml#$pkg" "$pin"
+    done <<<"$packages"
+  fi
   host=()
   while IFS= read -r f; do host+=("$f"); done < <(yq -p toml -o json '.host_tools[]' "$dir/$t/pins.toml" | jq -r .)
   add_slice "$platform" ${host[@]+"${host[@]}"}

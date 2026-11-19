@@ -95,7 +95,7 @@ jobs:
   # M1a PR 2 (#128): waits until the tools image this commit needs exists, as main's image or,
   # in a pull-request or merge-queue run, the builder run's own pr- image (D54, D61, D62, D134),
   # for at most 180 minutes (D61, D159). M1a PR 3 (#130): it waits the same way for the p2996
-  # toolchain, as main's release or, in a pull-request or merge-queue run, the builder's cache
+  # toolchain, as main's OCI image or, in a pull-request or merge-queue run, the builder's cache
   # entry on this ref (D83, D91); it never builds. It also checks that publish.yml's inline names
   # and `artifact:names` agree (D114) and runs the unit tests of the wait, of resolve and of
   # toolchain:fetch's source table.
@@ -106,6 +106,7 @@ jobs:
     permissions:
       contents: read
       actions: read  # the builder run's artifacts and caches (section 6, D135)
+      packages: read  # GHCR probes
     env:
       MISE_TASK_RUN_AUTO_INSTALL: 'false'
     steps:
@@ -117,7 +118,9 @@ jobs:
           version: 2026.11.9
           install: false
       - name: Publisher and artifact:names agree; the wait and resolve cases
-        run: python3 -I tests/artifact/test_artifact.py
+        run: |
+          python3 -I tests/artifact/test_artifact.py
+          python3 -I tests/artifact/test_oci.py
       - name: The source table of toolchain:fetch; the recipe's patch step
         run: |
           python3 -I tests/toolchain/test_fetch.py
@@ -174,7 +177,7 @@ jobs:
   # the gate builds and covers the core module on three presets (#132). The job never builds a toolchain: in a
   # pull-request or merge-queue run it takes main's release, else the copy the builder staged in
   # this ref's cache (artifact-check waited for one of them); in a run dispatched on main it
-  # takes only main's release (release-only mode).
+  # takes only main's attested toolchain image (--release-only).
   gate-linux-arm64:
     name: gate-linux-arm64
     needs: [artifact-check, resolve]
@@ -183,7 +186,8 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      attestations: read  # gh attestation verify of the toolchain release
+      attestations: read  # verify the toolchain image
+      packages: read  # pull the toolchain image
     container:
       # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
       image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]
@@ -250,7 +254,8 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: read
-      attestations: read  # gh attestation verify in the toolchain fixtures
+      attestations: read  # verify the toolchain image used by the C++ fixtures
+      packages: read  # pull the toolchain image
     container:
       # resolve outputs <image>@sha256:<digest> only (python/artifact/artifact.py resolve).
       image: ${{ needs.resolve.outputs.image }}  # zizmor: ignore[unpinned-images]

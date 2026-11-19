@@ -45,7 +45,15 @@ LATER_PINS = ("vm/inputs.toml", "canary/pins.toml")
 
 APT_SOURCE_KEYS = {"uris", "suites", "components", "key", "fingerprint"}
 APT_PACKAGE_KEYS = {"version", "os"}
-TOOLCHAIN_KEYS = {"upstream", "source", "host_tools", "apt_compiler", "salt", "macos"}
+TOOLCHAIN_KEYS = {
+    "upstream",
+    "source",
+    "host_tools",
+    "apt_compiler",
+    "apt_packages",
+    "salt",
+    "macos",
+}
 TOOLCHAIN_REQUIRED = {"upstream", "source", "host_tools", "apt_compiler", "salt"}
 SOURCE_KEYS = {"url", "sha256", "commit"}
 
@@ -630,6 +638,7 @@ class Validator:
         self.macos(rel, data.get("macos"))
         if "apt_compiler" in data and not isinstance(data["apt_compiler"], bool):
             self.fail("inputs", rel, "apt_compiler is not true or false (D162)")
+        self.apt_packages(rel, data)
         salt = data.get("salt", 0)
         if not isinstance(salt, int) or isinstance(salt, bool):
             self.fail("inputs", rel, "salt is not an integer")
@@ -650,6 +659,38 @@ class Validator:
         for s in _strings(data):
             if s.startswith("-"):
                 self.fail("inputs", rel, f"{s!r} looks like a build flag")
+
+    def apt_packages(self, rel: str, data: dict[str, Any]) -> None:
+        """D162 as amended by #254: when the build bootstraps with an apt compiler, the
+        pins name the apt packages it uses; the hash covers only their pins (section 2)."""
+        packages = data.get(APT_PACKAGES_KEY)
+        if data.get(APT_COMPILER_KEY) is True:
+            if (
+                not isinstance(packages, list)
+                or not packages
+                or not all(
+                    isinstance(p, str) and p.startswith("apt:") for p in packages
+                )
+            ):
+                self.fail(
+                    "inputs",
+                    rel,
+                    "apt_packages must name the apt packages build.sh bootstraps "
+                    "with, as apt:<name> (D162, #254)",
+                )
+                return
+            apt = (
+                _load(self.root / APT_TOML).get("bootstrap", {}).get("packages", {})
+                if (self.root / APT_TOML).exists()
+                else {}
+            )
+            for p in packages:
+                if p not in apt:
+                    self.fail("inputs", rel, f"{APT_TOML} has no pin for {p}")
+        elif data.get(APT_COMPILER_KEY) is False and packages is not None:
+            self.fail(
+                "inputs", rel, "apt_packages is set but apt_compiler is false (D162)"
+            )
 
     def macos(self, rel: str, table: Any) -> None:
         """The GCC [macos] table (D85): each key has a schema; nothing else."""
@@ -684,8 +725,11 @@ def validate(root: Path) -> list[Problem]:
 SCHEMA_LINE = "schema = 1\n"
 BUILD_TASK = ".mise/tasks/artifact/build"
 # Each toolchain's pins.toml says whether its build.sh bootstraps with an apt
-# compiler; when true, its hash also covers apt.toml (section 2, D162).
+# compiler, and then names the apt packages it uses; the hash covers only those
+# packages' pins from apt.toml, not the whole file (section 2, D162 as amended
+# by #254).
 APT_COMPILER_KEY = "apt_compiler"
+APT_PACKAGES_KEY = "apt_packages"
 APT_TOML = ".mise/conf.d/apt.toml"
 RUNNER_HOOK = "runner/hook/job-started.sh"
 LOCK_ARCH = {"arm64": "arm64", "amd64": "x64"}
@@ -890,9 +934,42 @@ def toolchain_tag(tree: GitTree, name: str, os_name: str, arch: str) -> str:
         _add_files(tree, lines, ["vm/inputs.toml"])
         _add_files(tree, lines, tree.files_under(f"{base}/macos"))
     if apt_compiler:
-        _add_files(tree, lines, [APT_TOML])
+        _add_apt_pins(tree, lines, base, pins)
     _add_slice(tree, lines, platform, pins.get("host_tools", []))
     return f"{name}-{os_name}-{arch}-{inputs_hash(lines)}"
+
+
+def _add_apt_pins(
+    tree: GitTree, lines: dict[str, str], base: str, pins: dict[str, Any]
+) -> None:
+    """The pins of the apt packages the build bootstraps with (D162 as amended by
+    #254): one line per package pins.toml names, keyed `<apt.toml>#<package>` and
+    valued by the canonical JSON of its pin, so a bump of any other package in
+    apt.toml leaves the tag alone."""
+    packages = pins.get(APT_PACKAGES_KEY)
+    if (
+        not isinstance(packages, list)
+        or not packages
+        or not all(isinstance(p, str) for p in packages)
+    ):
+        raise TagError(
+            f"{base}/pins.toml: {APT_PACKAGES_KEY} must name the apt packages the build uses"
+        )
+    apt = (
+        _toml(tree, APT_TOML).get("bootstrap", {}).get("packages", {})
+        if tree.has(APT_TOML)
+        else {}
+    )
+    for pkg in packages:
+        if not pkg.startswith("apt:"):
+            raise TagError(
+                f"{base}/pins.toml: {APT_PACKAGES_KEY} holds {pkg!r}, not apt:<name>"
+            )
+        if pkg not in apt:
+            raise TagError(f"{APT_TOML} has no pin for {pkg}")
+        lines[f"{APT_TOML}#{pkg}"] = json.dumps(
+            apt[pkg], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
 
 
 def runner_pc_tag(tree: GitTree) -> str:
@@ -1003,8 +1080,16 @@ def _commit(root: Path) -> GitTree:
     env = {**os.environ, **GIT_ENV}
     for args in (
         ["init", "-q"],
-        ["add", "-A"],
-        ["commit", "-q", "--no-verify", "-m", "v"],
+        [
+            "add",
+            "--",
+            *sorted(
+                str(path.relative_to(root))
+                for path in root.rglob("*")
+                if path.is_file()
+            ),
+        ],
+        ["commit", "-q", "-m", "v"],
     ):
         subprocess.run(
             ["git", "-C", str(root), *args], check=True, env=env, capture_output=True

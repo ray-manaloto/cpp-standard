@@ -3,21 +3,24 @@
 # the clang-p2996 toolchain. amd64 and the PC runners arrive with M2. A trust root (D108), because
 # from M2 it runs on the self-hosted runners.
 #
-#   tags        computes this commit's tags and probes GHCR for main's tools image; any probe
-#               answer other than found or not found fails (the probe of dotfiles-legacy
-#               dotfiles/.github/workflows/build-publish.yml lines 199-216)
+#   tags        computes this commit's tags and probes GHCR for main's tools image and p2996
+#               toolchain image; any probe answer other than found or not found fails (the probe
+#               of dotfiles-legacy dotfiles/.github/workflows/build-publish.yml lines 199-216,
+#               and D90's rule, #254)
 #   build       builds what main does not have yet with `mise run artifact:build` and uploads
 #               each layer as the artifact image-<tag> (D98); read-only token, no OIDC
 #   pr-image    pull_request and merge_group: pushes the layers under the run's own
 #               pr-<n>-[mq-]<arch>-<hash> tags (D54, D134) and posts a commit status per tag
-#   toolchain   builds the p2996 toolchain when main has no release of its tag (and, in a
+#   toolchain   builds the p2996 toolchain when the registry has no image of its tag (and, in a
 #               pull-request or merge-queue run, this ref has no cache entry of it yet), in this
-#               commit's tools image: the one this run built, else main's verified image. It
-#               uploads the artifact toolchain-<tag> and, in a pull-request or merge-queue run,
-#               saves .cache/toolchains/<tag>/ under the cache key toolchain-<tag>, which ci.yml's
+#               commit's tools image: the one this run built, else main's verified image. When
+#               main already has the image, it verifies its attestation and pulls by digest
+#               (#254). It uploads toolchain-<tag> (the OCI image on main; the archive on PR
+#               and merge-queue runs) and, in a pull-request or merge-queue run, saves
+#               .cache/toolchains/<tag>/ under the cache key toolchain-<tag>, which ci.yml's
 #               gate jobs restore (D83, D91). It is the only job of a run that builds a toolchain.
-#   dispatch    on main: dispatches publish.yml with this run's id; publish.yml alone pushes
-#               main's tags, releases the toolchains and attests (D114, D116)
+#   dispatch    on main: dispatches publish.yml with this run id; publish.yml alone pushes
+#               main's images (base, tools and toolchains) and attests (D114, D116, #254)
 #
 # It holds no id-token and no attestations permission: only publish.yml signs (D114).
 name: builder
@@ -30,7 +33,7 @@ on:
   workflow_dispatch:
   # Pull requests that change an image or toolchain input (python/pins/pins.py tag <name> --inputs,
   # toolchains/**) or this file. The merge queue cannot filter paths; there `tags` finds main's
-  # image and release and nothing builds.
+  # tools and toolchain images and nothing builds.
   pull_request:
     paths:
       - image/**
@@ -41,6 +44,7 @@ on:
       - toolchains/**
       # The hashing rule itself (a schema bump changes every tag).
       - python/pins/**
+      - python/artifact/**
       - .github/workflows/builder.yml
   merge_group:
 
@@ -67,12 +71,12 @@ jobs:
     permissions:
       contents: read
       actions: read  # this ref's cache entries (the toolchain probe)
+      packages: read  # GHCR probes
     outputs:
       base: ${{ steps.tags.outputs.base }}
       tools: ${{ steps.tags.outputs.tools }}
       p2996: ${{ steps.tags.outputs.p2996 }}
       build: ${{ steps.probe.outputs.exists == 'false' }}
-      build_p2996: ${{ steps.probe-p2996.outputs.exists == 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -94,7 +98,7 @@ jobs:
           ref="$(python3 -I python/artifact/artifact.py names "$TAG" | sed -n 's/^ref=//p')"
           python3 -I python/artifact/artifact.py probe "$ref"
       - id: probe-p2996
-        name: Probe for main's p2996 release (and this ref's cache entry)
+        name: Probe GHCR for main's p2996 toolchain image (and this ref's cache entry)
         env:
           TAG: ${{ steps.tags.outputs.p2996 }}
           GH_TOKEN: ${{ github.token }}
@@ -199,7 +203,7 @@ jobs:
     needs: [tags, build]
     # After the images: a run that builds the tools image builds the toolchain in it.
     if: >-
-      ${{ !cancelled() && needs.tags.outputs.build_p2996 == 'true'
+      ${{ !cancelled() && needs.tags.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     runs-on: ubuntu-26.04-arm
     # The toolchain build's share of the merge queue's 240 minutes (D61, D159): 180 with the
@@ -208,8 +212,8 @@ jobs:
     permissions:
       contents: read
       actions: read  # the re-probe reads this ref's cache entries
-      attestations: read  # gh attestation verify of main's tools image
-      packages: read  # pull main's tools image
+      attestations: read  # verify main's tools and toolchain images
+      packages: read  # pull main's tools and toolchain images
     # One build of a tag at a time, across events and refs (D135): every later run waits for it.
     concurrency:
       group: builder-${{ needs.tags.outputs.p2996 }}
@@ -226,13 +230,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      # A run that waited for the builder-<tag> group may find the toolchain built meanwhile: main's
-      # release, or this ref's cache entry. Then it builds nothing.
+      # A run that waited for the builder-<tag> group may find the toolchain built meanwhile:
+      # main's image in GHCR (any registry answer other than "not found" fails the job, #254),
+      # or this ref's cache entry. Then it builds nothing.
       - id: reprobe
         name: Probe again after the concurrency wait
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -I python/artifact/artifact.py probe "$TAG"
+      # An existing main image is verified and pulled by the probed digest. A cache hit has
+      # no registry digest and only skips the build.
+      - name: Pull main's attested image instead of building
+        if: ${{ steps.reprobe.outputs.exists == 'true' && steps.reprobe.outputs.digest != '' }}
+        env:
+          DIGEST: ${{ steps.reprobe.outputs.digest }}
+          ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image="$(python3 -I python/artifact/artifact.py names "$TAG" | sed -n 's/^image=//p')"
+          docker login ghcr.io --username "$ACTOR" --password-stdin <<<"$GH_TOKEN"
+          python3 -I python/artifact/artifact.py verify "$image@$DIGEST"
+          docker pull "$image@$DIGEST"
       - uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
         if: ${{ steps.reprobe.outputs.exists == 'false' }}
         with:
@@ -280,8 +298,32 @@ jobs:
             -e CPPSTD_BUILD_WORK=/w/.work \
             "$IMAGE" mise run artifact:build "p2996-linux-$ARCH"
           df -h /
+      - name: Pack the main toolchain image
+        if: ${{ steps.reprobe.outputs.exists == 'false' && github.ref == 'refs/heads/main' }}
+        run: |
+          d="dist/$TAG"
+          hash="$(cat "$d/inputs-hash.txt")"
+          digest="$(python3 -I python/artifact/oci.py pack "$d/image.tar" --os linux --arch "$ARCH" \
+            --annotation "org.cpp-standard.toolchain-tag=$TAG" \
+            --annotation "org.cpp-standard.inputs-hash=$hash" \
+            "$d/$TAG.tar.zst" "$d/inputs-hash.txt" | sed -n 's/^digest=//p')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::oci.py printed no digest"
+            exit 1
+          }
+          printf 'tag=%s\ndigest=%s\narch=%s\ncommit=%s\n' "$TAG" "$digest" "$ARCH" "$GITHUB_SHA" >"$d/image.txt"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        if: ${{ steps.reprobe.outputs.exists == 'false' }}
+        if: ${{ steps.reprobe.outputs.exists == 'false' && github.ref == 'refs/heads/main' }}
+        with:
+          name: toolchain-${{ needs.tags.outputs.p2996 }}
+          path: |
+            dist/${{ needs.tags.outputs.p2996 }}/image.tar
+            dist/${{ needs.tags.outputs.p2996 }}/image.txt
+            dist/${{ needs.tags.outputs.p2996 }}/inputs-hash.txt
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: ${{ steps.reprobe.outputs.exists == 'false' && github.ref != 'refs/heads/main' }}
         with:
           name: toolchain-${{ needs.tags.outputs.p2996 }}
           path: dist/${{ needs.tags.outputs.p2996 }}/

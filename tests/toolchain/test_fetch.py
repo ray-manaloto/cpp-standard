@@ -1,19 +1,24 @@
-"""Tests of python/toolchain/fetch.py (ticket #130): each row of the source table, the staged copy
-refused on main and outside Actions, release-only mode, the waiting job that never builds, the
-duplicate-title refusal, and the install that never lets a refused archive in. The release store,
-the verifier and the rebuild are fakes over small stand-in archives, so nothing here needs the
+"""Tests of python/toolchain/fetch.py (tickets #130 and #254): each row of the source table, the
+staged copy refused on main and outside Actions, image-only mode, the waiting job that never
+builds, the registry probe rule, and the install that never lets a refused archive in. The
+verifier and the rebuild are fakes, and the image cases run the real pack-to-fetch round trip
+over a fake registry with images from python/artifact/oci.py, so nothing here needs the
 network, gh or a real toolchain. Run: python3 -I tests/toolchain/test_fetch.py
 """
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import io
 import json
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -23,9 +28,14 @@ sys.path.insert(0, str(ROOT / "python/artifact"))
 
 import artifact
 import fetch
+import oci
 
 TAG = "p2996-linux-arm64-00112233445566aa"
 HASH = "00112233445566aa"
+# The public tools package holds the full tag (D98, #254), not an <os>-<arch>-<hash> one.
+IMAGE_REF = artifact.names(TAG)["ref"]
+DIGEST = "sha256:" + "c" * 64
+SUBJECT = f"oci://{IMAGE_REF.rpartition(':')[0]}@{DIGEST}"
 HOSTED = {"RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_ACTIONS": "true"}
 
 
@@ -45,30 +55,135 @@ def make_archive(
     return path
 
 
-def release_json(tag: str = TAG, title: str = TAG, draft: bool = False) -> dict:
-    return {
-        "tag_name": tag,
-        "name": title,
-        "draft": draft,
-        "assets": [{"name": f"{tag}.tar.zst"}],
-    }
+def sha256(data: bytes) -> str:
+    return f"sha256:{hashlib.sha256(data).hexdigest()}"
 
 
-class FakeReleases:
-    def __init__(self, archive: Path | None, listing: list[dict] | None = None) -> None:
+def recording(seen: list[str]) -> Callable[[str], bool]:
+    def check(subject: str) -> bool:
+        # A verifier that records every subject it is asked about and passes it.
+        seen.append(subject)
+        return True
+
+    return check
+
+
+class PackedImage:
+    """The pieces of one toolchain image that the fetch pulls: the manifest bytes, the manifest
+    digest the probe answers, and the one layer's descriptor and blob. `packed` runs the real
+    packer (python/artifact/oci.py); `of_layer` and `hand_packed` build the images the packer
+    refuses, for the refusal cases."""
+
+    def __init__(
+        self,
+        manifest_digest: str,
+        manifest_bytes: bytes,
+        layer: dict,
+        layer_bytes: bytes,
+    ) -> None:
+        self.manifest_digest = manifest_digest
+        self.manifest_bytes = manifest_bytes
+        self.layer = layer  # the descriptor the fetch must check the blob against
+        self.layer_bytes = layer_bytes
+
+    @classmethod
+    def packed(cls, files: dict[str, bytes]) -> PackedImage:
+        """A real image: oci.pack over `files`, then the manifest and layer read back."""
+        with tempfile.TemporaryDirectory() as d:
+            inputs = []
+            for name, data in files.items():
+                path = Path(d) / name
+                path.write_bytes(data)
+                inputs.append((name, path))
+            image = Path(d) / "image.tar"
+            digest = oci.pack(image, inputs, "arm64", "linux")
+            with tarfile.open(image) as f:
+                raw = f.extractfile(f"blobs/{digest.replace(':', '/')}").read()
+                manifest = json.loads(raw)
+                blob = f.extractfile(
+                    f"blobs/{manifest['layers'][0]['digest'].replace(':', '/')}"
+                ).read()
+        return cls(digest, raw, manifest["layers"][0], blob)
+
+    @classmethod
+    def of_layer(cls, layer_bytes: bytes) -> PackedImage:
+        """A manifest built around a layer blob the way the packer builds one, with a config
+        the fetch never reads."""
+        layer = {
+            "mediaType": oci.LAYER_MEDIA_TYPE,
+            "digest": sha256(layer_bytes),
+            "size": len(layer_bytes),
+        }
+        config = json.dumps(
+            {
+                "architecture": "arm64",
+                "os": "linux",
+                "config": {},
+                "rootfs": {"type": "layers", "diff_ids": [sha256(layer_bytes)]},
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        manifest = {
+            "schemaVersion": 2,
+            "mediaType": oci.MANIFEST_MEDIA_TYPE,
+            "config": {
+                "mediaType": oci.CONFIG_MEDIA_TYPE,
+                "digest": sha256(config),
+                "size": len(config),
+            },
+            "layers": [layer],
+        }
+        raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        return cls(sha256(raw), raw, layer, layer_bytes)
+
+    @classmethod
+    def hand_packed(cls, members: list[tuple]) -> PackedImage:
+        """A gzip tar written member by member, for archives the packer refuses: two members of
+        one name, or a non-regular member where the archive should be. Each member is
+        (name, bytes), or (name, bytes, tarfile type, linkname) for a non-regular one."""
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as f:
+            for name, data, *rest in members:
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                if rest:
+                    info.type = rest[0]
+                if len(rest) > 1:
+                    info.linkname = rest[1]
+                f.addfile(info, io.BytesIO(data))
+        return cls.of_layer(gzip.compress(buf.getvalue(), mtime=0))
+
+    def retag(self) -> None:
+        """Re-canonicalize the manifest bytes after a test edits the layer descriptor, and make
+        the probe answer the new digest, as a publisher of that manifest would."""
+        manifest = json.loads(self.manifest_bytes)
+        manifest["layers"] = [self.layer]
+        self.manifest_bytes = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":")
+        ).encode()
+        self.manifest_digest = sha256(self.manifest_bytes)
+
+
+class FakeImages:
+    """The image store: one image of TAG when `archive` is given; `error` makes find raise."""
+
+    def __init__(self, archive: Path | None = None, error: Exception | None = None):
         self.archive = archive
-        self.listing = (
-            listing if listing is not None else ([release_json()] if archive else [])
-        )
+        self.error = error
 
-    def find(self, tag: str) -> fetch.Release | None:
-        return fetch.pick_release(tag, self.listing)
+    def find(self, tag: str) -> fetch.Image | None:
+        if self.error is not None:
+            raise self.error
+        if self.archive is None:
+            return None
+        return fetch.Image(IMAGE_REF, DIGEST)
 
-    def download(self, release: fetch.Release, asset: str, dest: Path) -> Path:
+    def download(self, image: fetch.Image, tag: str, dest: Path) -> Path:
+        path = dest / f"{tag}.tar.zst"
         assert self.archive is not None
-        target = dest / asset
-        target.write_bytes(self.archive.read_bytes())
-        return target
+        path.write_bytes(self.archive.read_bytes())
+        return path
 
 
 class Case(unittest.TestCase):
@@ -94,15 +209,13 @@ class Case(unittest.TestCase):
     def stage(self, content: str = "staged") -> None:
         make_archive(self.staged / TAG / f"{TAG}.tar.zst", content)
 
-    def run_fetch(
-        self, ctx: str, releases, verifier=lambda _: True, builder=None, **kw
-    ):
+    def run_fetch(self, ctx: str, images, verifier=lambda _: True, builder=None, **kw):
         order = fetch.sources(fetch.Context(ctx), **kw)
         return fetch.fetch(
             TAG,
             self.root,
             order,
-            releases,
+            images,
             verifier,
             builder or self.rebuild_ok,
             self.staged,
@@ -140,38 +253,36 @@ class ContextTest(unittest.TestCase):
 
     def test_source_table(self) -> None:
         S = fetch.sources
-        self.assertEqual(
-            S(fetch.Context("hosted_pr")), ["release", "staged", "rebuild"]
-        )
-        self.assertEqual(S(fetch.Context("actions")), ["release", "rebuild"])
-        self.assertEqual(S(fetch.Context("outside")), ["release", "rebuild"])
+        self.assertEqual(S(fetch.Context("hosted_pr")), ["image", "staged", "rebuild"])
+        self.assertEqual(S(fetch.Context("actions")), ["image", "rebuild"])
+        self.assertEqual(S(fetch.Context("outside")), ["image", "rebuild"])
         for kind in ("hosted_pr", "actions", "outside"):
-            self.assertEqual(S(fetch.Context(kind), release_only=True), ["release"])
+            self.assertEqual(S(fetch.Context(kind), release_only=True), ["image"])
         self.assertEqual(
-            S(fetch.Context("hosted_pr"), rebuild=False), ["release", "staged"]
+            S(fetch.Context("hosted_pr"), rebuild=False), ["image", "staged"]
         )
 
 
 class RowTest(Case):
     """One test per row of the source table, and the staged copy refused on main and outside."""
 
-    def test_pr_row_release_first(self) -> None:
+    def test_pr_row_image_first(self) -> None:
         self.stage()
-        rel = FakeReleases(make_archive(self.tmp / "r.tar.zst", "release"))
-        r = self.run_fetch("hosted_pr", rel)
+        img = FakeImages(make_archive(self.tmp / "r.tar.zst", "image"))
+        r = self.run_fetch("hosted_pr", img)
         self.assertEqual(
-            (r.source, self.installed(), self.rebuilt), ("release", "release", 0)
+            (r.source, self.installed(), self.rebuilt), ("image", "image", 0)
         )
 
     def test_pr_row_staged_before_rebuild(self) -> None:
         self.stage()
-        r = self.run_fetch("hosted_pr", FakeReleases(None))
+        r = self.run_fetch("hosted_pr", FakeImages(None))
         self.assertEqual(
             (r.source, self.installed(), self.rebuilt), ("staged", "staged", 0)
         )
 
     def test_pr_row_rebuild_last(self) -> None:
-        r = self.run_fetch("hosted_pr", FakeReleases(None))
+        r = self.run_fetch("hosted_pr", FakeImages(None))
         self.assertEqual(
             (r.source, self.installed(), self.rebuilt), ("rebuild", "rebuilt", 1)
         )
@@ -180,37 +291,40 @@ class RowTest(Case):
         for ctx in ("actions", "outside"):
             with self.subTest(ctx):
                 self.stage()
-                r = self.run_fetch(ctx, FakeReleases(None))
+                r = self.run_fetch(ctx, FakeImages(None))
                 self.assertEqual((r.source, self.installed()), ("rebuild", "rebuilt"))
 
-    def test_main_and_outside_take_the_release(self) -> None:
-        rel = FakeReleases(make_archive(self.tmp / "r.tar.zst", "release"))
+    def test_main_and_outside_take_the_image(self) -> None:
+        img = FakeImages(make_archive(self.tmp / "r.tar.zst", "image"))
+        subjects: list[str] = []
         for ctx in ("actions", "outside"):
             with self.subTest(ctx):
                 self.root = self.tmp / f"installed-{ctx}"  # a fresh install root each
-                r = self.run_fetch(ctx, rel)
-                self.assertEqual((r.source, self.installed()), ("release", "release"))
+                r = self.run_fetch(ctx, img, verifier=recording(subjects))
+                self.assertEqual((r.source, self.installed()), ("image", "image"))
         self.assertEqual(self.rebuilt, 0)
+        # The verifier is asked about the image at its digest, not about a file.
+        self.assertEqual(subjects, [SUBJECT, SUBJECT])
 
     def test_staged_copy_with_wrong_hash_is_refused(self) -> None:
         make_archive(
             self.staged / TAG / f"{TAG}.tar.zst", "staged", inputs_hash="f" * 16
         )
-        r = self.run_fetch("hosted_pr", FakeReleases(None))
+        r = self.run_fetch("hosted_pr", FakeImages(None))
         self.assertEqual((r.source, self.installed()), ("rebuild", "rebuilt"))
         self.assertIn("inputs-hash.txt", r.refusals[0])
 
 
 class ReleaseOnlyTest(Case):
-    def test_release_only_installs_the_release(self) -> None:
+    def test_release_only_installs_the_image(self) -> None:
         self.stage()
-        rel = FakeReleases(make_archive(self.tmp / "r.tar.zst", "release"))
-        r = self.run_fetch("actions", rel, release_only=True)
-        self.assertEqual((r.source, self.installed()), ("release", "release"))
+        img = FakeImages(make_archive(self.tmp / "r.tar.zst", "image"))
+        r = self.run_fetch("actions", img, release_only=True)
+        self.assertEqual((r.source, self.installed()), ("image", "image"))
 
     def test_release_only_never_falls_back(self) -> None:
         self.stage()
-        r = self.run_fetch("hosted_pr", FakeReleases(None), release_only=True)
+        r = self.run_fetch("hosted_pr", FakeImages(None), release_only=True)
         self.assertIsNone(r.prefix)
         self.assertEqual((self.installed(), self.rebuilt), (None, 0))
 
@@ -245,7 +359,7 @@ class WaitTest(Case):
             toolchains=Nothing(),
         )
         self.assertEqual(missing, [TAG])
-        r = self.run_fetch("hosted_pr", FakeReleases(None), rebuild=False)
+        r = self.run_fetch("hosted_pr", FakeImages(None), rebuild=False)
         self.assertIsNone(r.prefix)
         self.assertEqual(self.rebuilt, 0)
 
@@ -253,53 +367,51 @@ class WaitTest(Case):
 class RefusalTest(Case):
     """The refusal cases of spec #122's table, on the code path used outside Actions."""
 
-    def test_unattested_release_then_rebuild_installs_the_rebuilt_one(self) -> None:
+    def test_unattested_image_then_rebuild_installs_the_rebuilt_one(self) -> None:
         make_archive(self.root / "seed.tar.zst", "before")
         fetch.install(self.root / "seed.tar.zst", TAG, self.root)
-        rel = FakeReleases(make_archive(self.tmp / "r.tar.zst", "refused"))
-        r = self.run_fetch("outside", rel, verifier=lambda _: False)
+        img = FakeImages(make_archive(self.tmp / "r.tar.zst", "refused"))
+        r = self.run_fetch("outside", img, verifier=lambda _: False)
         self.assertEqual((r.source, self.installed()), ("rebuild", "rebuilt"))
         self.assertIn("attestation", r.refusals[0])
 
-    def test_unattested_release_and_no_rebuild_leaves_the_old_one(self) -> None:
+    def test_unattested_image_and_no_rebuild_leaves_the_old_one(self) -> None:
         make_archive(self.root / "seed.tar.zst", "before")
         fetch.install(self.root / "seed.tar.zst", TAG, self.root)
-        rel = FakeReleases(make_archive(self.tmp / "r.tar.zst", "refused"))
+        img = FakeImages(make_archive(self.tmp / "r.tar.zst", "refused"))
         r = self.run_fetch(
-            "outside", rel, verifier=lambda _: False, builder=self.rebuild_fails
+            "outside", img, verifier=lambda _: False, builder=self.rebuild_fails
         )
         self.assertIsNone(r.prefix)
         self.assertEqual((self.installed(), self.rebuilt), ("before", 1))
 
-    def test_attested_release_with_wrong_inputs_hash_is_refused(self) -> None:
-        rel = FakeReleases(
+    def test_attested_image_with_wrong_inputs_hash_is_refused(self) -> None:
+        img = FakeImages(
             make_archive(self.tmp / "r.tar.zst", "wrong", inputs_hash="e" * 16)
         )
-        r = self.run_fetch("outside", rel)
+        r = self.run_fetch("outside", img)
         self.assertEqual((r.source, self.installed()), ("rebuild", "rebuilt"))
         self.assertIn("inputs-hash.txt", r.refusals[0])
 
     def test_archive_without_inputs_hash_is_refused(self) -> None:
-        rel = FakeReleases(
-            make_archive(self.tmp / "r.tar.zst", "none", inputs_hash=None)
-        )
-        r = self.run_fetch("outside", rel, release_only=True)
+        img = FakeImages(make_archive(self.tmp / "r.tar.zst", "none", inputs_hash=None))
+        r = self.run_fetch("outside", img, release_only=True)
         self.assertIsNone(r.prefix)
         self.assertIsNone(self.installed())
 
     def test_corrupt_archive_is_refused(self) -> None:
         bad = self.tmp / "r.tar.zst"
         bad.write_bytes(b"not an archive")
-        r = self.run_fetch("outside", FakeReleases(bad), release_only=True)
+        r = self.run_fetch("outside", FakeImages(bad), release_only=True)
         self.assertIsNone(r.prefix)
         self.assertIn("does not extract", r.refusals[0])
 
     def test_invalid_utf8_inputs_hash_is_refused_and_falls_back(self) -> None:
         self.stage()
-        rel = FakeReleases(
+        img = FakeImages(
             make_archive(self.tmp / "r.tar.zst", "bad-utf8", inputs_hash=b"\xff\xfe\n")
         )
-        r = self.run_fetch("hosted_pr", rel)
+        r = self.run_fetch("hosted_pr", img)
         self.assertEqual(
             (r.source, self.installed(), self.rebuilt), ("staged", "staged", 0)
         )
@@ -308,31 +420,359 @@ class RefusalTest(Case):
         self.assertIn("UTF-8", r.refusals[0])
 
 
-class DuplicateTitleTest(Case):
-    def test_two_releases_with_the_title_are_refused(self) -> None:
-        listing = [release_json(), release_json(tag="decoy", title=TAG)]
-        rel = FakeReleases(make_archive(self.tmp / "r.tar.zst", "release"), listing)
-        r = self.run_fetch("outside", rel)
+_UNSET = object()
+
+
+class FakeRegistry:
+    """artifact.Registry over one PackedImage: `digest` probes the manifest digest,
+    `manifest_bytes` serves the manifest bytes and `blob` streams the layer bytes to `dest`.
+    Tests break a request (probe_error, manifest_error, blob_error), replace the manifest
+    answer (manifest_answer), or corrupt the image, for the refusal and error cases."""
+
+    def __init__(self, image: PackedImage | None = None) -> None:
+        self.image = image
+        self.probe_error: Exception | None = None
+        self.manifest_error: Exception | None = None
+        self.blob_error: Exception | None = None
+        self.manifest_answer: object = _UNSET
+        self.probed: list[str] = []
+        self.manifest_of: list[str] = []
+        self.blob_of: list[str] = []
+
+    def digest(self, ref: str) -> str | None:
+        self.probed.append(ref)
+        if self.probe_error is not None:
+            raise self.probe_error
+        return self.image.manifest_digest if self.image else None
+
+    def manifest_bytes(self, ref: str) -> bytes | None:
+        self.manifest_of.append(ref)
+        if self.manifest_error is not None:
+            raise self.manifest_error
+        if self.manifest_answer is not _UNSET:
+            return self.manifest_answer  # type: ignore[return-value]
+        return self.image.manifest_bytes if self.image else None
+
+    def blob(self, ref: str, digest: str, dest: Path) -> Path:
+        self.blob_of.append(digest)
+        if self.blob_error is not None:
+            raise self.blob_error
+        if self.image is None or digest != self.image.layer["digest"]:
+            raise artifact.ArtifactError(f"registry pull of {ref}: no blob {digest}")
+        dest.write_bytes(self.image.layer_bytes)
+        return dest
+
+
+class RegistryImageTest(Case):
+    """GhImage over a fake registry serving real images from python/artifact/oci.py: the
+    probe rule, the digest-pinned pack-to-fetch round trip, and every check that refuses a
+    bad one (#254)."""
+
+    def store(self, reg: FakeRegistry) -> fetch.GhImage:
+        return fetch.GhImage(reg)  # type: ignore[arg-type]
+
+    def at_digest(self, image: PackedImage) -> str:
+        return f"{IMAGE_REF.rpartition(':')[0]}@{image.manifest_digest}"
+
+    def pull(self, image: PackedImage, reg: FakeRegistry | None = None) -> Path:
+        """download() into a scratch `pull` directory of this test's tree."""
+        dest = self.tmp / "pull"
+        dest.mkdir(exist_ok=True)
+        reg = reg or FakeRegistry(image)
+        return self.store(reg).download(
+            fetch.Image(IMAGE_REF, image.manifest_digest), TAG, dest
+        )
+
+    def serve_manifest(self, image: PackedImage, raw: bytes) -> Path:
+        """download() with the registry serving `raw` as the manifest, self-consistently:
+        the probe answers sha256(raw), so the raw-digest check passes and parsing runs."""
+        image.manifest_digest = sha256(raw)
+        reg = FakeRegistry(image)
+        reg.manifest_answer = raw
+        return self.pull(image, reg)
+
+    def test_find_probes_the_names_ref(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        reg = FakeRegistry(image)
+        found = self.store(reg).find(TAG)
+        self.assertEqual(reg.probed, [IMAGE_REF])
+        self.assertEqual(found, fetch.Image(IMAGE_REF, image.manifest_digest))
+
+    def test_find_none_when_absent(self) -> None:
+        self.assertIsNone(self.store(FakeRegistry()).find(TAG))
+
+    def test_find_never_reads_an_error_as_absent(self) -> None:
+        # The faked authentication error: a probe answer other than "not found" is an error,
+        # never a "does not exist" (the issue's guard).
+        reg = FakeRegistry()
+        reg.probe_error = artifact.ArtifactError("registry probe of x: HTTP 401")
+        with self.assertRaisesRegex(fetch.SourceError, "HTTP 401"):
+            self.store(reg).find(TAG)
+
+    def test_round_trip_from_the_real_packer(self) -> None:
+        """The packer's image through the whole fetch: probed by tag, attested at its digest,
+        pulled by digest, the layer checked while streaming, and the archive installed with
+        its inputs hash before the prefix is switched (D180, D131)."""
+        content = make_archive(self.tmp / "packed.tar.zst", "packed")
+        payload = content.read_bytes()
+        image = PackedImage.packed(
+            {f"{TAG}.tar.zst": payload, fetch.HASH_FILE: f"{HASH}\n".encode()}
+        )
+        reg = FakeRegistry(image)
+        subjects: list[str] = []
+        r = self.run_fetch("outside", self.store(reg), verifier=recording(subjects))
+        self.assertEqual(
+            (r.source, self.installed(), self.rebuilt), ("image", "packed", 0)
+        )
+        self.assertEqual((self.root / TAG / fetch.HASH_FILE).read_text().strip(), HASH)
+        self.assertEqual(subjects, [f"oci://{self.at_digest(image)}"])
+        self.assertEqual(reg.manifest_of, [self.at_digest(image)])
+        self.assertEqual(reg.blob_of, [image.layer["digest"]])
+
+    def test_download_pulls_the_probed_digest(self) -> None:
+        content = make_archive(self.tmp / "a.tar.zst", "pulled")
+        image = PackedImage.packed({f"{TAG}.tar.zst": content.read_bytes()})
+        reg = FakeRegistry(image)
+        got = self.pull(image, reg)
+        self.assertEqual(got, self.tmp / "pull" / f"{TAG}.tar.zst")
+        self.assertEqual(got.read_bytes(), content.read_bytes())
+        self.assertEqual(reg.manifest_of, [self.at_digest(image)])
+        self.assertEqual(reg.blob_of, [image.layer["digest"]])
+
+    def test_manifest_bytes_with_a_wrong_digest_are_refused(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        reg = FakeRegistry(image)
+        reg.manifest_answer = json.dumps(
+            {"schemaVersion": 2}, separators=(",", ":")
+        ).encode()
+        with self.assertRaisesRegex(fetch.Refused, "the probe saw"):
+            self.pull(image, reg)
+        self.assertEqual(reg.blob_of, [])  # refused before anything else was pulled
+
+    def test_malformed_manifest_is_refused(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        for name, raw in (
+            ("not json", b"{oops"),
+            ("not utf-8", b"\xff\xfe"),
+            ("not an object", b"[1, 2]"),
+        ):
+            with (
+                self.subTest(name),
+                self.assertRaisesRegex(fetch.Refused, "malformed manifest"),
+            ):
+                self.serve_manifest(image, raw)
+
+    def test_manifest_without_exactly_one_layer_is_refused(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        layer = json.loads(image.manifest_bytes)["layers"][0]
+        for name, layers, pattern in (
+            ("missing", None, "exactly one layer"),
+            ("zero", [], "exactly one layer"),
+            ("two", [layer, dict(layer)], "exactly one layer"),
+            ("not an object", [42], "the layer is 42"),
+        ):
+            with self.subTest(name):
+                raw = json.dumps(
+                    {**json.loads(image.manifest_bytes), "layers": layers},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                with self.assertRaisesRegex(fetch.Refused, pattern):
+                    self.serve_manifest(image, raw)
+
+    def test_malformed_layer_descriptor_is_refused(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        digest = json.loads(image.manifest_bytes)["layers"][0]["digest"]
+        bad = "sha256:" + "g" * 64
+        for name, layer, pattern in (
+            ("digest missing", {"size": 4}, "digest is None"),
+            ("digest malformed", {"digest": bad, "size": 4}, "digest is 'sha256:g"),
+            ("size missing", {"digest": digest}, "size is None"),
+            ("size negative", {"digest": digest, "size": -1}, "size is -1"),
+            ("size boolean", {"digest": digest, "size": True}, "size is True"),
+            ("type missing", {"digest": digest, "size": 4}, "type is None"),
+        ):
+            with self.subTest(name):
+                raw = json.dumps(
+                    {**json.loads(image.manifest_bytes), "layers": [layer]},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                with self.assertRaisesRegex(fetch.Refused, pattern):
+                    self.serve_manifest(image, raw)
+
+    def test_layer_bytes_with_a_wrong_digest_are_refused(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        image.layer_bytes = b"x" + image.layer_bytes[1:]
+        with self.assertRaisesRegex(fetch.Refused, "the layer digest is"):
+            self.pull(image)
+
+    def test_layer_bytes_with_a_wrong_size_are_refused(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        image.layer["size"] += 1
+        image.retag()
+        with self.assertRaisesRegex(fetch.Refused, "the layer blob is"):
+            self.pull(image)
+
+    def test_image_without_the_archive_is_refused(self) -> None:
+        image = PackedImage.packed({fetch.HASH_FILE: f"{HASH}\n".encode()})
+        with self.assertRaisesRegex(fetch.Refused, "holds no"):
+            self.pull(image)
+
+    def test_ambiguous_archive_members_are_refused(self) -> None:
+        image = PackedImage.hand_packed(
+            [
+                (f"{TAG}.tar.zst", b"one"),
+                (fetch.HASH_FILE, b"hash"),
+                (f"{TAG}.tar.zst", b"two"),
+            ]
+        )
+        with self.assertRaisesRegex(fetch.Refused, "more than one"):
+            self.pull(image)
+
+    def test_a_non_regular_archive_member_is_refused(self) -> None:
+        image = PackedImage.hand_packed(
+            [(f"{TAG}.tar.zst", b"", tarfile.SYMTYPE, "elsewhere")]
+        )
+        with self.assertRaisesRegex(fetch.Refused, "not a regular file"):
+            self.pull(image)
+
+    def test_malformed_layer_data_is_refused(self) -> None:
+        image = PackedImage.of_layer(b"not gzip")
+        with self.assertRaisesRegex(fetch.Refused, "malformed layer data"):
+            self.pull(image)
+
+    def test_incomplete_gzip_footer_is_refused(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        image = PackedImage.of_layer(image.layer_bytes[:-1])
+        with self.assertRaisesRegex(fetch.Refused, "malformed layer data"):
+            self.pull(image)
+
+    def test_download_stops_when_the_image_vanished(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        reg = FakeRegistry(image)
+        reg.manifest_answer = None
+        with self.assertRaisesRegex(fetch.SourceError, "vanished"):
+            self.pull(image, reg)
+
+    def test_a_manifest_request_error_is_a_source_error(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        reg = FakeRegistry(image)
+        reg.manifest_error = artifact.ArtifactError("registry pull of x: HTTP 500")
+        with self.assertRaisesRegex(fetch.SourceError, "HTTP 500"):
+            self.pull(image, reg)
+
+    def test_a_blob_request_error_is_a_source_error(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        reg = FakeRegistry(image)
+        reg.blob_error = artifact.ArtifactError("registry pull of x: HTTP 500")
+        with self.assertRaisesRegex(fetch.SourceError, "HTTP 500"):
+            self.pull(image, reg)
+
+    def test_refused_image_leaves_the_rebuild_eligible(self) -> None:
+        """A refused image never installs; outside Actions the next allowed source follows."""
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        image.layer["size"] += 1
+        image.retag()
+        r = self.run_fetch("outside", self.store(FakeRegistry(image)))
         self.assertEqual((r.source, self.installed()), ("rebuild", "rebuilt"))
-        self.assertIn("2 releases match", r.refusals[0])
+        self.assertIn("the layer blob is", r.refusals[0])
 
-    def test_pick_release(self) -> None:
-        P = fetch.pick_release
-        self.assertIsNone(P(TAG, []))
-        self.assertIsNone(P(TAG, [release_json(draft=True)]))
-        self.assertEqual(P(TAG, [release_json(), release_json(draft=True)]).tag, TAG)
-        with self.assertRaises(fetch.Refused):
-            P(TAG, [release_json(title="something else")])
-        with self.assertRaises(fetch.Refused):
-            P(TAG, [release_json(), release_json(tag="other", title=TAG)])
-
-    def test_release_without_the_archive_is_refused(self) -> None:
-        listing = [release_json() | {"assets": []}]
-        r = self.run_fetch(
-            "outside", FakeReleases(self.tmp / "x", listing), release_only=True
+    def test_a_registry_error_stops_outside_actions(self) -> None:
+        image = PackedImage.packed({f"{TAG}.tar.zst": b"payload"})
+        reg = FakeRegistry(image)
+        reg.manifest_error = artifact.ArtifactError("registry pull of x: HTTP 500")
+        r = fetch.fetch(
+            TAG,
+            self.root,
+            fetch.sources(fetch.Context("outside")),
+            self.store(reg),
+            lambda _: True,
+            self.rebuild_ok,
+            self.staged,
+            self.log.append,
+            stop_on_source_error=True,
         )
         self.assertIsNone(r.prefix)
-        self.assertIn("has no", r.refusals[0])
+        self.assertEqual(self.rebuilt, 0)
+        self.assertIn("HTTP 500", r.errors[0])
+        self.assertTrue(any("stopping, no rebuild" in x for x in self.log))
+
+
+class SourceErrorTest(Case):
+    """An image source that cannot be asked is never read as "no image" (#130 review, #254)."""
+
+    class Broken:
+        def find(self, tag: str):
+            raise fetch.SourceError("registry probe of ghcr.io/x: HTTP 401")
+
+    def test_outside_actions_stops_without_rebuilding(self) -> None:
+        order = fetch.sources(fetch.Context("outside"))
+        r = fetch.fetch(
+            TAG,
+            self.root,
+            order,
+            self.Broken(),
+            lambda _: True,
+            self.rebuild_ok,
+            self.staged,
+            self.log.append,
+            stop_on_source_error=True,
+        )
+        self.assertIsNone(r.prefix)
+        self.assertEqual(self.rebuilt, 0)
+        self.assertIn("HTTP 401", r.errors[0])
+        self.assertTrue(any("stopping, no rebuild" in x for x in self.log))
+
+    def test_in_actions_the_next_source_follows_a_warning(self) -> None:
+        self.stage()
+        order = fetch.sources(fetch.Context("hosted_pr"), rebuild=False)
+        r = fetch.fetch(
+            TAG,
+            self.root,
+            order,
+            self.Broken(),
+            lambda _: True,
+            self.rebuild_ok,
+            self.staged,
+            self.log.append,
+        )
+        self.assertEqual((r.source, self.installed()), ("staged", "staged"))
+        self.assertTrue(any(x.startswith("::warning::") for x in self.log))
+
+
+class GhBoundaryTest(unittest.TestCase):
+    """The gh call itself, with subprocess.run replaced: the verify policy of an image (#254)."""
+
+    def test_verify_policy_and_verdict(self) -> None:
+        calls: list[list[str]] = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, "", "HTTP 404")
+
+        with mock.patch.object(fetch.subprocess, "run", run):
+            ok, out = fetch.gh_verify_report(SUBJECT)
+            self.assertFalse(fetch.gh_verify(SUBJECT))
+        self.assertFalse(ok)
+        self.assertIn("HTTP 404", out)
+        cmd = calls[0]
+        self.assertEqual(cmd[:4], ["gh", "attestation", "verify", SUBJECT])
+        flags = dict(zip(cmd[4::2], cmd[5::2], strict=False))
+        self.assertEqual(
+            flags["--signer-workflow"],
+            "ray-manaloto/cpp-standard/.github/workflows/publish.yml",
+        )
+        self.assertEqual(flags["--source-ref"], "refs/heads/main")
+        self.assertEqual(flags["--repo"], "ray-manaloto/cpp-standard")
+        self.assertIn("--deny-self-hosted-runners", cmd)
+
+    def test_verify_passes_on_exit_zero(self) -> None:
+        def run(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+        with mock.patch.object(fetch.subprocess, "run", run):
+            self.assertTrue(fetch.gh_verify(SUBJECT))
 
 
 class InstallTest(Case):
@@ -541,182 +981,6 @@ for _ in range(5):
             fetch.tag_hash("tools-arm64-0011223344556677")
 
 
-class SourceErrorTest(Case):
-    """A release source that cannot be asked is never read as "no release" (#130 review)."""
-
-    class Broken:
-        def find(self, tag: str):
-            raise fetch.SourceError("gh api could not list the releases: HTTP 401")
-
-    def test_outside_actions_stops_without_rebuilding(self) -> None:
-        order = fetch.sources(fetch.Context("outside"))
-        r = fetch.fetch(
-            TAG,
-            self.root,
-            order,
-            self.Broken(),
-            lambda _: True,
-            self.rebuild_ok,
-            self.staged,
-            self.log.append,
-            stop_on_source_error=True,
-        )
-        self.assertIsNone(r.prefix)
-        self.assertEqual(self.rebuilt, 0)
-        self.assertIn("HTTP 401", r.errors[0])
-        self.assertTrue(any("stopping, no rebuild" in x for x in self.log))
-
-    def test_in_actions_the_next_source_follows_a_warning(self) -> None:
-        self.stage()
-        order = fetch.sources(fetch.Context("hosted_pr"), rebuild=False)
-        r = fetch.fetch(
-            TAG,
-            self.root,
-            order,
-            self.Broken(),
-            lambda _: True,
-            self.rebuild_ok,
-            self.staged,
-            self.log.append,
-        )
-        self.assertEqual((r.source, self.installed()), ("staged", "staged"))
-        self.assertTrue(any(x.startswith("::warning::") for x in self.log))
-
-    def test_gh_api_failure_is_a_source_error(self) -> None:
-        def run(cmd, **kw):
-            raise subprocess.CalledProcessError(1, cmd, "", "HTTP 401: Bad credentials")
-
-        with (
-            mock.patch.object(fetch.subprocess, "run", run),
-            self.assertRaises(fetch.SourceError) as e,
-        ):
-            fetch.GhReleases().find(TAG)
-        self.assertIn("gh auth login", str(e.exception))
-
-    def test_no_gh_and_bad_output_are_source_errors(self) -> None:
-        def missing(cmd, **kw):
-            raise FileNotFoundError("gh")
-
-        def garbage(cmd, **kw):
-            return subprocess.CompletedProcess(cmd, 0, "not json", "")
-
-        for run in (missing, garbage):
-            with (
-                mock.patch.object(fetch.subprocess, "run", run),
-                self.assertRaises(fetch.SourceError),
-            ):
-                fetch.GhReleases().find(TAG)
-
-    def test_download_failure_outside_actions_stops_without_rebuilding(self) -> None:
-        def run(cmd, **kw):
-            if cmd[:2] == ["gh", "api"]:
-                return subprocess.CompletedProcess(
-                    cmd, 0, json.dumps([[release_json()]]), ""
-                )
-            if cmd[:3] == ["gh", "release", "download"]:
-                raise subprocess.CalledProcessError(1, cmd, "", "HTTP 502: Bad Gateway")
-            raise AssertionError(f"unexpected command: {cmd}")
-
-        order = fetch.sources(fetch.Context("outside"))
-        with mock.patch.object(fetch.subprocess, "run", run):
-            r = fetch.fetch(
-                TAG,
-                self.root,
-                order,
-                fetch.GhReleases(),
-                lambda _: True,
-                self.rebuild_ok,
-                self.staged,
-                self.log.append,
-                stop_on_source_error=True,
-            )
-        self.assertIsNone(r.prefix)
-        self.assertEqual(self.rebuilt, 0)
-        self.assertIn("HTTP 502", r.errors[0])
-        self.assertTrue(any("stopping, no rebuild" in x for x in self.log))
-
-    def test_download_without_gh_is_a_source_error(self) -> None:
-        def missing(cmd, **kw):
-            raise FileNotFoundError("gh")
-
-        rel = fetch.Release(TAG, TAG, (f"{TAG}.tar.zst",))
-        with (
-            mock.patch.object(fetch.subprocess, "run", missing),
-            self.assertRaises(fetch.SourceError),
-        ):
-            fetch.GhReleases().download(rel, f"{TAG}.tar.zst", self.tmp)
-
-
-class GhBoundaryTest(unittest.TestCase):
-    """The gh calls themselves, with subprocess.run replaced: the verify policy, paging of the
-    release listing, and main()'s flags (#130 review)."""
-
-    def test_verify_policy_and_verdict(self) -> None:
-        calls: list[list[str]] = []
-
-        def run(cmd, **kw):
-            calls.append(cmd)
-            return subprocess.CompletedProcess(cmd, 1, "", "HTTP 404")
-
-        path = Path("/tmp/downloaded/x.tar.zst")
-        with mock.patch.object(fetch.subprocess, "run", run):
-            ok, out = fetch.gh_verify_report(path)
-            self.assertFalse(fetch.gh_verify(path))
-        self.assertFalse(ok)
-        self.assertIn("HTTP 404", out)
-        cmd = calls[0]
-        self.assertEqual(cmd[:4], ["gh", "attestation", "verify", str(path)])
-        flags = dict(zip(cmd[4::2], cmd[5::2], strict=False))
-        self.assertEqual(
-            flags["--signer-workflow"],
-            "ray-manaloto/cpp-standard/.github/workflows/publish.yml",
-        )
-        self.assertEqual(flags["--source-ref"], "refs/heads/main")
-        self.assertEqual(flags["--repo"], "ray-manaloto/cpp-standard")
-        self.assertIn("--deny-self-hosted-runners", cmd)
-
-    def test_verify_passes_on_exit_zero(self) -> None:
-        def run(cmd, **kw):
-            return subprocess.CompletedProcess(cmd, 0, "ok", "")
-
-        with mock.patch.object(fetch.subprocess, "run", run):
-            self.assertTrue(fetch.gh_verify(Path("x")))
-
-    def find(self, pages: list) -> fetch.Release | None:
-        def run(cmd, **kw):
-            self.assertIn("--paginate", cmd)
-            self.assertIn("--slurp", cmd)
-            return subprocess.CompletedProcess(cmd, 0, json.dumps(pages), "")
-
-        with mock.patch.object(fetch.subprocess, "run", run):
-            return fetch.GhReleases().find(TAG)
-
-    def test_find_on_the_second_page(self) -> None:
-        page1 = [release_json(tag=f"other-{i}", title=f"other-{i}") for i in range(100)]
-        self.assertEqual(self.find([page1, [release_json()]]).tag, TAG)
-
-    def test_find_duplicate_across_pages(self) -> None:
-        with self.assertRaises(fetch.Refused):
-            self.find([[release_json()], [release_json(tag="decoy", title=TAG)]])
-
-    def test_find_no_releases(self) -> None:
-        self.assertIsNone(self.find([[]]))
-
-    def test_download_names_the_release_and_asset(self) -> None:
-        calls: list[list[str]] = []
-
-        def run(cmd, **kw):
-            calls.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-
-        rel = fetch.Release(TAG, TAG, (f"{TAG}.tar.zst",))
-        with mock.patch.object(fetch.subprocess, "run", run):
-            got = fetch.GhReleases().download(rel, f"{TAG}.tar.zst", Path("/d"))
-        self.assertEqual(got, Path("/d") / f"{TAG}.tar.zst")
-        self.assertEqual(calls[0][:4], ["gh", "release", "download", TAG])
-        self.assertIn(f"{TAG}.tar.zst", calls[0])
-
-
 class MainTest(unittest.TestCase):
     """main(): the flags map to the source table; nothing installed exits 1."""
 
@@ -743,7 +1007,7 @@ class MainTest(unittest.TestCase):
             "GITHUB_REF": "refs/pull/7/merge",
         }
         rc, order, _ = self.run_main(["--release-only"], fetch.Result(), pr)
-        self.assertEqual((rc, order), (1, ["release"]))
+        self.assertEqual((rc, order), (1, ["image"]))
 
     def test_no_rebuild(self) -> None:
         pr = HOSTED | {
@@ -751,14 +1015,14 @@ class MainTest(unittest.TestCase):
             "GITHUB_REF": "refs/pull/7/merge",
         }
         rc, order, _ = self.run_main(["--no-rebuild"], fetch.Result(), pr)
-        self.assertEqual((rc, order), (1, ["release", "staged"]))
+        self.assertEqual((rc, order), (1, ["image", "staged"]))
 
     def test_outside_default_and_success_output(self) -> None:
-        done = fetch.Result(prefix=Path("/tmp/r") / TAG, source="release")
+        done = fetch.Result(prefix=Path("/tmp/r") / TAG, source="image")
         rc, order, out = self.run_main([], done, {})
-        self.assertEqual((rc, order), (0, ["release", "rebuild"]))
+        self.assertEqual((rc, order), (0, ["image", "rebuild"]))
         self.assertIn(f"prefix=/tmp/r/{TAG}", out)
-        self.assertIn("source=release", out)
+        self.assertIn("source=image", out)
 
 
 if __name__ == "__main__":

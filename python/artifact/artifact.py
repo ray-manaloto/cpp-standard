@@ -1,20 +1,24 @@
-"""Artifact names, the artifact wait, image resolution and image verification (M1a PR 2).
+"""Artifact names, the artifact wait, image resolution and image verification (M1a PR 2),
+and the registry pull a toolchain fetch needs (#254).
 
-environment-standard.md section 2 and the file plan rows of `artifact:names`, `artifact:check`
-and `image:verify`; D54, D61, D62, D98, D114, D134. Standard-library Python 3.11 or later only,
-like python/pins/pins.py, so the `artifact-check` and `resolve` jobs install nothing.
+environment-standard.md section 2 and the file plan rows of `artifact:names`,
+`artifact:check` and `image:verify`; D54, D61, D62, D98, D114, D134, #254. Standard-library
+Python 3.11 or later only, like python/pins/pins.py, so the `artifact-check` and `resolve`
+jobs install nothing.
 
-The registry and the verifier are passed in, so tests/artifact/ runs every case of the wait and
-of `resolve` with no network, Docker or GitHub.
+The registry and the verifier are passed in, so tests/artifact/ runs every case of the wait
+and of `resolve` with no network, Docker or GitHub.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -23,10 +27,12 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 REPO = "ray-manaloto/cpp-standard"
 REGISTRY = "ghcr.io"
-# GHCR packages (D98): ghcr.io/ray-manaloto/cpp-standard/{base,tools}.
+# GHCR packages (D98, #254): ghcr.io/ray-manaloto/cpp-standard/{base,tools}.
+# Toolchain images have their full artifact tag in the public tools package.
 IMAGE_PREFIX = f"{REGISTRY}/{REPO}"
 PUBLISHER = f"{REPO}/.github/workflows/publish.yml"
 MAIN_REF = "refs/heads/main"
@@ -72,12 +78,14 @@ def names(tag: str, pr: int | None = None, mq: bool = False) -> dict[str, str]:
             out |= {"pr_tag": pr_tag, "pr_ref": f"{image}:{pr_tag}"}
         return out
     if TOOLCHAIN_TAG.fullmatch(tag):
-        # D134: in M1a a toolchain release's git tag and title are its artifact tag.
+        # The public tools package gives an explicit manifest miss before the first build.
+        # Only main publishes toolchain tags. A PR's staged build stays in actions/cache (D91).
+        image = f"{IMAGE_PREFIX}/tools"
         return {
             "kind": "toolchain",
-            "release_tag": tag,
-            "release_title": tag,
-            "archive": f"{tag}.tar.zst",
+            "image": image,
+            "image_tag": tag,
+            "ref": f"{image}:{tag}",
         }
     raise ArtifactError(f"not an artifact tag: {tag}")
 
@@ -117,8 +125,32 @@ class Registry:
             if self.token:
                 basic = base64.b64encode(f"x:{self.token}".encode()).decode()
                 req.add_header("Authorization", f"Basic {basic}")
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                self._bearer[path] = json.load(resp)["token"]
+            for attempt in range(self.RETRIES + 1):
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        token = json.load(resp)["token"]
+                    break
+                except urllib.error.HTTPError as exc:
+                    exc.close()
+                    if (exc.code < 500 and exc.code != 429) or attempt == self.RETRIES:
+                        raise ArtifactError(
+                            f"registry token request for {path}: HTTP {exc.code}"
+                        ) from exc
+                except (OSError, http.client.HTTPException) as exc:
+                    if attempt == self.RETRIES:
+                        raise ArtifactError(
+                            f"registry token request for {path} failed"
+                        ) from exc
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise ArtifactError(
+                        f"registry token request for {path}: invalid token response"
+                    ) from exc
+                time.sleep(5 * (attempt + 1))
+            if not isinstance(token, str) or not token:
+                raise ArtifactError(
+                    f"registry token request for {path}: no bearer token"
+                )
+            self._bearer[path] = token
         return self._bearer[path]
 
     def digest(self, ref: str) -> str | None:
@@ -135,8 +167,14 @@ class Registry:
                     "Authorization", f"Bearer {self._bearer_for(path, fresh)}"
                 )
                 with urllib.request.urlopen(req, timeout=30) as resp:
-                    return resp.headers["Docker-Content-Digest"]
+                    digest = resp.headers.get("Docker-Content-Digest", "")
+                    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                        raise ArtifactError(
+                            f"registry probe of {ref}: missing or invalid digest"
+                        )
+                    return digest
             except urllib.error.HTTPError as e:
+                e.close()
                 if e.code == 404:
                     return None
                 if e.code == 401 and not fresh:
@@ -146,12 +184,91 @@ class Registry:
                     raise ArtifactError(
                         f"registry probe of {ref}: HTTP {e.code}"
                     ) from e
-            except (urllib.error.URLError, TimeoutError) as e:
+            except (OSError, http.client.HTTPException) as e:
                 if attempt == self.RETRIES:
                     raise ArtifactError(f"registry probe of {ref}: {e}") from e
             fresh = False
             time.sleep(5 * (attempt + 1))
         raise ArtifactError(f"registry probe of {ref}: no answer")
+
+    def manifest_bytes(self, ref: str) -> bytes | None:
+        """The exact manifest bytes of `ref` (`image:tag` or `image@sha256:<digest>`), or None only for
+        "not found"; any other answer is an error (the probe rule, D90). Same retries as
+        `digest`, the 401 answered with a fresh pull token first."""
+        if "@" in ref:
+            image, _, selector = ref.rpartition("@")
+        else:
+            image, _, selector = ref.rpartition(":")
+        path = image.removeprefix(f"{REGISTRY}/")
+        fresh = False
+        for attempt in range(self.RETRIES + 1):
+            req = urllib.request.Request(
+                f"https://{REGISTRY}/v2/{path}/manifests/{selector}"
+            )
+            req.add_header("Accept", ",".join(MANIFEST_TYPES))
+            try:
+                req.add_header(
+                    "Authorization", f"Bearer {self._bearer_for(path, fresh)}"
+                )
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    return resp.read()
+            except urllib.error.HTTPError as e:
+                e.close()
+                if e.code == 404:
+                    return None
+                if e.code == 401 and not fresh:
+                    fresh = True
+                    continue
+                if (e.code < 500 and e.code != 429) or attempt == self.RETRIES:
+                    raise ArtifactError(f"registry pull of {ref}: HTTP {e.code}") from e
+            except (OSError, http.client.HTTPException) as e:
+                if attempt == self.RETRIES:
+                    raise ArtifactError(f"registry pull of {ref}: {e}") from e
+            fresh = False
+            time.sleep(5 * (attempt + 1))
+        raise ArtifactError(f"registry pull of {ref}: no answer")
+
+    def blob(self, ref: str, digest: str, dest: Path) -> Path:
+        """The blob `sha256:<digest>` of the repository `ref` names (`image:tag` or
+        `image@sha256:<digest>`), streamed to `dest`. Same probe rule and retries."""
+        image = ref.rpartition("@")[0] if "@" in ref else ref.rpartition(":")[0]
+        path = image.removeprefix(f"{REGISTRY}/")
+        fresh = False
+        for attempt in range(self.RETRIES + 1):
+            req = urllib.request.Request(f"https://{REGISTRY}/v2/{path}/blobs/{digest}")
+            try:
+                # GHCR can redirect blobs to signed object storage URLs.
+                req.add_unredirected_header(
+                    "Authorization", f"Bearer {self._bearer_for(path, fresh)}"
+                )
+                with (
+                    urllib.request.urlopen(req, timeout=600) as resp,
+                    open(dest, "wb") as f,
+                ):
+                    shutil.copyfileobj(resp, f)
+                return dest
+            except urllib.error.HTTPError as e:
+                e.close()
+                if e.code == 404:
+                    raise ArtifactError(
+                        f"registry pull of {ref}: no blob {digest}"
+                    ) from e
+                if e.code == 401 and not fresh:
+                    fresh = True
+                    continue
+                if (e.code < 500 and e.code != 429) or attempt == self.RETRIES:
+                    raise ArtifactError(f"registry pull of {ref}: HTTP {e.code}") from e
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                ConnectionError,
+                http.client.HTTPException,
+            ) as e:
+                if attempt == self.RETRIES:
+                    raise ArtifactError(f"registry pull of {ref}: {e}") from e
+            fresh = False
+            time.sleep(5 * (attempt + 1))
+        raise ArtifactError(f"registry pull of {ref}: no answer")
 
 
 # --- the wait (artifact:check, D61, D62) --------------------------------------
@@ -165,13 +282,12 @@ class Clock:
 
 def candidates(tag: str, pr: int | None, mq: bool) -> list[str]:
     """Where a PR's gate jobs may take a tag from: `main`'s image, else the run's own `pr-`
-    image (D54, D62, D134); for a toolchain, `main`'s release, else in a pull-request or
-    merge-queue run the builder's cache entry on the run's ref (D83, D91)."""
+    image (D54, D62, D134); for a toolchain, `main`'s image (an unattested pr- image is
+    never a source, #254), else in a pull-request or merge-queue run the builder's cache
+    entry on the run's ref (D83, D91)."""
     n = names(tag, pr, mq)
     if n["kind"] == "toolchain":
-        return [f"release {tag}"] + (
-            [f"cache {CACHE_PREFIX}{tag}"] if pr is not None else []
-        )
+        return [n["ref"]] + ([f"cache {CACHE_PREFIX}{tag}"] if pr is not None else [])
     return [n["ref"]] + ([n["pr_ref"]] if "pr_ref" in n else [])
 
 
@@ -180,12 +296,23 @@ def candidates(tag: str, pr: int | None, mq: bool) -> list[str]:
 CACHE_PREFIX = "toolchain-"
 
 
+@dataclass(frozen=True)
+class Found:
+    """Where a tag was found: `where` names the place for the logs; `digest` is the image's
+    digest when it is a registry image, so a consumer can pull exactly what was probed."""
+
+    where: str
+    digest: str | None = None
+
+
 class Toolchains:
-    """Whether a toolchain tag exists: `main`'s published release with that tag (D134), else, in a
-    pull-request or merge-queue run, the builder run's cache entry on `ref` (D91)."""
+    """Whether a toolchain tag exists (#254): `main`'s image in GHCR — the probe rule: any
+    registry answer other than "not found" is an error, never a "does not exist" — else, in
+    a pull-request or merge-queue run, the builder run's cache entry on `ref` (D91)."""
 
     def __init__(self, token: str | None, ref: str | None) -> None:
         self.token = token
+        self.registry = Registry(token)
         self.ref = ref
 
     # Transient answers (5xx, 429, network errors) are retried, as Registry.digest does, so one
@@ -212,30 +339,18 @@ class Toolchains:
             time.sleep(5 * (attempt + 1))
         raise ArtifactError(f"GitHub API {path}: no answer")
 
-    def where(self, tag: str) -> str | None:
-        rel = self._get(f"repos/{REPO}/releases/tags/{urllib.parse.quote(tag)}")
-        if rel and not rel.get("draft"):
-            archive = f"{tag}.tar.zst"
-            title = rel.get("name")
-            assets = {a.get("name") for a in (rel.get("assets") or [])}
-            defects: list[str] = []
-            if title != tag:
-                defects.append(f"title is {title!r}, expected {tag!r}")
-            if archive not in assets:
-                defects.append(f"missing asset {archive}")
-            if not defects:
-                return f"release {tag}"
-            print(
-                f"release {tag} is not ready: {'; '.join(defects)}",
-                file=sys.stderr,
-            )
+    def where(self, tag: str) -> Found | None:
+        n = names(tag)
+        digest = self.registry.digest(n["ref"])
+        if digest:
+            return Found(f"image {n['ref']}@{digest}", digest)
         if self.ref:
             key = urllib.parse.quote(CACHE_PREFIX + tag, safe="")
             ref = urllib.parse.quote(self.ref, safe="")
             caches = self._get(f"repos/{REPO}/actions/caches?key={key}&ref={ref}") or {}
             for c in caches.get("actions_caches", []):
                 if c.get("key") == CACHE_PREFIX + tag:
-                    return f"cache {c['key']} on {self.ref}"
+                    return Found(f"cache {c['key']} on {self.ref}")
         return None
 
 
@@ -261,7 +376,7 @@ def check(
                 if toolchains is None:
                     raise ArtifactError(f"{tag}: no toolchain lookup given")
                 if where := toolchains.where(tag):
-                    log(f"found {tag}: {where}")
+                    log(f"found {tag}: {where.where}")
                     del waiting[tag]
                 continue
             for ref in waiting[tag]:
@@ -422,13 +537,18 @@ def main(argv: list[str]) -> int:
             print(f"resolved {args.tag} to {r.image} ({r.source})", file=sys.stderr)
             _write_output({"image": r.image, "source": r.source})
         elif args.cmd == "probe" and TOOLCHAIN_TAG.fullmatch(args.ref):
-            # A toolchain: main's release, or in a pull-request or merge-queue run this ref's
-            # cache entry (an earlier run of the same ref already built it).
+            # A toolchain: main's image, the probe rule (any registry answer other than
+            # "not found" fails the caller's job, #254), or in a pull-request or merge-queue
+            # run this ref's cache entry (an earlier run of the same ref already built it).
             event = os.environ.get("GITHUB_EVENT_NAME", "")
             ref = os.environ.get("GITHUB_REF") if event in PR_EVENTS else None
             where = Toolchains(_token(), ref).where(args.ref)
             _write_output(
-                {"exists": "true" if where else "false", "where": where or ""}
+                {
+                    "exists": "true" if where else "false",
+                    "where": where.where if where else "",
+                    "digest": (where.digest or "") if where else "",
+                }
             )
         elif args.cmd == "probe":
             digest = Registry(_token()).digest(args.ref)

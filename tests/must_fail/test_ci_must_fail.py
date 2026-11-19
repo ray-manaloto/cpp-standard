@@ -103,13 +103,18 @@ class Runner(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("lists no fixture", r.stderr)
 
-    def test_the_toolchain_fixture_planted_green_fails_the_run(self) -> None:
-        r = run({"MUST_FAIL_PLANT": "accept"})
+    def test_the_toolchain_fixtures_planted_green_fail_the_run(self) -> None:
+        for name in ("toolchain-unattested", "toolchain-wrong-hash"):
+            (self.dir / name).symlink_to(ROOT / "fixtures/must-fail" / name)
+            with (self.dir / "expected.toml").open("a") as listing:
+                listing.write(f'[fixture.{name}]\ncheck = "toolchain:fetch"\n')
+        r = self.local()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = run({"MUST_FAIL_PLANT": "accept", "CPPSTD_MUST_FAIL_DIR": str(self.dir)})
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("toolchain-unattested went green", r.stderr)
         self.assertIn("installed 'refused'", r.stderr)
-        # The wrong-hash fixture runs in the same planted run; it is green too, or could not run.
-        self.assertRegex(r.stderr, r"toolchain-wrong-hash (went green|could not run)")
+        self.assertIn("toolchain-wrong-hash went green", r.stderr)
 
     def test_a_fixture_that_moves_head_fails_the_run(self) -> None:
         repo = self.dir / "repo"

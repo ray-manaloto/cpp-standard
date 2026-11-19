@@ -4,8 +4,11 @@
 # hash-input table; its tag must differ from the baseline vector of the same artifact and arch
 # (or, with `same = true`, equal it). `against` names another vector to compare with instead.
 # The expected tags were computed outside pins.py with git hash-object, jq and shasum
-# (tests/artifact_tag/expected.sh). `inputs`, where given, lists the files `pins.py tag --inputs` puts in
-# an image's build context: every hashed file, the whole lock for a slice.
+# (tests/artifact_tag/expected.sh). A vector may omit `tag` and assert only its relative
+# behaviour (`same`/`against`), for a rule change whose absolute hashes were not recomputed;
+# expected.sh still prints its tag, to paste in. `inputs`, where given, lists the files
+# `pins.py tag --inputs` puts in an image's build context: every hashed file, the whole lock
+# for a slice.
 
 [tree]
 "image/base.Dockerfile" = '''
@@ -377,8 +380,8 @@ echo build v2
 '''
 
 # --- toolchain, Linux: pins.toml, build.sh, linux/ patches, apt-toolchain-host.toml,
-# apt-sources.toml, the host-tools lock slice, artifact/build, and apt.toml when pins.toml
-# sets apt_compiler = true (D162) ---
+# apt-sources.toml, the host-tools lock slice, artifact/build, and the pins of the apt
+# packages pins.toml names when it sets apt_compiler = true (D162, #254) ---
 
 [[vector]]
 name = "p2996 linux arm64"
@@ -502,9 +505,9 @@ tag = "p2996-linux-arm64-b2f8eae5aa0987ee"
 '''
 
 [[vector]]
-name = "p2996: apt_compiler = true"
+name = "p2996: apt_compiler = true, naming its apt pins"
 artifact = "p2996-linux-arm64"
-tag = "p2996-linux-arm64-9f2469c58840ca51"
+tag = "p2996-linux-arm64-de6a15e459b45b6a"
 
 [vector.change]
 "toolchains/p2996/pins.toml" = '''
@@ -512,14 +515,21 @@ upstream = "21.0.0-p2996"
 salt = 0
 host_tools = ["cmake"]
 apt_compiler = true
+apt_packages = ["apt:clang-23", "apt:lld-23"]
 source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6-1", os = ["linux"] }
+"apt:lld-23" = { version = "1:23.1.5-1", os = ["linux"] }
 '''
 
 [[vector]]
-name = "p2996: apt.toml when apt_compiler is true"
+name = "p2996: an apt pin the build does not use"
 artifact = "p2996-linux-arm64"
-against = "p2996: apt_compiler = true"
-tag = "p2996-linux-arm64-f7501560a19bc135"
+tag = "p2996-linux-arm64-de6a15e459b45b6a"
+against = "p2996: apt_compiler = true, naming its apt pins"
+same = true
 
 [vector.change]
 "toolchains/p2996/pins.toml" = '''
@@ -527,11 +537,101 @@ upstream = "21.0.0-p2996"
 salt = 0
 host_tools = ["cmake"]
 apt_compiler = true
+apt_packages = ["apt:clang-23", "apt:lld-23"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6-1", os = ["linux"] }
+"apt:lld-23" = { version = "1:23.1.5-1", os = ["linux"] }
+"apt:clang-format-23" = { version = "1:23.1.9-1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "p2996: the bootstrap compiler's pin"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-2d58b7b1b49c8c39"
+against = "p2996: apt_compiler = true, naming its apt pins"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+apt_packages = ["apt:clang-23", "apt:lld-23"]
 source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
 '''
 ".mise/conf.d/apt.toml" = '''
 [bootstrap.packages]
 "apt:clang-23" = { version = "1:23.1.7-1", os = ["linux"] }
+"apt:lld-23" = { version = "1:23.1.5-1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "p2996: the linker's pin"
+artifact = "p2996-linux-arm64"
+tag = "p2996-linux-arm64-e38df155e9f14644"
+against = "p2996: apt_compiler = true, naming its apt pins"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+apt_packages = ["apt:clang-23", "apt:lld-23"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6-1", os = ["linux"] }
+"apt:lld-23" = { version = "1:23.1.6-1", os = ["linux"] }
+'''
+
+[[vector]]
+name = "p2996: apt_packages names a pin apt.toml lacks"
+artifact = "p2996-linux-arm64"
+tag = "error: .mise/conf.d/apt.toml has no pin for apt:lld-23"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+apt_packages = ["apt:clang-23", "apt:lld-23"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "p2996: apt_compiler = true without apt_packages"
+artifact = "p2996-linux-arm64"
+tag = "error: toolchains/p2996/pins.toml: apt_packages must name the apt packages the build uses"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "p2996: apt_packages with a name that is not apt:<name>"
+artifact = "p2996-linux-arm64"
+tag = "error: toolchains/p2996/pins.toml: apt_packages holds 'lld-23', not apt:<name>"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+apt_packages = ["lld-23"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
 '''
 
 [[vector]]
@@ -563,7 +663,8 @@ source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c794269
 '''
 
 # --- toolchain, macOS: pins.toml, build.sh, macos/ recipe files, vm/inputs.toml, the
-# macos-arm64 host-tools lock slice, artifact/build, and apt.toml when apt_compiler = true ---
+# macos-arm64 host-tools lock slice, artifact/build, and the pins of the apt packages
+# pins.toml names when it sets apt_compiler = true (D162, #254) ---
 
 [[vector]]
 name = "p2996 macos arm64"
@@ -663,9 +764,9 @@ echo build v2
 '''
 
 [[vector]]
-name = "p2996 macos: apt_compiler = true"
+name = "p2996 macos: apt_compiler = true, naming its apt pins"
 artifact = "p2996-macos-arm64"
-tag = "p2996-macos-arm64-b507c10e7f7c4f6c"
+tag = "p2996-macos-arm64-276b17648322cd1a"
 
 [vector.change]
 "toolchains/p2996/pins.toml" = '''
@@ -673,7 +774,30 @@ upstream = "21.0.0-p2996"
 salt = 0
 host_tools = ["cmake"]
 apt_compiler = true
+apt_packages = ["apt:clang-23"]
 source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "p2996 macos: an apt pin the build does not use"
+artifact = "p2996-macos-arm64"
+tag = "p2996-macos-arm64-276b17648322cd1a"
+against = "p2996 macos: apt_compiler = true, naming its apt pins"
+same = true
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+host_tools = ["cmake"]
+apt_compiler = true
+apt_packages = ["apt:clang-23"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+".mise/conf.d/apt.toml" = '''
+[bootstrap.packages]
+"apt:clang-23" = { version = "1:23.1.6-1", os = ["linux"] }
+"apt:clang-format-23" = { version = "1:23.1.9-1", os = ["linux"] }
 '''
 
 [[vector]]

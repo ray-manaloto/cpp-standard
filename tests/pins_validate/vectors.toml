@@ -694,8 +694,24 @@ host_tools = ["cmake"]
 source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
 '''
 
+# D162 as amended by #254: when a toolchain bootstraps with an apt compiler, its pins name
+# the apt packages the build uses, and each name must be a pin in apt.toml.
 [[vector]]
-name = "a toolchain with apt_compiler = true passes"
+name = "a toolchain with apt_compiler = true and its apt packages passes"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = true
+apt_packages = ["apt:clang-23"]
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "a toolchain with apt_compiler = true but no apt_packages"
+reject = "inputs"
 
 [vector.change]
 "toolchains/p2996/pins.toml" = '''
@@ -703,7 +719,50 @@ upstream = "21.0.0-p2996"
 salt = 0
 apt_compiler = true
 host_tools = ["cmake"]
-source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333" }
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "apt_packages naming a package apt.toml does not pin"
+reject = "inputs"
+path = "toolchains/p2996/pins.toml"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = true
+apt_packages = ["apt:clang-23", "apt:lld-23"]
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "apt_packages with a name that is not apt:<name>"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = true
+apt_packages = ["clang-23"]
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
+'''
+
+[[vector]]
+name = "apt_packages set while apt_compiler is false"
+reject = "inputs"
+
+[vector.change]
+"toolchains/p2996/pins.toml" = '''
+upstream = "21.0.0-p2996"
+salt = 0
+apt_compiler = false
+apt_packages = ["apt:clang-23"]
+host_tools = ["cmake"]
+source = { url = "https://github.com/bloomberg/clang-p2996/archive/562409c7942690d59ea470762515f88f24b16e23.tar.gz", sha256 = "3333333333333333333333333333333333333333333333333333333333333333", commit = "562409c7942690d59ea470762515f88f24b16e23" }
 '''
 
 # D164: image/runner.inputs.toml holds only the exact actions/runner version and, for
