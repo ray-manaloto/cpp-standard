@@ -212,7 +212,9 @@ Each finding has these fields:
   The trust gap stands.
 - **Recommendation:** keep, narrowed as above.
 - **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; #227
-  decides the trust-root list, and the remainder moved to #247.
+  decides the trust-root list, and the remainder moved to #247. #247 left
+  F2 as it was, blocked on #227: the trust-root list, D149 and who applies
+  each input follow #227's decision.
 
 #### F3. M2 entry needs a decision: who starts containers and certification after isolation, where agents run, and what each may read
 
@@ -291,7 +293,7 @@ Each finding has these fields:
 - **Codex review:** holds. D155 assigns the two Apps to their environments, but the design's Glossary and §6 still list one; the PC-only Doppler config (D141) and the `agent-containers` token (D155) serve different purposes, and both are missing from Credential storage.
 - **Recommendation:** keep.
 - **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
-  remainder moved to #247.
+  remainder moved to #247, which finished it in the design.
 
 #### F7. Choosing a project image on the Mac also replaces the Mac's credential service
 
@@ -511,7 +513,7 @@ Each finding has these fields:
   is not reopened. The wording and the undeclared copies stand.
 - **Recommendation:** keep, narrowed as above.
 - **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
-  remainder moved to #247.
+  remainder moved to #247, which finished it in the design.
 
 #### F15. G1 ("every input is pinned") against unpinned agent CLIs, auto-merged skills and D41's owner approval
 
@@ -624,7 +626,7 @@ Each finding has these fields:
 - **Codex review:** holds as merged.
 - **Recommendation:** keep.
 - **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
-  remainder moved to #247.
+  remainder moved to #247, which finished it in the design.
 
 #### F20. The Glossary still calls the dotfiles setup agent the only installer, and the Tart step gives no digest
 
@@ -730,7 +732,7 @@ Each finding has these fields:
   probe.
 - **Recommendation:** keep, as a Nit.
 - **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
-  remainder moved to #247.
+  remainder moved to #247, which finished it in the design.
 
 #### F25. M2 reconciliation: `m2-trust-backlog.md` against §12, D149 and D155
 
@@ -904,7 +906,7 @@ Each finding has these fields:
 - **Codex review:** holds as narrowed.
 - **Recommendation:** keep.
 - **Owner:** kept (ticket #142, 2026-11-18): the design text changed in part; the
-  remainder moved to #247.
+  remainder moved to #247, which finished it in the design.
 
 #### F35. The Glossary's "Agent session" names only Claude and Codex
 
@@ -1000,7 +1002,9 @@ one cell. Findings moved: F1 to #218; F3 and F25 to #219; F10 to #220; F7
 and F40 to #221; F12 and F13 to #222; F29 to #223; F31 to #224; F27
 to #226; F2 to #227; F15 to #228. For a moved finding the design states what
 is open and names the issue. Six findings changed the design only in part:
-the remainder of F2, F6, F14, F19, F24 and F34 moved to #247. F22 was
+the remainder of F2, F6, F14, F19, F24 and F34 moved to #247, which
+finished F6, F14 (with D175 and #252), F19,
+F24 (with #253) and F34, and left F2 blocked on #227. F22 was
 settled before this step by D166 and D167. Four decision rows came out of
 it: D170 (F8), D171 (F23), D172 and D174 (F1).
 

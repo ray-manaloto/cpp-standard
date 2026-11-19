@@ -289,8 +289,11 @@ and then used, not grown.
 - **Q9. Spack's container probe** (D142). Before the first Spack image, a
   probe in a throwaway container on the PC decides which apt packages that
   mise now supplies (git, xz-utils, python3) can leave the base. D144 closed
-  the other half of D142's question, how Spack's Python finds clingo. No
-  ticket owns the probe yet (§11 Spack).
+  the other half of D142's question, how Spack's Python finds clingo.
+  #253 owns the probe. Its output is a report under
+  `docs/standard/reports/` that names which of those packages leave the
+  base; it feeds an amendment of D142 and the apt list of the Spack image,
+  which does not exist yet (§11 Spack).
 
 Settled questions are at the end of the Technical Plan
 ([Settled questions](#settled-questions)).
@@ -1481,21 +1484,44 @@ running it.
 - **apt cache.** `mise.ubuntu-cache.toml`, used only with
   `-E ubuntu,ubuntu-cache`, sends the apt sources through an
   apt-cacher-ultra proxy named by `CPP_STANDARD_APT_CACHE`; CI and the
-  image never use it (D138). The certified Ubuntu environment's apt pins
-  are in `mise.ubuntu.toml`.
-- **Spack** runs only in throwaway containers on the PC's Docker. Below it
-  sit apt (the certified toolchain plus `gfortran-16`) or the macOS Command
-  Line Tools, then the tools mise pins (D142). clingo goes into the Python
-  environment that runs Spack (D144), which `SPACK_PYTHON` names (D145).
-  This layering is planned, not built: no Spack image exists. D142's
-  container probe comes first (open question Q9).
-- **mise version.** `image/base.inputs.toml` and the `MISE_VER` argument of
-  `docs/standard/agents.Dockerfile` and `docs/standard/ubuntu-cert.Dockerfile`
-  pin mise 2026.11.9, the PC host's release (D146). `min_version` in
-  `mise.toml` is a floor, not a pin. The slot runner image's Dockerfile in
-  `mise.pc.toml` names an older release, outside D146's list, and the
-  `jdx/mise-action` steps of `ci.yml` name 2026.11.9 again. With no Renovate
-  configuration yet, nothing bumps these copies together.
+  image never use it (D138). Two files own Ubuntu apt pins, for two
+  different targets: `.mise/conf.d/apt.toml` and its two siblings (§3) own
+  the image's and CI's, and `mise.ubuntu.toml`, loaded only with
+  `-E ubuntu`, owns the certified Ubuntu host's. `pins:apt-bump` moves both
+  (D165, D173); `pins:validate` checks only the `.mise/conf.d` fragments.
+- **Spack** will run only in throwaway containers on the PC's Docker. Below
+  it will sit apt (the certified toolchain plus `gfortran-16`, which no
+  config installs yet) or the macOS Command Line Tools, then the tools mise
+  pins (D142). clingo will go into the Python environment that runs Spack
+  (D144), which `SPACK_PYTHON` names (D145). This layering is planned, not
+  built: no Spack image exists. D142's container probe comes first: #253
+  owns it, and its report under `docs/standard/reports/` decides which of
+  git, xz-utils and python3 (now in `.mise/conf.d/apt.toml`) leave the Spack
+  image's apt list (open question Q9).
+- **mise version and Ubuntu base.** `image/base.inputs.toml` and the
+  `MISE_VER` argument of `docs/standard/agents.Dockerfile` and
+  `docs/standard/ubuntu-cert.Dockerfile` pin mise 2026.11.9, the PC host's
+  release (D146). `min_version` in `mise.toml` is a floor, not a pin (D86).
+  These copies form one group, which moves together (D175):
+  - the mise version: `mise` in `image/base.inputs.toml`; `MISE_VER`, with
+    its `MISE_SHA256_AMD64` and `MISE_SHA256_ARM64`, in both Dockerfiles; the
+    `jdx/mise-action` `version` in `ci.yml`, `builder.yml` and
+    `apt-bump.yml`; and the version in the install command and pin table
+    of `docs/standard/ubuntu.md`;
+  - the Ubuntu 26.10 base digest: `image` in `image/base.inputs.toml`, the
+    `FROM` lines of both Dockerfiles (and `ubuntu-cert.Dockerfile`'s
+    `base.digest` label), the pin table and expected digest of
+    `docs/standard/ubuntu.md`, and the M0 spike workflows `spike-m0-h.yml` and
+    `spike-m0-bj.yml` while they exist.
+
+  A `pins:validate` rule fails when any copy in the group differs from
+  `image/base.inputs.toml`, so a bump that misses one copy cannot merge.
+  `min_version` is outside the rule: it may stay below the pin. The rule is
+  planned, not built; #252 builds it. Until then nothing checks the
+  group. Whether Renovate bumps it as one group waits on its
+  configuration (#222, Q6). The slot runner image's Dockerfile in `mise.pc.toml`
+  (mise 2026.11.5, `docs/standard/gha-runner/`) is outside the group: it is
+  a host input for other repositories' slots (#227, #239).
 
 ### 12. Project agent containers (D143, D147, D155)
 
@@ -1895,9 +1921,9 @@ history. So nothing unscrubbed is ever pushed.
    required-check list and the M1b and M2 settings.
 6. **The agent App** (D40, D52, D71), through GitHub's App-manifest flow
    (`docs/runbooks/agent-app.md`). This step makes `cpp-standard-agents`.
-   The container agent App, `ray-manaloto-agents`, was made later and
-   outside these steps, by `mise run agents:app-create` and
-   `mise run agents:pc-doppler` (§12, D155).
+   The container agent App, `ray-manaloto-agents`, was made later, outside
+   these numbered steps; its steps are under "Project agent containers"
+   below (§12, D155).
    - **First, CODEOWNERS (D100),** by a PR from the owner's login, allowed
      because code-owner review is off (D101, D149; §6 Trust roots). It is in
      place when `gh api repos/{repo}/codeowners/errors` reports no errors.
@@ -1948,6 +1974,36 @@ needs it. Installing Tart was the owner's setup agent's prerequisite
 `sha256:d7641b1d985fd53fbac071c663bf249007b9b387e16b7d576144588acb1d93f9`
 ([macos.md](../standard/macos.md)). The owner is needed only if
 macOS shows a permission prompt. Done when `tart list` shows the digest.
+
+**Project agent containers** (§12, D155) need four steps of their own,
+outside the numbered steps and outside the Level 1 gate. None prints a
+secret.
+
+- **The container agent App.** The owner runs `mise run agents:app-create`
+  on the Mac, clicks Create and then Install with All repositories; the
+  task pipes the App's key and client ID into the owner's Doppler config
+  through `mise run secret:set`, and the next step moves them to
+  `agent-containers`. Done when `gh api /orgs/ray-manaloto/installations
+  --jq '.installations[] | select(.app_slug == "ray-manaloto-agents") |
+  .repository_selection'` prints `all`.
+- **The Doppler token on the PC and the Mac.** The owner runs
+  `mise run agents:pc-doppler` in their own terminal, after the App step:
+  it fills the Doppler project `agent-containers` (config `prd`) and writes
+  one read-only service token to `~/.config/agent-secrets/doppler-token` on
+  the PC and on the Mac. This is not the PC-only Doppler config of
+  D141. Done when the task ends with "done; the PC reads the four names
+  from agent-containers/prd": its last step lists the names, never the
+  values, with the PC's copy of the token.
+- **The Antigravity CLI login,** once per project per machine:
+  `mise run agents:agy-login <project> [--host mac]`, in a terminal or by
+  an agent with `--step start` and `--step finish` (D166, D167). Done when
+  `mise run agents:agy-login <project> --step status` exits 0.
+- **OpenCode's model on an old volume.** A container made before D154's
+  change keeps `opencode/glm-5.3-flash-free` on its `opencode-config`
+  volume. In each such container, set `"model"` in
+  `~/.config/opencode/opencode.json` to `opencode/deepseek-v4.1-flash-free`,
+  the image's default. Done when `grep -c glm-5.3
+  ~/.config/opencode/opencode.json` in the container prints 0.
 
 Runner setup comes later: the PC in M2, the Mac in M3. Until M2, every
 cpp-standard job runs on hosted runners.
@@ -2126,6 +2182,8 @@ postinstall = '[ -n "${CI:-}" ] || hk install --mise'   # skipped in CI (D102)
 # caps/update, doctor, artifact/*, toolchain/*, image/*, vm/*, linux/run, review/*, repo/*,
 # pins/validate, gate/policy, agent/token, vcpkg/bootstrap, perf/instructions,
 # runner/pc-image, canary
+# and, outside M1a (§11, §12; Machine configuration and agent containers): certify/*,
+# pc/doctor, agents/*, pins/apt-bump
 # no [tools], no apt source and no toolchain version here (D72, D74, D90)
 
 # .mise/conf.d/apt-sources.toml (P), the only section allowed (D90):
@@ -2160,7 +2218,7 @@ fingerprint = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
 
 # image/base.inputs.toml (P)
 image = "ubuntu:26.10@sha256:<64 hex>"
-mise = "<exact mise version>"   # the only mise pin, first value 2026.11.8 (D99), now 2026.11.9 (D146); the Mac golden image reads it too (D73, D86)
+mise = "<exact mise version>"   # the group's reference copy (§11 mise version, D175), first value 2026.11.8 (D99), now 2026.11.9 (D146); the Mac golden image reads it too (D73, D86)
 mise_signer = "ps1_<key id>"    # packslip key for the mise install
 packslip_image = "ghcr.io/jdx/packslip@sha256:<64 hex>"
 
@@ -2238,6 +2296,32 @@ salt = 0                        # bumped only to republish a deleted release (D7
 | `.mise/tasks/review/cap` + `review/cap.toml` | Counts local agent sessions against the cap in `review/cap.toml` (starts at 3) and posts the count as the agent App to the pinned `digest` issue (D23, D113). |
 | `docs/standard/tools.md`, `docs/standard/perf.md` | The tier-2 tools and when each moves to tier 1. The D35 metrics table, with Level 2 marked. |
 
+### Machine configuration and agent containers (outside the Level 1 gate)
+
+These rows are the files of §11 and §12 (D136 to D155). None of them is a
+Level 1 gate item. D158 defines "M1a green", D21 makes the tier-1 gate items
+green on 2026-11-27 the standard, and D156 keeps these files out of M1a. So
+they land on their own tickets, before or after that date, and an
+unfinished row does not hold the Level 1 date. Who applies each host input,
+and as which identity, is #227; until it is decided, "Who runs it" says who
+runs it today. **(O)** marks a row whose tasks are under the Owned roots
+(`.mise/tasks/**`); its other files are not. No row is a pin
+that `pins:validate` checks (§11 mise version, #252).
+
+| Path or task | Decisions | Status | Who runs it | Check |
+|---|---|---|---|---|
+| `mise.pc.toml` | D139, D141, D150 | the PC's declared config since the Phase 3 link switch (2026-11-17) | the next apply on the PC, from the PC's checkout of `main` | `mise run pc:doctor` |
+| `mise.mac.toml` | D150 | a copy; dotfiles still applies on the Mac until the Mac switch (#236, #244) | the Mac's apply, after the switch | the switch's check in [machine-bootstrap-migration.md](level-1/machine-bootstrap-migration.md) |
+| `mise.ubuntu.toml` | D137, D165, D173 | owns the certified Ubuntu host's apt pins (§11 apt cache) | `mise -E ubuntu bootstrap`, as root, in an Ubuntu 26.10 container or host; `pins:apt-bump` moves its pins | `mise run certify:ubuntu` |
+| `mise.ubuntu-cache.toml` | D138 | in use with `-E ubuntu,ubuntu-cache` only | the same bootstrap, when `CPP_STANDARD_APT_CACHE` is set | none of its own |
+| `docs/standard/macos.md`, `certify:macos` **(O)** | D136, D172 | in use | an agent on the Mac host | `mise run certify:macos`; report under `docs/standard/reports/` |
+| `docs/standard/ubuntu.md`, `ubuntu-cert.Dockerfile`, `ubuntu-seccomp.json`, `ubuntu-cert-tools/`, `ubuntu-p2996/`, `certify:ubuntu`, `certify:ubuntu-image`, `certify:ubuntu-probes` **(O)** | D137, D140, D146 | in use | an agent with a slot grant: amd64 on the PC's Docker, arm64 on the Mac (`--local`) | `mise run certify:ubuntu`; report under `docs/standard/reports/` |
+| `docs/standard/gha-runner/**` | D141 | installed on the PC by `mise.pc.toml` | the PC's apply; `gha-slot build` on the PC for the image | `mise run pc:doctor` |
+| `pc:doctor` **(O)**, `python/pctools/` | D141 | in use | anyone, from the Mac, over ssh; it changes nothing | its exit status; the `python/pctools` tests |
+| `docs/standard/agents.Dockerfile`, `docs/standard/agent-plugins`, `agents:image`, `agents:up`, `agents:refresh` **(O)** | D143, D147, D152, D154, D155, D171 | in use | an agent with a slot grant, on the PC or the Mac (`--host mac`) | `agents:up` starts or reuses the container with GitHub and Claude Code logged in |
+| `docs/standard/agent-auth/**` | D155 | the `agent-secrets` user service on the PC (from `mise.pc.toml`), a container on the Mac | the PC's apply; `agents:up --host mac` on the Mac | a registered container's `/run/agent-secrets/gh-token` is under one hour old |
+| `agents:app-create`, `agents:pc-doppler`, `agents:agy-login` **(O)** | D155, D166, D167 | done once; `agents:agy-login` once per project per machine | the owner (the first two); an agent or the owner (`agents:agy-login`) | the "Done when" of each step under Project agent containers in [GitHub and host setup](#github-and-host-setup-steps-1-8-before-m1a-steps-9-10-in-m1a-pr-6) |
+
 ### Files changed elsewhere
 
 - `docs/designs/*`: this design, the brief, the decisions log and the review
@@ -2250,12 +2334,10 @@ salt = 0                        # bumped only to republish a deleted release (D7
   (§11).
 - Optional, owner's call: jouet's enforced rules in `/etc/jouet/rules`, which
   needs root (D64).
-- The machine and agent-container files of §11 and §12 (`mise.pc.toml`,
-  `mise.mac.toml`, `mise.ubuntu.toml`, `mise.ubuntu-cache.toml`,
-  `docs/standard/**`, the `certify:*` and `agents:*` tasks) and the three
-  shared repositories of §7 have no rows in this file plan. They are
-  outside M1a (D156), and this design does not place them against the
-  Level 1 date (2026-11-27, D21).
+- The machine and agent-container files of §11 and §12 are in
+  [Machine configuration and agent containers](#machine-configuration-and-agent-containers-outside-the-level-1-gate)
+  above, outside the Level 1 gate. The three shared repositories of §7 are
+  outside it too.
 
 --------------------------------------------------------------------------------
 
