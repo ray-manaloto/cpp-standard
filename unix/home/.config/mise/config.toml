@@ -640,19 +640,19 @@ run = '{% if os() == "macos" %}mise bootstrap packages apply brew:ruby --yes{% e
 # 0.0.5 (owner, 2026-11-17): --no-context-budget skips hiding unused skills and setting a compaction window
 # (docs/setup.md "Context budget"); the Artifact tools stay because mise.toml's ~/.claude/settings.json/allow
 # names them; jouet-init is no longer installed (it needs --init-skill, jouet #581) and setup removes the old copy.
-# OpenCode is not a `jouet setup` target: it reads ~/.config/opencode/AGENTS.md as global instructions
-# (OpenCode v2.2.7 packages/core/src/config/plugin/instruction.ts: `join(global.config, "AGENTS.md")`,
-# where `global.config` is `roots("opencode").config`, XDG_CONFIG_HOME or ~/.config joined with
-# "opencode", packages/util/src/global-roots.ts:6,15-16), so agents:opencode-jouet (python/home,
-# hometools opencode-jouet) keeps jouet's own guidance current there between its `<!-- jouet:start/end -->`
-# markers, alongside codebase-memory-mcp's block and a hand-written herdr section in the same file.
+# OpenCode is not a `jouet setup` target (jouet docs/setup.md) and does not run Claude Code hooks itself
+# (anomalyco/opencode#12472, closed as not planned 2026-11-12). `--skill` puts jouet's skill in ~/.claude/skills,
+# which OpenCode also reads, and agents:opencode-bridge adds the opencode-claude-hooks bridge to opencode.json
+# (wiki repos-opencode-claude-hooks), trusting only jouet's handlers, and drops the old hometools jouet block from
+# ~/.config/opencode/AGENTS.md. The two steps run in this order: the bridge's trusted list is made from the hooks the
+# setup just wrote.
 [bootstrap.hooks.post-tools]
 run = [
   "mise exec -- skills remove herdr herdrdev/herdr -g -y </dev/null",
   "command -v hc >/dev/null || { echo 'post-tools: herdr-core is not installed yet; open Herdr once, then rerun mise bootstrap' >&2; exit 0; }; v=$(hc --version </dev/null | sed -n 's/^hc \\([0-9][0-9]*\\.[0-9][0-9]*\\.[0-9][0-9]*\\)$/\\1/p') && [ -n \"$v\" ] || { echo 'post-tools: hc --version printed no hc X.Y.Z, so the herdr-core skill is not installed' >&2; exit 1; }; mise exec -- skills add \"herdrdev/herdr-core#v$v\" -g -a claude-code codex -s herdr-core -y </dev/null",
   "v=$(mise current github:vercel-labs/agent-desktop </dev/null) && [ -n \"$v\" ] || { echo 'post-tools: mise current printed no agent-desktop pin, so its skills are not installed' >&2; exit 1; }; mise exec -- skills add \"vercel-labs/agent-desktop#v$v\" -g -a claude-code codex -s agent-desktop agent-desktop-macos agent-desktop-ffi jev-desktop -y </dev/null",
-  "mise exec -- jouet setup claude --global --no-context-budget </dev/null",
-  "mise run agents:opencode-jouet",
+  "mise exec -- jouet setup claude --global --no-context-budget --skill </dev/null",
+  "mise run agents:opencode-bridge",
 ]
 
 # Disk-watch (owner, 2026-11-12): monit, not our own code (docs/research/disk-watch/monit.md). brew's monit 6.0.0

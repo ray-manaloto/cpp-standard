@@ -1,0 +1,238 @@
+#!/usr/bin/env -S python3 -I -B
+#MISE description="Give OpenCode jouet's hooks through the opencode-claude-hooks bridge, trusting only jouet's handlers"
+#USAGE flag "--check" help="Only check: fail when jouet or the bridge would not protect an OpenCode tab"
+"""agents:opencode-bridge: write the bridge's entry into opencode.json and drop the old jouet block from AGENTS.md."""
+
+# A file task, so its run is not shell (AGENTS.md zero bash). OpenCode is not a `jouet setup` target (jouet
+# docs/setup.md), and it will not run Claude Code hooks itself (anomalyco/opencode#12472, closed as not planned
+# 2026-11-12), so the community bridge @hamzaabili/opencode-claude-hooks (MIT, no dependencies; wiki
+# repos-opencode-claude-hooks) runs the hooks `jouet setup claude --global` wrote to ~/.claude/settings.json.
+# The post-tools hook runs this task after that setup (unix/home/.config/mise/config.toml); skills:doctor runs it
+# with --check.
+#
+# What the entry must hold (wiki repos-opencode-claude-hooks, v0.1.3):
+# - trust "none" with `trusted` set to jouet's handler fingerprints only, so the other global Claude hooks (herdr
+#   state, codebase-memory, a python3 guard) never run in OpenCode. A fingerprint hashes the handler's command, its
+#   event and matcher, and the settings file's path, so the list is made on this machine from the bridge's own doctor,
+#   and again after each jouet update, which may change a command.
+# - HTTP hooks off: with them on, an empty httpAllowlist allows any host. Prompt hooks stay off (they spend tokens).
+# - A short timeout: the default is 600 s. jouet's own hooks set 10 s in settings.json.
+# - OpenCode V2's `plugins` list (V1's `plugin` list has no trust prompt and no reliable failure hook).
+# The package is not pinned: the bridge follows the daily updates like every other plugin (owner, 2026-11-17).
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+PACKAGE = "@hamzaabili/opencode-claude-hooks"
+OPTIONS = {
+    "trust": "none",
+    "allowHttpHooks": False,
+    "allowPromptHooks": False,
+    "defaultTimeoutSec": 15,
+    "maxTimeoutSec": 30,
+}
+HOME = Path.home()
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "opencode"
+# The bridge's trust store ignores XDG_CONFIG_HOME (README, Options: trustFile).
+TRUST_STORE = HOME / ".config/opencode/claude-hooks-trust.json"
+SETTINGS = HOME / ".claude/settings.json"
+SKILL = HOME / ".claude/skills/jouet/SKILL.md"
+# One jouet handler as `jouet setup` writes it and the bridge's doctor prints it (label, then command).
+JOUET = re.compile(r"^user: \.claude/settings\.json: sh -c 'jouet --version >/dev/null 2>&1 \|\| exit 0; exec jouet hook claude [a-z-]+'$")
+JOUET_COMMAND = re.compile(r"^sh -c 'jouet --version >/dev/null 2>&1 \|\| exit 0; exec jouet hook claude [a-z-]+'$")
+START, END = "<!-- jouet:start -->", "<!-- jouet:end -->"
+# The environment the bridge gives a command hook (README, Security), where jouet must be found.
+HOOK_ENV = ("PATH", "HOME", "USER", "LANG", "TERM", "TMPDIR")
+DENY = "[jouet rule: git-add-all]"
+
+
+def run(argv: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None, stdin: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, cwd=cwd, env=env, input=stdin, capture_output=True, text=True, check=False, timeout=120)
+
+
+def doctor(*options: str) -> dict:
+    """The bridge's doctor, from a folder with no project hooks."""
+    with tempfile.TemporaryDirectory() as scratch:
+        done = run(["npx", "--yes", PACKAGE, "doctor", "--json", *options], cwd=scratch)
+    if done.returncode:
+        raise SystemExit(f"agents:opencode-bridge: the bridge's doctor exited {done.returncode}: {done.stderr.strip()}")
+    return json.loads(done.stdout)
+
+
+def pending(report: dict) -> dict[str, str]:
+    """fingerprint -> `label: command` of each handler the bridge would not run."""
+    return dict(entry.split(" ", 1) for entry in report["pendingTrust"])
+
+
+def jouet_fingerprints() -> list[str]:
+    everything = pending(doctor("--trust", "none"))
+    return sorted(fp for fp, what in everything.items() if JOUET.match(what))
+
+
+def read_config(path: Path) -> dict:
+    return json.loads(path.read_text()) if path.is_file() else {"$schema": "https://opencode.ai/config.json"}
+
+
+def entry_index(plugins: list) -> int | None:
+    for i, plugin in enumerate(plugins):
+        name = plugin.get("package") if isinstance(plugin, dict) else plugin
+        if isinstance(name, str) and (name == PACKAGE or name.startswith(PACKAGE + "@")):
+            return i
+    return None
+
+
+def write_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as temp:
+        temp.write(text)
+    os.chmod(temp.name, mode)
+    os.replace(temp.name, path)
+
+
+def apply_entry() -> None:
+    path = CONFIG / "opencode.json"
+    fingerprints = jouet_fingerprints()
+    if not fingerprints:
+        raise SystemExit("agents:opencode-bridge: no jouet handler in ~/.claude/settings.json; run: jouet setup claude --global --no-context-budget --skill")
+    config = read_config(path)
+    plugins = config.setdefault("plugins", [])
+    wanted = {"package": PACKAGE, "options": {**OPTIONS, "trusted": fingerprints}}
+    i = entry_index(plugins)
+    if i is None:
+        plugins.append(wanted)
+    else:
+        old = plugins[i]
+        # Keep a pinned version the owner chose.
+        if isinstance(old, dict) and isinstance(old.get("package"), str):
+            wanted["package"] = old["package"]
+        plugins[i] = wanted
+    text = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
+    if not path.is_file() or path.read_text() != text:
+        write_atomic(path, text)
+        print(f"agents:opencode-bridge: wrote {path} ({len(fingerprints)} trusted jouet handlers)")
+    else:
+        print(f"agents:opencode-bridge: unchanged {path}")
+
+
+def drop_jouet_block() -> None:
+    """Remove the old hometools block between jouet's markers: only a well-formed one (each marker alone on its own
+    line, one pair, start first), and only those lines, so every neighbouring byte stays."""
+    path = CONFIG / "AGENTS.md"
+    if not path.is_file():
+        return
+    text = path.read_bytes().decode()
+    lines = text.splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == START]
+    ends = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == END]
+    if not starts and not ends and START not in text and END not in text:
+        return
+    if len(starts) != 1 or len(ends) != 1 or starts[0] > ends[0] or text.count(START) != 1 or text.count(END) != 1:
+        print(f"agents:opencode-bridge: {path} has a jouet marker that is not one well-formed block; left as it is", file=sys.stderr)
+        return
+    del lines[starts[0] : ends[0] + 1]
+    write_atomic(path, "".join(lines))
+    print(f"agents:opencode-bridge: removed jouet's block from {path}")
+
+
+def check() -> list[str]:
+    failed: list[str] = []
+    env = {k: os.environ[k] for k in HOOK_ENV if k in os.environ}
+    # 1. jouet in the hook environment
+    try:
+        version = run(["jouet", "--version"], env=env)
+    except OSError as error:
+        failed.append(f"jouet --version could not start in the hook environment: {error.strerror}")
+    else:
+        if version.returncode:
+            failed.append(f"jouet --version exited {version.returncode} in the hook environment")
+    # 2. the skill
+    if not SKILL.is_file():
+        failed.append(f"{SKILL} is missing; run: jouet setup claude --global --no-context-budget --skill")
+    # 3. a live `git add -A` is refused with jouet's reason, by the handlers the bridge runs
+    try:
+        settings = json.loads(SETTINGS.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        settings = {}
+        failed.append(f"{SETTINGS} is unreadable: {error}")
+    commands = [
+        hook["command"]
+        for group in settings.get("hooks", {}).get("PreToolUse", [])
+        if "Bash" in (group.get("matcher") or "Bash")
+        for hook in group.get("hooks", [])
+        if JOUET_COMMAND.match(hook.get("command", ""))
+    ]
+    if not commands:
+        failed.append("~/.claude/settings.json has no jouet PreToolUse handler; run: jouet setup claude --global --no-context-budget --skill")
+    with tempfile.TemporaryDirectory() as scratch:
+        run(["git", "init", "-q"], cwd=scratch)
+        Path(scratch, "a.txt").write_text("a\n")
+        payload = json.dumps({"session_id": "doctor", "cwd": scratch, "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git add -A"}})
+        refused = False
+        for command in commands:
+            done = run(["sh", "-c", command], cwd=scratch, env=env, stdin=payload)
+            refused = refused or (not done.returncode and '"permissionDecision":"deny"' in done.stdout.replace(" ", "") and DENY in done.stdout)
+        if commands and not refused:
+            failed.append(f"a live `git add -A` was not refused with jouet's reason {DENY}")
+        if run(["git", "ls-files"], cwd=scratch).stdout.strip():
+            failed.append("the scratch index changed during the live `git add -A` check")
+    # 4. the bridge's entry, and what it trusts
+    config = read_config(CONFIG / "opencode.json")
+    plugins = config.get("plugins", [])
+    i = entry_index(plugins)
+    if i is None or not isinstance(plugins[i], dict):
+        failed.append(f"{CONFIG / 'opencode.json'} has no {PACKAGE} entry in `plugins`; run: mise run agents:opencode-bridge")
+        return failed
+    options = plugins[i].get("options", {})
+    for key, value in OPTIONS.items():
+        if options.get(key) != value:
+            failed.append(f"bridge option {key} is {options.get(key)!r}, not {value!r}")
+    if options.get("httpAllowlist"):
+        failed.append("bridge option httpAllowlist is set; HTTP hooks are off, so it must stay empty")
+    trusted = options.get("trusted", [])
+    trust_args = ["--trust", str(options.get("trust", "user"))] + [a for fp in trusted for a in ("--trusted", fp)]
+    baseline = pending(doctor("--trust", "none"))
+    configured = pending(doctor(*trust_args))
+    running = {fp: what for fp, what in baseline.items() if fp not in configured}
+    others = sorted(what for what in running.values() if not JOUET.match(what))
+    if others:
+        failed.append(f"the bridge trusts a handler that is not jouet's: {'; '.join(others)}")
+    for entry in trusted:
+        if entry not in baseline:
+            failed.append(f"trusted entry {entry[:12]} matches no handler of this home; a source id would trust a whole file")
+    untrusted = sorted(what for fp, what in baseline.items() if JOUET.match(what) and fp not in running)
+    if untrusted:
+        failed.append(f"{len(untrusted)} jouet handlers are not trusted (a jouet update changes a command); run: mise run agents:opencode-bridge")
+    # The trust store trusts what `trust: "prompt"` approved: nothing may be there.
+    try:
+        stored = json.loads(TRUST_STORE.read_text()).get("fingerprints", {})
+    except FileNotFoundError:
+        stored = {}
+    except (OSError, json.JSONDecodeError) as error:
+        stored = {}
+        failed.append(f"{TRUST_STORE} is unreadable: {error}")
+    if stored:
+        failed.append(f"{TRUST_STORE} trusts {len(stored)} handlers by approval; trust comes only from the entry's `trusted`")
+    return failed
+
+
+def main() -> int:
+    if "--check" in sys.argv[1:]:
+        failed = check()
+        for line in failed:
+            print(f"agents:opencode-bridge: {line}", file=sys.stderr)
+        if not failed:
+            print("agents:opencode-bridge: jouet's skill and hooks reach OpenCode, and only jouet's handlers are trusted")
+        return 1 if failed else 0
+    apply_entry()
+    drop_jouet_block()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
