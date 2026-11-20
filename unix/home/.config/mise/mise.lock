@@ -382,37 +382,37 @@ url_api = "https://api.github.com/repos/biomejs/biome/releases/assets/737014629"
 provenance = "github-attestations"
 
 [[tools.bun]]
-version = "1.4.4"
+version = "1.4.5"
 backend = "core:bun"
-specifiers = ["1.4.4"]
+specifiers = ["1.4.5"]
 
 [tools.bun."platforms.linux-arm64"]
-checksum = "sha256:baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip"
+checksum = "sha256:18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-linux-aarch64.zip"
 
 [tools.bun."platforms.linux-arm64-musl"]
-checksum = "sha256:57f01b02ac7113c61c935f28f38c2eab849e3c970dab21f8b640a87b1ef65009"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64-musl.zip"
+checksum = "sha256:d655765d3a0c0fdf707e27c7aa1a4f2c84f1bbc1f759db7e6e3d3c5be414396c"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-linux-aarch64-musl.zip"
 
 [tools.bun."platforms.linux-x64"]
-checksum = "sha256:bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip"
+checksum = "sha256:94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-linux-x64.zip"
 
 [tools.bun."platforms.linux-x64-baseline"]
-checksum = "sha256:e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-baseline.zip"
+checksum = "sha256:dcb23a18a1c2fff12d57bcef696dbbb42eb67fde29f43816ecb595459a24c463"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-linux-x64-baseline.zip"
 
 [tools.bun."platforms.linux-x64-musl"]
-checksum = "sha256:a5a8ccc5e74dcb883fe974f125a7bdb3b41e5195ed1b870e73f17effd3eb2b2d"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-musl.zip"
+checksum = "sha256:9b6bdba1fa0914b6adfe48e4438212e2c106d9199b77ba642a9b8a3968a49a59"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-linux-x64-musl.zip"
 
 [tools.bun."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:6e9c37098b293920aed28bfb51ab240e26d23bfdd9bbfecb3ad428ac166549bc"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-musl-baseline.zip"
+checksum = "sha256:96fb94108eed872ff623ed39007d6b5699a83a5d0086fcfba84921c18145e3e6"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-linux-x64-musl-baseline.zip"
 
 [tools.bun."platforms.macos-arm64"]
-checksum = "sha256:c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc510"
-url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-aarch64.zip"
+checksum = "sha256:b5d6bc2e13caf14e57c89661e89efd073ff16165b41bfe43882616410609cd10"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-darwin-aarch64.zip"
 
 [[tools."cargo:0xMassi/webclaw"]]
 version = "tag:v0.7.0"
@@ -1491,21 +1491,21 @@ checksum = "sha256:aec2514ea1ceb2ba52455e9ec65986f6749a06dd759e5db2a72e6889668c9
 url = "https://nodejs.org/dist/v26.13.1/node-v26.13.1-darwin-arm64.tar.gz"
 
 [[tools.npm]]
-version = "12.2.2"
+version = "12.2.3"
 backend = "aqua:npm/cli"
-specifiers = ["12.2.2"]
+specifiers = ["12.2.3"]
 
 [tools.npm."platforms.linux-arm64"]
-checksum = "sha256:07fecbf753e2c3bc10ebeb3e9ed8738f6a0cc1292998b79e2e9f1dd2a5525e0c"
-url = "https://registry.npmjs.org/npm/-/npm-12.2.2.tgz"
+checksum = "sha256:fa0711dd513fa1386bbad3962a292cb813461cb57dedf07d6eb7efe76dffe897"
+url = "https://registry.npmjs.org/npm/-/npm-12.2.3.tgz"
 
 [tools.npm."platforms.linux-x64"]
-checksum = "sha256:07fecbf753e2c3bc10ebeb3e9ed8738f6a0cc1292998b79e2e9f1dd2a5525e0c"
-url = "https://registry.npmjs.org/npm/-/npm-12.2.2.tgz"
+checksum = "sha256:fa0711dd513fa1386bbad3962a292cb813461cb57dedf07d6eb7efe76dffe897"
+url = "https://registry.npmjs.org/npm/-/npm-12.2.3.tgz"
 
 [tools.npm."platforms.macos-arm64"]
-checksum = "sha256:07fecbf753e2c3bc10ebeb3e9ed8738f6a0cc1292998b79e2e9f1dd2a5525e0c"
-url = "https://registry.npmjs.org/npm/-/npm-12.2.2.tgz"
+checksum = "blake3:698092c76b1664e098e67ab3dac54ef6e74eb03f32d17870b2469cfd648ff4c4"
+url = "https://registry.npmjs.org/npm/-/npm-12.2.3.tgz"
 
 [[tools."npm:@ai-sdk/openai-compatible"]]
 version = "3.0.92"
@@ -1575,16 +1575,16 @@ backend = "npm:ajv-cli"
 specifiers = ["5.0.0"]
 
 [[tools."npm:apify-cli"]]
-version = "1.12.0"
-aube = { path = "locks/npm-apify-cli/1.12.0", digest = "sha256:9e2d868b872f401ad0f3c8222aa705f22c2ec60162128d539b374e4d5cd8b618" }
+version = "1.13.0"
+aube = { path = "locks/npm-apify-cli/1.13.0", digest = "sha256:2abd497fe660b88dbf9919d8a13a0f52a50e5c7f14fc2d8d54fbed1de6e4d078" }
 backend = "npm:apify-cli"
-specifiers = ["1.12.0"]
+specifiers = ["1.13.0"]
 
 [[tools."npm:ctx7"]]
-version = "0.11.1"
-aube = { path = "locks/npm-ctx7/0.11.1", digest = "sha256:6bfa0e971e6fafb3db6b3469a954664554194ceef3d40126274615c44b696c41" }
+version = "0.12.2"
+aube = { path = "locks/npm-ctx7/0.12.2", digest = "sha256:8a9184b2aeb0d80320b568ad9ed830a352ccdf00db1fb00339eec98ff3fbe3a6" }
 backend = "npm:ctx7"
-specifiers = ["0.11.1"]
+specifiers = ["0.12.2"]
 
 [[tools."npm:defuddle"]]
 version = "0.19.6"
@@ -1602,10 +1602,10 @@ specifiers = ["0.0.192"]
 trust_policy_excludes = '["@vercel/cli-config@0.3.1", "@vercel/cli-exec@1.0.1", "@vercel/detect-agent@1.2.5", "@vercel/oidc@4.0.0"]'
 
 [[tools."npm:firecrawl-cli"]]
-version = "1.29.0"
-aube = { path = "locks/npm-firecrawl-cli/1.29.0", digest = "sha256:366526e6270e05c5f4fe9ff4d40bf01ae013642293221d4fabc2249759315c37" }
+version = "1.30.0"
+aube = { path = "locks/npm-firecrawl-cli/1.30.0", digest = "sha256:76a4c73bb46737d78df035e23238b94f1a89227b70e1528fe8de9f8f1858392e" }
 backend = "npm:firecrawl-cli"
-specifiers = ["1.29.0"]
+specifiers = ["1.30.0"]
 
 [[tools."npm:jscpd"]]
 version = "5.4.3"
@@ -1635,10 +1635,10 @@ backend = "npm:pyright"
 specifiers = ["1.1.414"]
 
 [[tools."npm:skills"]]
-version = "1.8.1"
-aube = { path = "locks/npm-skills/1.8.1", digest = "sha256:feea553339456325640178c34bc369c6eee4070ef960e95660a708c4ebb4e138" }
+version = "1.9.0"
+aube = { path = "locks/npm-skills/1.9.0", digest = "sha256:7986f7572c57b5b5ca6407f53294cd4f7cda8fa5c8b052c82b24cc2a492c01ac" }
 backend = "npm:skills"
-specifiers = ["1.8.1"]
+specifiers = ["1.9.0"]
 
 [[tools."npm:typescript"]]
 version = "7.0.2"
@@ -1699,26 +1699,26 @@ url_api = "https://api.github.com/repos/jgm/pandoc/releases/assets/738063061"
 provenance = "github-attestations"
 
 [[tools.pipx]]
-version = "1.18.16"
+version = "1.18.19"
 backend = "aqua:pypa/pipx"
-specifiers = ["1.18.16"]
+specifiers = ["1.18.19"]
 
 [tools.pipx."platforms.linux-arm64"]
-checksum = "sha256:bd3709947d3a36cb898f53c765aba568d01c1aef3302ec439037fcbbdad559c1"
+checksum = "sha256:a3186d9ed60b86f060b9e6747e1722db33160240eac83db805b4945a0d2173b0"
 checksum_source = "mise-versions"
-url = "https://github.com/pypa/pipx/releases/download/1.18.16/pipx.pyz"
-url_api = "https://api.github.com/repos/pypa/pipx/releases/assets/720080157"
+url = "https://github.com/pypa/pipx/releases/download/1.18.19/pipx.pyz"
+url_api = "https://api.github.com/repos/pypa/pipx/releases/assets/759546248"
 
 [tools.pipx."platforms.linux-x64"]
-checksum = "sha256:bd3709947d3a36cb898f53c765aba568d01c1aef3302ec439037fcbbdad559c1"
+checksum = "sha256:a3186d9ed60b86f060b9e6747e1722db33160240eac83db805b4945a0d2173b0"
 checksum_source = "mise-versions"
-url = "https://github.com/pypa/pipx/releases/download/1.18.16/pipx.pyz"
-url_api = "https://api.github.com/repos/pypa/pipx/releases/assets/720080157"
+url = "https://github.com/pypa/pipx/releases/download/1.18.19/pipx.pyz"
+url_api = "https://api.github.com/repos/pypa/pipx/releases/assets/759546248"
 
 [tools.pipx."platforms.macos-arm64"]
-checksum = "sha256:bd3709947d3a36cb898f53c765aba568d01c1aef3302ec439037fcbbdad559c1"
-url = "https://github.com/pypa/pipx/releases/download/1.18.16/pipx.pyz"
-url_api = "https://api.github.com/repos/pypa/pipx/releases/assets/720080157"
+checksum = "sha256:a3186d9ed60b86f060b9e6747e1722db33160240eac83db805b4945a0d2173b0"
+url = "https://github.com/pypa/pipx/releases/download/1.18.19/pipx.pyz"
+url_api = "https://api.github.com/repos/pypa/pipx/releases/assets/759546248"
 
 [[tools."pipx:datamodel-code-generator"]]
 version = "0.89.0"
@@ -1740,10 +1740,10 @@ python = "3.14.8"
 uvx = "false"
 
 [[tools."pipx:hyperresearch"]]
-version = "0.13.2"
+version = "0.13.3"
 backend = "pipx:hyperresearch"
-specifiers = ["0.13.2"]
-uv = { path = "locks/pipx-hyperresearch/0.13.2~81a80602", digest = "sha256:2ca45529697e3f2b1d3af2608a5feaafde9fc114ca88d55e38486e58f3b2f5e6" }
+specifiers = ["0.13.3"]
+uv = { path = "locks/pipx-hyperresearch/0.13.3~81a80602", digest = "sha256:e74de16804e37234b620991ed9faa4a0e942a14da207c5beabf181d4a320a85a" }
 
 [tools."pipx:hyperresearch".options]
 extras = "exa"

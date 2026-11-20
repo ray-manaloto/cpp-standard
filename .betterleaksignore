@@ -1,6 +1,6 @@
 # False positives in dotfiles' copied npm locks (M1, D150): betterleaks' generic-password rule reads the
 # package name '@inquirer/password' and its version as a password. Each line is one finding's fingerprint.
-unix/home/.config/mise/locks/npm-firecrawl-cli/1.29.0/aube-lock.yaml:generic-password:405
+unix/home/.config/mise/locks/npm-firecrawl-cli/1.30.0/aube-lock.yaml:generic-password:405
 unix/home/.config/mise/locks/npm-fission-ai-openspec/1.17.0/aube-lock.yaml:generic-password:401
-unix/home/.config/mise/locks/npm-ctx7/0.11.1/aube-lock.yaml:generic-password:428
-unix/home/.config/mise/locks/npm-apify-cli/1.12.0/aube-lock.yaml:generic-password:1405
+unix/home/.config/mise/locks/npm-ctx7/0.12.2/aube-lock.yaml:generic-password:428
+unix/home/.config/mise/locks/npm-apify-cli/1.13.0/aube-lock.yaml:generic-password:1405
