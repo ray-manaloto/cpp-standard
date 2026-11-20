@@ -46,6 +46,7 @@ on:
       - python/pins/**
       - python/artifact/**
       - .github/workflows/builder.yml
+      - .github/workflows/publish.yml
   merge_group:
 
 permissions: {}
