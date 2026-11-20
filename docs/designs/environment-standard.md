@@ -613,10 +613,10 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    toolchain once and the gate jobs restore it (D61).
 
    **Jobs on `main`** never read a PR artifact or cache. In M1a,
-   `post-merge.yml` takes `main`'s image, else rebuilds. From M2 it takes
-   only `main`'s image, an absent image turns it red, and its `push`
-   run is skipped unless the commit's tags exist; the run dispatched by
-   `publish.yml` is the one that counts (D112).
+   `post-merge.yml` waits for the commit's artifacts and fetches the toolchain
+   from `main`'s attested image only. If the image stays absent, the gate
+   fails. From M2, the `push` run is skipped unless the commit's tags exist,
+   and the run dispatched by `publish.yml` is the one that counts (D112).
 
    Every pull of a `main` image runs `image:verify` (D114); a tag existing
    proves nothing.

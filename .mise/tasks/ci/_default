@@ -29,10 +29,23 @@ if [[ " ${gate_presets[*]} " == *" p2996-coverage "* && ! -d "${CPPSTD_P2996_PRE
   exit 1
 fi
 
-# Steps 1, 3 and 4: configure, build, run the tests. Each preset starts from
-# an empty build tree, so no cache entry or .gcda of an earlier run counts.
-build_and_test() { # <preset>
-  rm -rf "build/$1"
+# Post-merge asks for an optional report. Record an outcome only when its check runs.
+run_check() { # <item> <command> [args...]
+  local item="$1" rc=0 status=passed
+  shift
+  "$@" || {
+    rc=$?
+    status=failed
+  }
+  if [[ -n "${CPPSTD_GATE_REPORT:-}" ]]; then
+    printf 'gate-linux-arm64 %s %s\n' "$item" "$status" >>"$CPPSTD_GATE_REPORT"
+  fi
+  return "$rc"
+}
+
+# Steps 1 and 3: configure and build in an empty build tree.
+build() { # <preset>
+  rm -rf "build/$1" || return "$?"
   echo "::group::configure $1"
   cmake --preset "$1" || {
     # vcpkg prints only "unable to detect the compiler"; its own logs say why.
@@ -49,17 +62,22 @@ build_and_test() { # <preset>
   }
   echo "::endgroup::"
   echo "::group::build $1"
-  cmake --build --preset "$1"
+  cmake --build --preset "$1" || return "$?"
   echo "::endgroup::"
+}
+
+# Step 4: run the tests.
+test_preset() { # <preset>
   echo "::group::test $1"
   # --no-tests=error: a build that registers no test fails (the guard toolchain:smoke had, #271).
-  ctest --preset "$1" --no-tests=error
+  ctest --preset "$1" --no-tests=error || return "$?"
   echo "::endgroup::"
 }
 
 for preset in "${gate_presets[@]}"; do
-  build_and_test "$preset"
+  run_check "build-$preset" build "$preset"
+  run_check "tests-$preset" test_preset "$preset"
   case "$preset" in
-    *-coverage) mise run -q ci:coverage "$preset" ;;
+    *-coverage) run_check "coverage-$preset" mise run -q ci:coverage "$preset" ;;
   esac
 done

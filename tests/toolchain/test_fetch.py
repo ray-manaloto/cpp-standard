@@ -740,6 +740,38 @@ class SourceErrorTest(Case):
         self.assertEqual((r.source, self.installed()), ("staged", "staged"))
         self.assertTrue(any(x.startswith("::warning::") for x in self.log))
 
+    def test_outside_actions_stops_when_gh_cannot_verify_the_image(self) -> None:
+        image = FakeImages(self.tmp / "unused.tar.zst")
+        for error in (
+            FileNotFoundError("gh"),
+            "HTTP 401",
+            "HTTP 500",
+            "✗ Sigstore verification failed",
+        ):
+            with self.subTest(error=error):
+                with mock.patch.object(fetch.subprocess, "run") as run:
+                    if isinstance(error, OSError):
+                        run.side_effect = error
+                    else:
+                        run.return_value = subprocess.CompletedProcess(
+                            ["gh"], 1, "", error
+                        )
+                    result = fetch.fetch(
+                        TAG,
+                        self.root,
+                        fetch.sources(fetch.Context("outside")),
+                        image,
+                        fetch.gh_verify,
+                        self.rebuild_ok,
+                        self.staged,
+                        self.log.append,
+                        stop_on_source_error=True,
+                    )
+                self.assertIsNone(result.prefix)
+                self.assertEqual(self.rebuilt, 0)
+                self.assertFalse(result.refusals)
+                self.assertIn("gh attestation verify", result.errors[0])
+
 
 class GhBoundaryTest(unittest.TestCase):
     """The gh call itself, with subprocess.run replaced: the verify policy of an image (#254)."""
@@ -753,7 +785,10 @@ class GhBoundaryTest(unittest.TestCase):
 
         with mock.patch.object(fetch.subprocess, "run", run):
             ok, out = fetch.gh_verify_report(SUBJECT)
-            self.assertFalse(fetch.gh_verify(SUBJECT))
+            with self.assertRaisesRegex(
+                fetch.SourceError, "could not establish provenance"
+            ):
+                fetch.gh_verify(SUBJECT)
         self.assertFalse(ok)
         self.assertIn("HTTP 404", out)
         cmd = calls[0]
@@ -766,6 +801,21 @@ class GhBoundaryTest(unittest.TestCase):
         self.assertEqual(flags["--source-ref"], "refs/heads/main")
         self.assertEqual(flags["--repo"], "ray-manaloto/cpp-standard")
         self.assertIn("--deny-self-hosted-runners", cmd)
+
+    def test_verify_refuses_only_identified_attestation_failures(self) -> None:
+        for output in (
+            f"✗ No attestations found for subject {DIGEST}",
+            "✗ Policy verification failed",
+        ):
+            with (
+                self.subTest(output=output),
+                mock.patch.object(
+                    fetch.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess(["gh"], 1, "", output),
+                ),
+            ):
+                self.assertFalse(fetch.gh_verify(SUBJECT))
 
     def test_verify_passes_on_exit_zero(self) -> None:
         def run(cmd, **kw):

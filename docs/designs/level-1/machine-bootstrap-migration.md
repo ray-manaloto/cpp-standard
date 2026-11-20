@@ -372,13 +372,14 @@ Hand-over notes from dotfiles-lead that the switch carries:
   4. `skills:doctor`.
 
   None of this is wired in M1: a post-merge hook here would switch the Mac on merge.
-- **`shell:apply`'s stdout bug, to fix after the tools move (D160).** This repository's lead owns the
-  fix, made in this repository's copy of `repotools` after the tools switch (#156), as its own
-  ticket. The bug: `shell:apply` treats any stdout of `mise dot apply --dry-run` as something to
-  link. mise prints dry-run output even when everything is applied, so every run makes a new
-  `shell-backup/replaced-*` folder. The workaround in use runs it only when
-  `mise dot status --missing` over the seven zsh targets fails. The fix decides from mise's exit status
-  or `status --json`, not from stdout.
+- **`shell:apply`'s stdout bug, fixed after the tools move (D160).** The fix went into this
+  repository's copy of `repotools` after the tools switch (#156), as its own ticket. The bug:
+  `shell:apply` treated any stdout of `mise dot apply --dry-run` as something to link. mise printed
+  dry-run output even when everything was applied, so every run made a new
+  `shell-backup/replaced-*` folder. `shell:apply` now decides from the exit status of
+  `mise dot status --missing` over the seven zsh targets (0 applied, 1 something to link, anything
+  else an error), so a repeat run makes no `replaced-*` folder. The old `status --missing`
+  workaround guard is no longer needed.
 - **`~/.claude/settings.json/allow`** (dotfiles #759) is an owner-applied permission entry. It owns the
   whole allow list, the Artifact tools included, because jouet 0.0.5's setup denies them otherwise.
   `skills:doctor` lists it among its permission entries.

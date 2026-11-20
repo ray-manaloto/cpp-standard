@@ -95,7 +95,9 @@ local gateSteps = new Mapping<String, Step> {
   // .venv, which pctools-sync makes first. The tests (100% line and branch coverage) and the
   // models.py drift check run through the package's mise tasks.
   ["pctools-sync"] {
-    glob = pctoolsFiles
+    // ty (every Python file) reads python/pctools/.venv, so the sync runs whenever ty or a pctools step does (#317);
+    // it is quick when the environment is already in sync.
+    glob = List("**/*.py", "**/*.pyi") + pctoolsFiles
     check = "mise run pctools:sync"
   }
   ["ruff"] = Builtins.ruff
@@ -152,6 +154,26 @@ local gateSteps = new Mapping<String, Step> {
         ".mise/tasks/toolchain/cov",
       )
     check = "\(cleanGitEnv) mise run toolchain:cov"
+  }
+  // The devcontainer's host-side chain (#137): image:verify -> the generated .devcontainer/.env ->
+  // compose. Static checks of the generated files and the verify task, plus the task run with a
+  // stand-in python3; artifact.py's env-file unit tests are in tests/artifact/ (artifact-cov).
+  ["devcontainer-test"] {
+    glob = List(".devcontainer/**", "tests/devcontainer/**", ".mise/tasks/image/**")
+    check = "\(cleanGitEnv) python3 -I tests/devcontainer/test_devcontainer.py"
+  }
+  // The gate checklist and its checker (D119, #133): the checklist file, the workflow that
+  // ticks it and the cov task that gates the checker's tests.
+  ["gate-cov"] {
+    glob =
+      List(
+        "python/gate/**",
+        "tests/gate/**",
+        "gate-items.toml",
+        ".github/workflows/post-merge.yml",
+        ".mise/tasks/gate/cov",
+      )
+    check = "\(cleanGitEnv) mise run gate:cov"
   }
   // Refuse a repository whose shared common git config has core.worktree set (#280).
   // No glob: this runs on every hk check and pre-commit run, whatever files changed.

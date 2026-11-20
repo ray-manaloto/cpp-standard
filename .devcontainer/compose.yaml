@@ -1,0 +1,26 @@
+# The devcontainer service (environment-standard.md file plan, the .devcontainer row; D93). The
+# chain is kept: image:verify runs on the host (devcontainer.json's initializeCommand) and writes
+# the verified digest to the generated, gitignored .devcontainer/.env beside this file; compose
+# reads the image from it, so the container starts exactly the digest that was verified. The :?
+# makes compose refuse with the fix named when that file is missing or empty, so a digest that
+# fails verification is never started and a missing verification is never skipped. No --privileged
+# and no privileged runArgs anywhere; the service runs as the tools image's non-root user (uid
+# 1001, image/tools.Dockerfile). The sccache cache lives in a named volume and survives
+# recreations (D93).
+services:
+  cpp-standard:
+    image: ${CPPSTD_TOOLS_IMAGE:?no verified image in .devcontainer/.env, run mise run image:verify tools --env-file .devcontainer/.env}
+    user: 1001:1001
+    # compose keeps the service alive; the devcontainer CLI does not override the command here.
+    command: sleep infinity
+    # Compose devcontainers mount the workspace here, not through devcontainer.json. `..` is the
+    # repository root this .devcontainer folder sits in, so any checkout or worktree opens the
+    # same way.
+    volumes:
+      - ..:/workspaces/cpp-standard:cached
+      - sccache:/home/cppstd/.cache/sccache
+
+volumes:
+  # One sccache cache for this repository's devcontainers and the certify container (D93).
+  sccache:
+    name: cpp-standard-sccache

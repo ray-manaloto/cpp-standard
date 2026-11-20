@@ -86,8 +86,8 @@ class Refused(Exception):
 
 
 class SourceError(Exception):
-    """The registry could not answer the request. Outside Actions the fetch stops with the reason instead of
-    starting a rebuild; in Actions the next source is tried, with a warning (D83)."""
+    """The registry or attestation service could not give a verdict. Outside Actions the fetch
+    stops with the reason before rebuilding. Actions tries the next source with a warning (D83)."""
 
 
 # --- where the fetch runs -----------------------------------------------------
@@ -276,14 +276,38 @@ def gh_verify_report(subject: str) -> tuple[bool, str]:
     whether it passed, and gh's output (the must-fail fixture checks why it was refused)."""
     cmd = ["gh", "attestation", "verify", subject, *artifact.verify_flags()]
     print("+ " + " ".join(cmd), flush=True)
-    r = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    r = subprocess.run(
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NO_COLOR": "1"},
+    )
     out = r.stdout + r.stderr
     print(out, end="", flush=True)
     return r.returncode == 0, out
 
 
 def gh_verify(subject: str) -> bool:
-    return gh_verify_report(subject)[0]
+    try:
+        verified, output = gh_verify_report(subject)
+    except OSError as e:
+        raise SourceError(f"cannot run gh attestation verify for {subject}: {e}") from e
+    if verified:
+        return True
+    # gh uses the same exit status for refusal and failed API requests. Its empty
+    # lookup and certificate-policy messages establish a verdict. A generic
+    # Sigstore failure can also mean the trusted root was unavailable.
+    digest = subject.rpartition("@")[2]
+    lines = set(output.splitlines())
+    if lines & {
+        f"✗ No attestations found for subject {digest}",
+        "✗ Policy verification failed",
+    }:
+        return False
+    raise SourceError(
+        f"gh attestation verify for {subject} could not establish provenance"
+    )
 
 
 # --- installing ---------------------------------------------------------------
