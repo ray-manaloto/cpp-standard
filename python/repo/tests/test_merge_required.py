@@ -26,7 +26,14 @@ def queued(world: World, repo: Path) -> World:
 
 
 def runs_call(world: World) -> list[str]:
-    return ["api", f"repos/{{owner}}/{{repo}}/commits/{world.head}/check-runs", "-F", "per_page=100"]
+    return [
+        "api",
+        f"repos/{{owner}}/{{repo}}/commits/{world.head}/check-runs",
+        "--method",
+        "GET",
+        "-F",
+        "per_page=100",
+    ]
 
 
 def wait_call(world: World) -> list[str]:

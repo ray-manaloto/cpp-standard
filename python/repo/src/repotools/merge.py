@@ -227,7 +227,10 @@ def required_checks(default: str) -> list[str]:
 
 def check_states(head: str) -> dict[str, str]:
     """Every check run on head with its state: the conclusion once it has one, else its status (queued, in_progress)."""
-    answer = json.loads(gh("api", f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs", "-F", "per_page=100"))
+    # gh api defaults to POST when a form field is present.
+    answer = json.loads(
+        gh("api", f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs", "--method", "GET", "-F", "per_page=100")
+    )
     return {run["name"]: run["conclusion"] or run["status"] for run in answer["check_runs"]}
 
 
