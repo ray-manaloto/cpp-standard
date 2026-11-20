@@ -1,0 +1,99 @@
+name: PC runner smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      qualify:
+        description: Run the dedicated runner qualification
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: cpp-standard-pc-smoke
+  cancel-in-progress: false
+
+jobs:
+  seed-private-cache:
+    name: Verify runner and seed private cache
+    if: >-
+      ${{ inputs.qualify &&
+          github.event_name == 'workflow_dispatch' &&
+          github.repository == 'ray-manaloto/cpp-standard' &&
+          github.ref == 'refs/heads/main' &&
+          github.workflow_ref == 'ray-manaloto/cpp-standard/.github/workflows/pc-smoke.yml@refs/heads/main' }}
+    runs-on:
+      group: cpp-standard-amd64
+      # Group policy pins this workflow to protected main. It has no pull request trigger.
+      labels: [self-hosted, pc-x86, container, cpp-standard]  # jactionlint ignore=self-hosted-runner
+    timeout-minutes: 5
+    steps:
+      - name: Verify runner limits and isolation
+        shell: bash
+        run: |
+          set -eu
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+          test "$(id -u)" = 1001
+          test "$GHA_SLOT" = cpp-standard
+          test ! -S /var/run/docker.sock
+          grep -Eq '^CapEff:[[:space:]]+0+$' /proc/self/status
+          grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/self/status
+          read -r quota period </sys/fs/cgroup/cpu.max
+          test "$quota" -eq "$((16 * period))"
+          test "$(cat /sys/fs/cgroup/memory.max)" = 51539607552
+          test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0
+          awk '
+            $5 == "/cache/mise" && $6 ~ /(^|,)ro(,|$)/ { tools = 1 }
+            $5 == "/etc/gha-cpp-admission.sh" && $6 ~ /(^|,)ro(,|$)/ { policy = 1 }
+            $5 == "/cache/sccache" || $5 == "/tmp/gha-cpp-sccache" { shared = 1 }
+            END { exit !(tools && policy && !shared) }
+          ' /proc/self/mountinfo
+          test ! -e /cache/sccache
+          printf 'runner=%s run=%s attempt=%s\n' "$RUNNER_NAME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+      - name: Build and seed the private cache sentinel
+        shell: bash
+        run: |
+          set -eu
+          test "$SCCACHE_DIR" = /tmp/gha-cpp-sccache
+          mkdir -p "$SCCACHE_DIR"
+          sentinel="$SCCACHE_DIR/pc-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$sentinel"
+          build_dir=$(mktemp -d)
+          trap 'rm -rf -- "$build_dir"' EXIT
+          printf 'int main() { return 0; }\n' > "$build_dir/main.cpp"
+          c++ -std=c++20 -o "$build_dir/smoke" "$build_dir/main.cpp"
+          "$build_dir/smoke"
+          printf 'private cache sentinel\n' > "$sentinel"
+          test -s "$sentinel"
+          echo 'PC_SMOKE_ORDINARY'
+      - name: Record cleanup step execution
+        if: ${{ always() }}
+        shell: bash
+        run: echo 'PC_SMOKE_CLEANUP'
+
+  verify-private-cache-disposal:
+    name: Verify private cache disposal on a fresh runner
+    needs: seed-private-cache
+    if: >-
+      ${{ inputs.qualify &&
+          github.event_name == 'workflow_dispatch' &&
+          github.repository == 'ray-manaloto/cpp-standard' &&
+          github.ref == 'refs/heads/main' &&
+          github.workflow_ref == 'ray-manaloto/cpp-standard/.github/workflows/pc-smoke.yml@refs/heads/main' }}
+    runs-on:
+      group: cpp-standard-amd64
+      # Group policy pins this workflow to protected main. It has no pull request trigger.
+      labels: [self-hosted, pc-x86, container, cpp-standard]  # jactionlint ignore=self-hosted-runner
+    timeout-minutes: 5
+    steps:
+      - name: Verify the next job cannot see the previous cache sentinel
+        shell: bash
+        run: |
+          set -eu
+          test "$GHA_SLOT" = cpp-standard
+          test "$SCCACHE_DIR" = /tmp/gha-cpp-sccache
+          test ! -e /cache/sccache
+          test ! -e "$SCCACHE_DIR/pc-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'PC_SMOKE_CACHE_DISPOSED runner=%s run=%s attempt=%s\n' "$RUNNER_NAME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
