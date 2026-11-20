@@ -77,7 +77,7 @@ preset = "p2996-coverage"
 check = "ci:coverage"
 
 [items.must-fail-toolchain-unattested]
-what = "toolchain:fetch refuses an unattested release"
+what = "toolchain:fetch refuses the fixture image when its stand-in verifier rejects the attestation"
 environment = "linux"
 job = "must-fail"
 fixture = "toolchain-unattested"
@@ -112,7 +112,7 @@ fixture = "vcpkg-baseline"
 check = "vcpkg:bootstrap"
 
 [items.must-fail-toolchain-wrong-hash]
-what = "toolchain:fetch refuses an attested archive whose inputs-hash.txt differs from its tag's hash"
+what = "toolchain:fetch refuses the fixture archive with a mismatched inputs-hash.txt after stand-in verification"
 environment = "linux"
 job = "must-fail"
 fixture = "toolchain-wrong-hash"

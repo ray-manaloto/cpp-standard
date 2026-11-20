@@ -108,7 +108,7 @@ jobs:
   # Copied from ci.yml's job of the same name (#125, #132), one leg per M1a preset
   # (D119) so each preset's gate result is reported on its own: toolchain:fetch, the
   # vcpkg baseline, then `mise run ci` for that preset. A main run takes only main's
-  # attested release (--release-only, D116); ci.yml's staged-copy restore (D91) is a
+  # attested GHCR image (--release-only, D180); ci.yml's staged-copy restore (D91) is a
   # pull-request and merge-group case this run never has.
   gate-linux-arm64:
     name: gate-linux-arm64

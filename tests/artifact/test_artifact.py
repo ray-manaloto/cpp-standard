@@ -8,8 +8,8 @@ python3 -I tests/artifact/test_artifact.py
 from __future__ import annotations
 
 import contextlib
+import http.client
 import io
-import json
 import os
 import subprocess
 import sys
@@ -289,6 +289,12 @@ def disagreements(script: str) -> list[str]:
 
 
 class PublisherNames(unittest.TestCase):
+    def test_toolchain_uses_its_full_tag_in_the_tools_package(self) -> None:
+        names = artifact.names(TOOLCHAIN)
+        self.assertEqual(names["image"], artifact.names(TOOLS)["image"])
+        self.assertEqual(names["image_tag"], TOOLCHAIN)
+        self.assertEqual(names["ref"], f"{names['image']}:{TOOLCHAIN}")
+
     def test_publisher_and_task_agree(self) -> None:
         self.assertEqual(disagreements(publisher_names_script(PUBLISH.read_text())), [])
 
@@ -304,263 +310,277 @@ class PublisherNames(unittest.TestCase):
 
 
 class FakeApi(artifact.Toolchains):
-    """artifact.Toolchains over canned GitHub API answers (path prefix -> JSON, None for 404)."""
+    """The real source selection with fake registry and Actions cache responses."""
 
-    def __init__(self, ref: str | None, answers: dict[str, object]) -> None:
+    def __init__(self, ref: str | None, digest: str | None, keys: list[str]) -> None:
         super().__init__(None, ref)
-        self.answers = answers
+        self.registry = FakeRegistry({TOOLCHAIN_REF: digest} if digest else {})  # type: ignore[assignment]
+        self.keys = keys
         self.paths: list[str] = []
 
-    def _get(self, path: str):  # type: ignore[override]
+    def _get(self, path: str) -> dict:
         self.paths.append(path)
-        for prefix, answer in self.answers.items():
-            if path.startswith(prefix):
-                return answer
-        return None
+        return {"actions_caches": [{"key": key} for key in self.keys]}
 
 
-def ready_release(tag: str = TOOLCHAIN, **overrides: object) -> dict[str, object]:
-    return {
-        "draft": False,
-        "name": tag,
-        "assets": [{"name": f"{tag}.tar.zst"}],
-    } | overrides
+TOOLCHAIN_REF = artifact.names(TOOLCHAIN)["ref"]
+CACHE_KEY = f"toolchain-{TOOLCHAIN}"
 
 
 class ToolchainWait(unittest.TestCase):
-    """artifact-check waits for a toolchain tag (#130): main's release, else in a pull-request or
-    merge-queue run the builder's cache entry on the run's ref; never a cache entry elsewhere."""
-
-    REL = f"repos/ray-manaloto/cpp-standard/releases/tags/{TOOLCHAIN}"
-    CACHES = "repos/ray-manaloto/cpp-standard/actions/caches"
     REF = "refs/heads/gh-readonly-queue/main/pr-7-" + "a" * 40
 
-    def test_release_counts(self) -> None:
-        api = FakeApi(None, {self.REL: ready_release()})
-        self.assertEqual(api.where(TOOLCHAIN), f"release {TOOLCHAIN}")
-
-    def test_draft_release_does_not_count(self) -> None:
-        self.assertIsNone(FakeApi(None, {self.REL: {"draft": True}}).where(TOOLCHAIN))
-
-    def test_cache_entry_counts_on_the_run_ref(self) -> None:
-        caches = {"actions_caches": [{"key": f"toolchain-{TOOLCHAIN}"}]}
-        api = FakeApi(self.REF, {self.CACHES: caches})
+    def test_registry_takes_precedence(self) -> None:
+        api = FakeApi(self.REF, DIGEST, [CACHE_KEY])
         self.assertEqual(
-            api.where(TOOLCHAIN), f"cache toolchain-{TOOLCHAIN} on {self.REF}"
+            api.where(TOOLCHAIN),
+            artifact.Found(f"image {TOOLCHAIN_REF}@{DIGEST}", DIGEST),
         )
+        self.assertEqual(api.paths, [])
+
+    def test_cache_counts_on_the_run_ref(self) -> None:
+        api = FakeApi(self.REF, None, [CACHE_KEY])
+        self.assertEqual(
+            api.where(TOOLCHAIN), artifact.Found(f"cache {CACHE_KEY} on {self.REF}")
+        )
+        self.assertIn(f"key={CACHE_KEY}", api.paths[-1])
         self.assertIn("ref=refs%2Fheads%2Fgh-readonly-queue", api.paths[-1])
 
-    def test_cache_entry_ignored_without_a_pr_ref(self) -> None:
-        caches = {"actions_caches": [{"key": f"toolchain-{TOOLCHAIN}"}]}
-        api = FakeApi(None, {self.CACHES: caches})
+    def test_cache_ignored_without_a_pr_ref(self) -> None:
+        api = FakeApi(None, None, [CACHE_KEY])
         self.assertIsNone(api.where(TOOLCHAIN))
-        self.assertEqual(len(api.paths), 1)
+        self.assertEqual(api.paths, [])
+
+    def test_wrong_cache_key_is_ignored(self) -> None:
+        self.assertIsNone(
+            FakeApi(self.REF, None, [CACHE_KEY + "-older"]).where(TOOLCHAIN)
+        )
 
     def test_candidates(self) -> None:
-        self.assertEqual(
-            artifact.candidates(TOOLCHAIN, None, False), [f"release {TOOLCHAIN}"]
-        )
+        self.assertEqual(artifact.candidates(TOOLCHAIN, None, False), [TOOLCHAIN_REF])
         self.assertEqual(
             artifact.candidates(TOOLCHAIN, 7, True),
-            [f"release {TOOLCHAIN}", f"cache toolchain-{TOOLCHAIN}"],
+            [TOOLCHAIN_REF, f"cache {CACHE_KEY}"],
         )
 
     def test_wait_finds_the_toolchain(self) -> None:
-        api = FakeApi(None, {self.REL: ready_release()})
-        missing = artifact.check(
-            [TOOLCHAIN],
-            FakeRegistry({}),
-            None,
-            False,
-            0,
-            1,
-            log=lambda _: None,
-            toolchains=api,
+        self.assertEqual(
+            artifact.check(
+                [TOOLCHAIN],
+                FakeRegistry({}),
+                None,
+                False,
+                10,
+                1,
+                toolchains=FakeApi(None, DIGEST, []),
+            ),
+            [],
         )
-        self.assertEqual(missing, [])
-
-    def test_transient_api_errors_are_retried(self) -> None:
-        answers = [
-            urllib.error.HTTPError("u", 502, "bad gateway", {}, None),  # type: ignore[arg-type]
-            urllib.error.URLError("reset"),
-            io.BytesIO(json.dumps(ready_release()).encode()),
-        ]
-
-        def urlopen(req, timeout):
-            a = answers.pop(0)
-            if isinstance(a, Exception):
-                raise a
-            return a
-
-        with (
-            unittest.mock.patch.object(artifact.urllib.request, "urlopen", urlopen),
-            unittest.mock.patch.object(artifact.time, "sleep", lambda s: None),
-        ):
-            got = artifact.Toolchains(None, None).where(TOOLCHAIN)
-        self.assertEqual(got, f"release {TOOLCHAIN}")
-
-    def test_a_client_error_is_not_retried(self) -> None:
-        def urlopen(req, timeout):
-            raise urllib.error.HTTPError("u", 403, "forbidden", {}, None)  # type: ignore[arg-type]
-
-        with (
-            unittest.mock.patch.object(artifact.urllib.request, "urlopen", urlopen),
-            self.assertRaises(artifact.ArtifactError),
-        ):
-            artifact.Toolchains(None, None).where(TOOLCHAIN)
 
     def test_absent_toolchain_times_out_as_missing(self) -> None:
-        now = [0.0]
-        clock = artifact.Clock(
-            now=lambda: now[0], sleep=lambda s: now.__setitem__(0, now[0] + s)
-        )
-        api = FakeApi(self.REF, {})
-        missing = artifact.check(
+        clock = FakeClock()
+        api = FakeApi(self.REF, None, [])
+        self.assertEqual(
+            artifact.check(
+                [TOOLCHAIN],
+                FakeRegistry({}),
+                7,
+                True,
+                5,
+                1,
+                artifact.Clock(clock.now, clock.sleep),
+                toolchains=api,
+            ),
             [TOOLCHAIN],
-            FakeRegistry({}),
-            7,
-            True,
-            3,
-            1,
-            clock=clock,
-            log=lambda _: None,
-            toolchains=api,
         )
-        self.assertEqual(missing, [TOOLCHAIN])
-        self.assertGreater(len(api.paths), 2)  # it polled until the deadline
-
-    def test_cache_entry_with_another_key_is_ignored(self) -> None:
-        caches = {"actions_caches": [{"key": f"toolchain-{TOOLCHAIN}-other"}]}
-        self.assertIsNone(FakeApi(self.REF, {self.CACHES: caches}).where(TOOLCHAIN))
+        self.assertGreater(len(api.paths), 2)
 
     def test_wait_needs_a_lookup(self) -> None:
         with self.assertRaises(artifact.ArtifactError):
-            artifact.check(
-                [TOOLCHAIN], FakeRegistry({}), None, False, 0, 1, log=lambda _: None
-            )
-
-    def test_release_with_wrong_title_is_not_ready(self) -> None:
-        bad = ready_release(name="wrong-title")
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.assertIsNone(FakeApi(None, {self.REL: bad}).where(TOOLCHAIN))
-        self.assertIn("wrong-title", err.getvalue())
-        self.assertIn(TOOLCHAIN, err.getvalue())
-        with contextlib.redirect_stderr(io.StringIO()):
-            self.assertIsNone(FakeApi(self.REF, {self.REL: bad}).where(TOOLCHAIN))
-            caches = {"actions_caches": [{"key": f"toolchain-{TOOLCHAIN}"}]}
-            self.assertEqual(
-                FakeApi(self.REF, {self.REL: bad, self.CACHES: caches}).where(
-                    TOOLCHAIN
-                ),
-                f"cache toolchain-{TOOLCHAIN} on {self.REF}",
-            )
-
-    def test_release_without_archive_is_not_ready(self) -> None:
-        for assets in ([{"name": "inputs-hash.txt"}], []):
-            with self.subTest(assets=assets):
-                bad = ready_release(assets=assets)
-                err = io.StringIO()
-                with contextlib.redirect_stderr(err):
-                    self.assertIsNone(FakeApi(None, {self.REL: bad}).where(TOOLCHAIN))
-                self.assertIn(f"{TOOLCHAIN}.tar.zst", err.getvalue())
-        caches = {"actions_caches": [{"key": f"toolchain-{TOOLCHAIN}"}]}
-        with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(
-                FakeApi(
-                    self.REF, {self.REL: ready_release(assets=[]), self.CACHES: caches}
-                ).where(TOOLCHAIN),
-                f"cache toolchain-{TOOLCHAIN} on {self.REF}",
-            )
+            artifact.check([TOOLCHAIN], FakeRegistry({}), None, False, 10, 1)
 
 
-def publisher_block(text: str, name: str) -> str:
-    """The lines of publish.yml between `# BEGIN <name>` and `# END <name>`, dedented."""
-    lines = text.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip() == f"# BEGIN {name}")
-    end = next(i for i, line in enumerate(lines) if line.strip() == f"# END {name}")
-    block = lines[start + 1 : end]
-    indent = min(len(line) - len(line.lstrip()) for line in block if line.strip())
-    return "\n".join(line[indent:] for line in block) + "\n"
+def response(payload: bytes = b"", **headers: str) -> unittest.mock.MagicMock:
+    reply = unittest.mock.MagicMock()
+    reply.__enter__.return_value = reply
+    reply.read.return_value = payload
+    reply.headers = headers
+    return reply
 
 
-def release(rid: int, tag: str, title: str, draft: bool) -> dict:
-    return {"id": rid, "tag_name": tag, "name": title, "draft": draft}
+def http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "https://ghcr.io", code, "registry answer", {}, io.BytesIO()
+    )
 
 
-class PublisherReleaseCheck(unittest.TestCase):
-    """publish.yml's toolchain job decides, before any change, whether the release exists and
-    which drafts are stale (#130 review): the exact shell block of the workflow, on fixture
-    listings."""
+class RegistryProbe(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bearer = response(b'{"token":"stand-in"}')
 
-    def check(self, listing: list[dict] | str) -> tuple[int, dict[str, str], str]:
-        script = (
-            publisher_block(PUBLISH.read_text(), "release-check")
-            + 'echo "published=$published"\necho "drafts=$drafts"\n'
-        )
-        r = subprocess.run(
-            ["bash", "-euo", "pipefail", "-c", script],
-            env={
-                "PATH": os.environ["PATH"],
-                "RELEASE": TOOLCHAIN,
-                "GH_REPO": "ray-manaloto/cpp-standard",
-                "listing": listing if isinstance(listing, str) else json.dumps(listing),
-            },
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        out = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
-        return r.returncode, out, r.stdout + r.stderr
-
-    def test_a_different_tag_draft_with_the_title_fails(self) -> None:
-        rc, out, log = self.check([release(1, "other-tag", TOOLCHAIN, True)])
+    def test_builder_probe_fails_on_authentication_error(self) -> None:
+        env = {"GITHUB_EVENT_NAME": "push", "GH_TOKEN": "stand-in"}
+        errors = [self.bearer, http_error(401), self.bearer, http_error(401)]
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            unittest.mock.patch.dict(os.environ, env, clear=True),
+            unittest.mock.patch.object(
+                artifact.urllib.request, "urlopen", side_effect=errors
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            rc = artifact.main(["probe", TOOLCHAIN])
         self.assertEqual(rc, 1)
-        self.assertNotIn("drafts", out)  # it stops before naming anything to delete
-        self.assertIn("refused: releases of another tag", log)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("HTTP 401", stderr.getvalue())
 
-    def test_a_different_tag_release_with_the_title_fails(self) -> None:
-        rc, out, _ = self.check([release(1, "other-tag", TOOLCHAIN, False)])
-        self.assertEqual(rc, 1)
-        self.assertNotIn("published", out)
+    def test_manifest_miss_allows_build(self) -> None:
+        with unittest.mock.patch.object(
+            artifact.urllib.request,
+            "urlopen",
+            side_effect=[self.bearer, http_error(404)],
+        ):
+            self.assertIsNone(artifact.Registry(None).digest(TOOLCHAIN_REF))
 
-    def test_a_same_tag_draft_is_stale(self) -> None:
-        rc, out, _ = self.check(
-            [release(7, TOOLCHAIN, TOOLCHAIN, True), release(8, "x", "y", True)]
+    def test_bearer_404_is_a_failure(self) -> None:
+        with (
+            unittest.mock.patch.object(
+                artifact.urllib.request, "urlopen", side_effect=http_error(404)
+            ),
+            self.assertRaisesRegex(artifact.ArtifactError, "token request.*HTTP 404"),
+        ):
+            artifact.Registry(None).digest(TOOLCHAIN_REF)
+
+    def test_missing_digest_is_a_failure(self) -> None:
+        with (
+            unittest.mock.patch.object(
+                artifact.urllib.request,
+                "urlopen",
+                side_effect=[self.bearer, response()],
+            ),
+            self.assertRaisesRegex(artifact.ArtifactError, "invalid digest"),
+        ):
+            artifact.Registry(None).digest(TOOLCHAIN_REF)
+
+    def test_probe_retries_transient_server_error(self) -> None:
+        good = response(**{"Docker-Content-Digest": DIGEST})
+        with (
+            unittest.mock.patch.object(
+                artifact.urllib.request,
+                "urlopen",
+                side_effect=[self.bearer, http_error(500), good],
+            ),
+            unittest.mock.patch.object(artifact.time, "sleep"),
+        ):
+            self.assertEqual(artifact.Registry(None).digest(TOOLCHAIN_REF), DIGEST)
+
+    def test_token_request_retries_transient_server_error(self) -> None:
+        good = response(**{"Docker-Content-Digest": DIGEST})
+        with (
+            unittest.mock.patch.object(
+                artifact.urllib.request,
+                "urlopen",
+                side_effect=[http_error(500), self.bearer, good],
+            ),
+            unittest.mock.patch.object(artifact.time, "sleep") as sleep,
+        ):
+            self.assertEqual(artifact.Registry(None).digest(TOOLCHAIN_REF), DIGEST)
+        sleep.assert_called_once_with(5)
+
+    def test_raw_manifest_bytes_are_preserved(self) -> None:
+        raw = b'{ "schemaVersion": 2 }\n'
+        with unittest.mock.patch.object(
+            artifact.urllib.request, "urlopen", side_effect=[self.bearer, response(raw)]
+        ):
+            self.assertEqual(artifact.Registry(None).manifest_bytes(TOOLCHAIN_REF), raw)
+
+    def test_interrupted_manifest_read_is_a_registry_error(self) -> None:
+        broken = unittest.mock.MagicMock()
+        broken.__enter__.return_value.read.side_effect = http.client.IncompleteRead(
+            b"partial"
         )
-        self.assertEqual((rc, out), (0, {"published": "false", "drafts": "7"}))
+        registry = artifact.Registry(None)
+        with (
+            unittest.mock.patch.object(registry, "RETRIES", 0),
+            unittest.mock.patch.object(
+                artifact.urllib.request,
+                "urlopen",
+                side_effect=[self.bearer, broken],
+            ),
+            self.assertRaisesRegex(
+                artifact.ArtifactError, "registry pull.*IncompleteRead"
+            ),
+        ):
+            registry.manifest_bytes(TOOLCHAIN_REF)
 
-    def test_a_same_tag_release_is_published(self) -> None:
-        rc, out, _ = self.check(
-            [
-                release(7, TOOLCHAIN, TOOLCHAIN, False),
-                release(9, TOOLCHAIN, TOOLCHAIN, True),
-            ]
+    def test_blob_uses_the_digest_url_and_does_not_forward_credentials(self) -> None:
+        pinned = f"{artifact.names(TOOLCHAIN)['image']}@{DIGEST}"
+        dest = Path(self.enterContext(tempfile.TemporaryDirectory())) / "blob"
+        with unittest.mock.patch.object(
+            artifact.urllib.request,
+            "urlopen",
+            side_effect=[self.bearer, io.BytesIO(b"layer bytes")],
+        ) as urlopen:
+            self.assertEqual(artifact.Registry(None).blob(pinned, DIGEST, dest), dest)
+        self.assertEqual(dest.read_bytes(), b"layer bytes")
+        req = urlopen.call_args.args[0]
+        self.assertTrue(req.full_url.endswith(f"/tools/blobs/{DIGEST}"))
+        self.assertEqual(req.get_header("Authorization"), "Bearer stand-in")
+        redirect = urllib.request.HTTPRedirectHandler().redirect_request(
+            req, None, 307, "Temporary Redirect", {}, "https://storage.example/blob"
         )
-        self.assertEqual((rc, out), (0, {"published": "true", "drafts": ""}))
+        self.assertIsNone(redirect.get_header("Authorization"))
 
-    def test_no_hits(self) -> None:
-        rc, out, _ = self.check([release(1, "x", "y", False)])
-        self.assertEqual((rc, out), (0, {"published": "false", "drafts": ""}))
-        rc, out, _ = self.check([])
-        self.assertEqual((rc, out), (0, {"published": "false", "drafts": ""}))
 
-    def test_no_listing_fails_with_its_own_message(self) -> None:
-        for listing in ("", "not json", '{"message": "Bad credentials"}'):
-            with self.subTest(listing):
-                rc, out, log = self.check(listing)
-                self.assertEqual(rc, 1)
-                self.assertEqual(out, {})
-                self.assertIn("could not list the releases", log)
+class PublisherToolchain(unittest.TestCase):
+    def run_push(self, error: str) -> tuple[subprocess.CompletedProcess, str]:
+        text = PUBLISH.read_text()
+        script = text.split("# BEGIN toolchain-push\n", 1)[1].split(
+            "# END toolchain-push", 1
+        )[0]
+        fake = """skopeo() {
+          case "$1" in
+            inspect) printf '%s\n' "$PROBE_ERROR" >&2; return 1 ;;
+            copy) printf '%s\n' "$*" >copy.log ;;
+            *) return 1 ;;
+          esac
+        }
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", fake + script],
+                cwd=directory,
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    "PATH": os.environ["PATH"],
+                    "DIGEST": DIGEST,
+                    "DIR": "dist",
+                    "IMAGE": TOOLCHAIN_REF.rsplit(":", 1)[0],
+                    "REF": TOOLCHAIN_REF,
+                    "PROBE_ERROR": error,
+                },
+            )
+            copy = Path(directory, "copy.log")
+            return result, copy.read_text() if copy.exists() else ""
 
-    def test_a_clash_fails_even_beside_the_own_release(self) -> None:
-        rc, _, _ = self.check(
-            [
-                release(7, TOOLCHAIN, TOOLCHAIN, False),
-                release(8, "decoy", TOOLCHAIN, True),
-            ]
+    def test_push_probe_refuses_auth_failure(self) -> None:
+        result, copied = self.run_push(
+            "reading manifest: unauthorized: credentials not found"
         )
-        self.assertEqual(rc, 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("probing", result.stdout)
+        self.assertEqual(copied, "")
+
+    def test_manifest_unknown_uploads_by_digest(self) -> None:
+        result, copied = self.run_push(
+            "reading manifest: manifest unknown: manifest unknown"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"docker://{TOOLCHAIN_REF.rsplit(':', 1)[0]}@{DIGEST}", copied)
+        self.assertNotIn(f"docker://{TOOLCHAIN_REF}", copied)
 
 
 def _strip_yaml_comment(value: str) -> str:

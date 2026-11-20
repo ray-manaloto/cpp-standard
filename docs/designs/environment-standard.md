@@ -94,10 +94,10 @@ owner confirmed these three differences; the decisions log records the rest:
 | **Capability lock** | `cmake/capabilities.lock.json`: what each compiler can do in each environment (D42). Never called just "the lock". `.mise/mise.lock` is always named in full. |
 | **Inputs hash** | The 16-hex value computed from an artifact's input files and `.mise/mise.lock` slices (§2). |
 | **Artifact tag** | The name built from the inputs hash, such as `tools-arm64-<hash>` or `p2996-linux-arm64-<hash>`. Written as `<tag>` in task arguments and paths (§2). |
-| **Release tag** | The git tag of a toolchain release. In M1a it is the artifact tag (D134); M2's packslip naming (D89) is part of the M2 design. |
+| **Toolchain image tag** | The full artifact tag on the public tools package, such as `p2996-linux-arm64-<hash>` (D180, D181). M2's packslip naming (D89) is part of the M2 design. |
 | **Image tag** | The GHCR tag of an image, `<arch>-<hash>`, published only from `main`. PR and merge-group images use `pr-<n>-` tags that only their own jobs use (§2, D134). |
 | **Toolchain pins** | `toolchains/<name>/pins.toml`, one file per toolchain shared by every OS: version or commit, source URL and sha256, `salt` and `host_tools`. Each OS adds its own host inputs to the hash (D85). |
-| **Fetch rule** | How `toolchain:fetch` gets a toolchain in any job: `main`'s verified release for the hash, else the job's staged PR or merge-group copy, else a rebuild (§2 step 5). |
+| **Fetch rule** | How `toolchain:fetch` gets a toolchain in any job: `main`'s attested OCI image for the hash, else the job's staged PR or merge-group copy, else a rebuild (§2 step 5). |
 | **Leaf bump** | An update to an input that only the tools image or a single tool depends on, such as a new cmake. It is the opposite of a compiler or base-image change. |
 | **The fence** | Self-hosted runners run only `main` code (§6 The fence, D48, D58). It is the rule for cpp-standard's own runners, which start at M2. The PC's iptables rules around the CI runner slots (`gha-fence`, §11) are a different thing and are called the slot network rules here. |
 | **ut** | Boost.ext ut (`bext-ut`), the header-only C++ unit-test framework. |
@@ -118,7 +118,7 @@ owner confirmed these three differences; the decisions log records the rest:
 | **mise** | jdx's tool and task manager. It installs pinned tools, runs tasks, and bootstraps machines (`mise bootstrap`). |
 | **hk** | jdx's git-hook and check runner. |
 | **fnox** | jdx's secret manager. It reads secrets from Doppler and passes them to commands without printing them. |
-| **packslip** | jdx's signed release manifest and its CLI. A release job signs a list of its files' digests with its workflow identity; `packslip install` checks the signer and digests before extracting. Here the standalone CLI installs the toolchains (`toolchain:fetch`) and mise itself in the base image (D59, D72, D73). |
+| **packslip** | jdx's signed release manifest and its CLI. A release job signs a list of its files' digests with its workflow identity; `packslip install` checks the signer and digests before extracting. The standalone CLI installs mise in the base image (D73). Toolchain packslip signing is planned for M2 (D111). |
 | **jouet** | A command-line toolkit for coding agents, with test, commit and search commands, and rules that its hooks apply to agent tool calls (D64). |
 | **gha-outrunner** | A small controller on GitHub's `actions/scaleset` client that runs each job in a fresh libvirt or Tart VM (D65). |
 | **Context7, codebase-memory** | Two MCP servers available to agents. Context7 serves current library documentation. codebase-memory indexes this repository's code as a searchable graph. |
@@ -390,8 +390,8 @@ is unproven, and the accepted risks, are in
 ### Architecture at a glance
 
 The diagram shows the M2 state. In M1a there are no self-hosted runners,
-`main` builds on hosted runners, and toolchain releases are attested, not
-yet packslip-signed (D111, D116).
+`main` builds on hosted runners, and toolchains are attested OCI images
+(D111, D116, D181).
 
 ```mermaid
 flowchart LR
@@ -402,7 +402,7 @@ flowchart LR
     CODE[src, tests, presets, probes]
   end
   subgraph out[published by publish.yml on main]
-    TA[toolchain releases<br/>attested; packslip-signed from M2]
+    TA[toolchains<br/>attested OCI images in M1a; packslip-signed from M2]
     BASE[base image, GHCR<br/>attested]
     TOOLS[tools image, GHCR<br/>attested]
   end
@@ -477,14 +477,14 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    | tools image | the base tag, `image/tools.Dockerfile`, `.mise/conf.d/tools.toml`, the linux-`<arch>` slice of `.mise/mise.lock`, and the `.mise/locks/**` sidecars the slice names (D68, D74, D90) |
    | runner image (PC qcow2) | the `tools-amd64` tag, each tracked file under `runner/pc/` (at least one), `runner/hook/job-started.sh` and `image/runner.inputs.toml`, the pinned actions/runner version (D90, D164) |
    | Mac golden image | `vm/inputs.toml` (Tart base digest and sizes), `image/base.inputs.toml` (the same mise pin), `.mise/conf.d/tools.toml`, the macos-arm64 slice of `.mise/mise.lock`, `.mise/tasks/vm/golden`, `runner/hook/job-started.sh` and `image/runner.inputs.toml`, the pinned actions/runner version (D68, D74, D86, D90, D164) |
-   | toolchain, Linux | the shared `toolchains/<name>/pins.toml`, `toolchains/<name>/build.sh`, the Linux patches under `toolchains/<name>/linux/` (D105), `.mise/conf.d/apt-toolchain-host.toml`, `.mise/conf.d/apt-sources.toml`, and the slice `.mise/mise.lock#linux-<arch>:<host_tools>` (D75, D85, D90) |
+   | toolchain, Linux | the shared `toolchains/<name>/pins.toml`, `toolchains/<name>/build.sh`, the Linux patches under `toolchains/<name>/linux/` (D105), `.mise/conf.d/apt-toolchain-host.toml`, `.mise/conf.d/apt-sources.toml`, and the slice `.mise/mise.lock#linux-<arch>:<host_tools>`, and the individual `.mise/conf.d/apt.toml` records named by `apt_packages` when `apt_compiler` is true (D75, D85, D90, D179) |
    | toolchain, macOS | the shared `toolchains/<name>/pins.toml`, `toolchains/<name>/build.sh`, the Mac recipe patches under `toolchains/<name>/macos/`, `vm/inputs.toml`, and the slice `.mise/mise.lock#macos-arm64:<host_tools>` (D85) |
 
    - **One shared pins file per toolchain (D85).** `toolchains/<name>/pins.toml`
      holds only data used by every OS (fields in §3 `pins:validate`); GCC
      adds a `[macos]` table with the Darwin patch, its libraries, the CLT
      and SDK versions. Every flag and argument lives in `build.sh`. A bump is
-     one PR, and `salt` is bumped only to republish a deleted release (D72).
+     one PR, and `salt` is bumped only to republish a deleted artifact (D72).
    - **Host versions come from the pins, not from a generated file (D75).**
      Linux toolchains build inside the current base image, and the host
      packages that shape a compiler live in
@@ -504,27 +504,29 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    amd64) and `golden-macos-arm64-<hash>` (D164). Every consumer computes the tag itself,
    from git; no file records it. Each row lists the files the build reads or
    its Dockerfile COPYs. In addition to those files, every hash covers
-   `.mise/tasks/artifact/build`, and a toolchain hash also covers
-   `apt.toml` when its `pins.toml` sets `apt_compiler = true` (D162). The
+   `.mise/tasks/artifact/build`. A toolchain with `apt_compiler = true` hashes
+   each bootstrap package pin in `apt_packages` as a separate record.
+   The key is `.mise/conf.d/apt.toml#<package>`, and the value is the
+   canonical JSON of that package's pin (D179). The
    Dockerfiles COPY only the conf.d fragments and the lock, never
    `mise.toml`. Two files are left out on purpose:
    - `mise.toml`, so that a settings change does not rebuild every
      artifact; an `[env]` change that affects build output is therefore not
      in the hash (accepted limit, D134);
-   - `builder.yml`, because it only calls `artifact:build`.
+   - `builder.yml` and the OCI packer, because they invoke or package the build,
+     and do not change its compiler inputs.
 
    Each hash also starts with the line `schema = 1`, bumped when the
    hashing rule changes (D90). `artifact:tag` has golden-vector tests in
    `tests/artifact_tag/`.
-   - **Toolchain releases (D134, D176).** In M1a a toolchain release's git
-     tag is its artifact tag. `artifact:check` and the builder find it with
-     one `GET /releases/tags/<artifact tag>` (tags are unique; drafts are not
-     returned). `toolchain:fetch`, which installs, lists every page of the
-     releases and refuses a tag whose title matches two (D122, D176); a
-     release source it cannot ask is never read as "no release". Both are
-     authenticated with `GITHUB_TOKEN` in Actions. How M2 maps an
-     artifact tag to packslip's `<project>-v<version>` release (D89) is part
-     of the M2 design.
+   - **Toolchain images (D180, D181).** The per-platform artifact tag maps
+     to `ghcr.io/ray-manaloto/cpp-standard/tools:<toolchain>-<os>-<arch>-<hash>`.
+     The public tools package already exists, so the first probe can distinguish
+     a missing toolchain tag from a registry authorization error.
+     `artifact:check`, the builder and `toolchain:fetch` probe the exact
+     GHCR tag. The builder verifies and pulls a hit by digest. Only an
+     explicit registry miss permits a build. Actions authenticate with
+     `GITHUB_TOKEN`. How M2 uses packslip (D89) is part of the M2 design.
 3. **Build.** `builder.yml`'s triggers are in its file-plan row (D61, D112).
    It takes no ref or SHA input and builds `github.sha`; only `GITHUB_TOKEN`
    and the owner can dispatch (§6 Trust roots, D134). On `merge_group` it
@@ -538,10 +540,11 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
      M2 in PC runner VMs (amd64);
    - macOS toolchains build only from `main`, in Mac runner VMs, after merge
      (D62, D85); the red post-merge macOS build is the backstop.
-4. **Publish (D59, D72, D98, D114).** In M1a, `publish.yml` releases each
-   toolchain archive with a build-provenance attestation. The archive
-   carries its own `inputs-hash.txt`, because an attestation binds a digest
-   to a workflow, not to a tag (D111, D116, D131). packslip signing, the
+4. **Publish (D59, D72, D98, D114, D181).** In M1a, `publish.yml` attests
+   each toolchain OCI manifest digest. The image's layer carries the toolchain
+   archive, which keeps its own `inputs-hash.txt` (D131). The manifest
+   annotations bind the published image to the builder's inputs hash and artifact
+   tag. packslip signing, the
    packslip check on use and the merge-group artifact leg arrive in M2
    (D111).
 
@@ -556,32 +559,27 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    `publish.yml` runs no repository code (D114). It refuses the run unless it
    is a `builder.yml` run from `push`, `schedule` or `workflow_dispatch` on
    `main` whose head SHA is on `main`'s history, so a PR build is never
-   signed. It downloads the artifact by run id, computes the names inline
-   from `inputs-hash.txt` and the pins (`artifact:names` is the same
-   computation, for tests and local use), and publishes with workflow steps:
+   signed. It downloads the artifact by run id and computes the names inline
+   from the artifact tag (`artifact:names` is the same computation, for tests
+   and local use). The workflow validates the toolchain manifest digest and
+   compares the annotations with the builder's recorded inputs hash and tag.
 
-   - **On `main`:** a toolchain becomes a GitHub Release tagged with its
-     artifact tag; if the tag exists, it exits. The order is fixed, because
-     immutable releases lock assets once published: delete any stale draft
-     for the tag, create a draft, upload, publish (D131). Images are pushed
-     to `ghcr.io/ray-manaloto/cpp-standard/<base|tools>:<arch>-<hash>` and
-     attested (`push-to-registry: true`). From M2, `jdx/packslip` also
-     signs toolchains keyless as `publish.yml` at `refs/heads/main`, and the
-     M1a attestation stays alongside until the owner decides otherwise
-     (D114, D116). `publish.yml` is the only workflow with `contents:
-     write`, `attestations: write` or `id-token: write`, and the only one
-     that pushes non-`pr-` images.
-   - **For PRs and the merge queue (D134):** no toolchain release is
-     published. Images go only under `:pr-<n>-<arch>-<hash>` (PR) and
+   - **On `main`:** the publisher uploads a toolchain image by digest,
+     attests it as `publish.yml` at `refs/heads/main`, then publishes the
+     per-platform tag. It refuses to overwrite a tag pointing to a different
+     digest. Base and tools images are pushed to
+     `ghcr.io/ray-manaloto/cpp-standard/<base|tools>:<arch>-<hash>` and
+     attested (`push-to-registry: true`). `publish.yml` is the only workflow
+     with `attestations: write` or `id-token: write`, and the only one that
+     pushes non-`pr-` images.
+   - **For PRs and the merge queue (D134):** toolchains use the staged
+     cache. Base and tools images go only under `:pr-<n>-<arch>-<hash>` (PR) and
      `:pr-<n>-mq-<arch>-<hash>` (merge group, `<n>` parsed from
      `gh-readonly-queue/main/pr-<n>-<sha>`). They are unattested and used
      only by that PR's own jobs; `main`, the runners, the dev VM and the
      devcontainer never use them. Jobs on `main`'s image use `container:`
      with the digest `image:verify` checked.
-   - **Release protections (M1b):** immutable releases, and a tag ruleset
-     that blocks deleting or moving toolchain tags. A deleted release can't
-     be republished, so recovery is a PR that bumps the toolchain's `salt`.
-5. **Fetch and verify (D72, D83, D91, D122).** One fetch rule for every
+5. **Fetch and verify (D72, D83, D91, D180).** One fetch rule for every
    job. In Actions, workflow steps first stage a copy into
    `.cache/toolchains/<tag>/`: in a PR job, and in an M1a merge-group job,
    `actions/cache/restore` with the key `toolchain-<tag>` (the merge group
@@ -590,13 +588,15 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    `run-id` (file plan, `ci.yml`). Then `mise run toolchain:fetch` computes
    each toolchain's hash and takes the first source that has it:
 
-   1. **`main`'s release** for that hash, the normal case. It looks the
-      release up by its tag (step 2), runs `gh attestation verify` on the
-      archive (`--signer-workflow` `publish.yml`, `--source-ref
-      refs/heads/main`), and after extracting checks that the archive's
-      `inputs-hash.txt` equals the computed hash (D131, D134). From M2 it
-      installs with the standalone packslip CLI and the `main` identity
-      (file plan, `toolchain/fetch`; D72, D121).
+   1. **`main`'s OCI image** for that hash, the normal case. Resolve the
+      exact tag to a manifest digest (step 2), run `gh attestation verify` on
+      the digest with signer `publish.yml` and source ref `refs/heads/main`,
+      and pull by digest. Check the manifest and layer against their digests.
+      After extracting, compare the archive's `inputs-hash.txt` with the
+      computed hash before switching the active prefix (D131, D180). Outside
+      Actions, a registry error stops the fetch. A registry miss or a
+      refusal leaves the remaining sources eligible. The existing
+      `--release-only` flag requests this image source alone.
    2. **In a merge-group job:** the staged copy. A cache made on
       `refs/pull/<n>/merge` is not readable from the merge-group ref.
    3. **In a PR job:** the staged `actions/cache` entry.
@@ -607,30 +607,30 @@ published toolchains as `<version>-<arch>-<inputs sha256>` the same way (D68).
    against its `inputs-hash.txt` but carries no signature, which is allowed
    only because it serves PR and merge-group jobs on hosted runners with no
    secrets (D54). A poisoned PR toolchain can fake a green PR or queue
-   result, but never becomes `main`'s release: the `main` builder always
-   builds from source, and the post-merge gate goes red if a failure was
+   result. The `main` builder uses a verified main image or builds from source,
+   and the post-merge gate goes red if a failure was
    hidden. In M1a the merge group's builder run builds an input-changing
    toolchain once and the gate jobs restore it (D61).
 
    **Jobs on `main`** never read a PR artifact or cache. In M1a,
-   `post-merge.yml` takes `main`'s release, else rebuilds. From M2 it takes
-   only `main`'s release, a missing release turns it red, and its `push`
-   run is skipped unless the commit's tags exist; the run dispatched by
-   `publish.yml` is the one that counts (D112).
+   `post-merge.yml` waits for the commit's artifacts and fetches the toolchain
+   from `main`'s attested image only. If the image stays absent, the gate
+   fails. From M2, the `push` run is skipped unless the commit's tags exist,
+   and the run dispatched by `publish.yml` is the one that counts (D112).
 
    Every pull of a `main` image runs `image:verify` (D114); a tag existing
    proves nothing.
 6. **Status.** The `builder.yml` PR status job posts a commit status per
    tag on each PR or merge-group head that needs it. The required
    `artifact-check` job passes when all of a PR's Linux tags are available
-   to its gate jobs, as `main`'s release or the builder run's cache entry
+   to its gate jobs, as `main`'s image or the builder run's cache entry
    or artifact (D62), and times out after 3 hours naming the missing tag
    and the builder run (D61).
 7. **Retention (D79, M1b).** A daily job deletes a closed PR's caches and
    `pr-` images; workflow artifacts expire after 7 days; `vm:golden` keeps
    the newest 2 local golden images. Nothing that a commit in `main`'s
    history references is deleted, so an old commit is reproduced by pulling
-   while its releases exist (G1, D27). The Mac golden image is local only,
+   while its images exist (G1, D27). The Mac golden image is local only,
    so an older one is rebuilt from its `vm/inputs.toml` (the G1 limit).
 
 ### 3. The bootstrap project, image layers and the three environments
@@ -718,8 +718,8 @@ The schema in Detailed Implementation shows each fragment's contents.
   and the apt key fingerprint is 40 hex characters;
 - each `toolchains/*/pins.toml` holds only `upstream`, `source` (URL, sha256,
   commit), `host_tools` (each a name in `tools.toml`), the required boolean
-  `apt_compiler` (D162) and `salt`, plus the
-  `[macos]` table for GCC (D85). Configure flags live in `build.sh`, not in
+  `apt_compiler` (D162) and `salt`, plus `apt_packages` when
+  `apt_compiler` is true (D179) and the `[macos]` table for GCC (D85). Configure flags live in `build.sh`, not in
   `pins.toml`;
 - `image/base.inputs.toml` holds only `ubuntu:26.10@sha256:<64 hex>`, an
   exact mise version (`YYYY.M.P`), a `ps1_` signer key id and
@@ -1449,7 +1449,7 @@ The critical path to glaze FIX, targeted to be green by 2026-11-27:
    documentation, D149), the repository settings check and
    `pins:validate`;
 6. the M1a trust work, and nothing more (D77, D111, D134): `main`-only
-   publishing, attested toolchain releases with `toolchain:fetch`, image
+   publishing, attested toolchain images with `toolchain:fetch`, image
    attestations with `image:verify`, `pr-` images, and `agent:token`
    (D80, D84).
 
@@ -1801,7 +1801,7 @@ and `check`) and `//workflow:<task>` (such as `frontmatter`,
 | Performance | The metrics table is the standard; only instruction counts are in Level 1. | D35, D46 |
 | Ubuntu upgrades | Side by side, a written process in Level 1. The owner merges the switch PR. | D36, D47, D107, D149 |
 | Probe results | Compared against a committed capability lock. | D42 |
-| Artifact trust | `publish.yml`, which runs no repository code, is the only signer. Attestations for images and, in M1a, toolchain tarballs; packslip for toolchains from M2; `main`-only publishing; one fetch rule (§2 step 5). | D59, D60, D72, D83, D111, D114, D116 |
+| Artifact trust | `publish.yml`, which runs no repository code, is the only signer. Attestations for runtime images and, in M1a, toolchain images; packslip for toolchains from M2; `main`-only publishing; one fetch rule (§2 step 5). | D59, D60, D72, D83, D111, D114, D116, D181 |
 | Runner VMs | gha-outrunner, one VM per job, on the PC and the Mac. | D65 |
 
 ## Alternatives Considered
@@ -2031,12 +2031,12 @@ This list is not complete for D136 to D155.
 | Agent-edited workflows run before merge | accepted | a same-repo PR changes `.github/**` | Before merge they can't reach the PC or Mac (D58) or produce anything `main` trusts (D59). They can still touch PR artifacts, caches and `pr-` images, fake a green PR result, overwrite a `main` GHCR tag (refused by `image:verify`) or delete a release (a `salt` bump recovers it) | D54, D60, D72, D134 |
 | An agent PR changes an allowlisted self-hosted workflow, and its code runs on the PC and Mac | accepted | a PR changes `post-merge.yml`, `mac-gate.yml` or `runner/**` | It merges on the required checks with no human look before merge (D149); the owner looks after merge, changes merged before M2 are read once at M2 entry (D131), and the one-VM-per-job fence contains what a job runs (D65) | D48, D53, D101, D149 |
 | An agent PR weakens a probe and regenerates the capability lock to match | mitigated | a PR changes `cmake/probes.cmake` and `cmake/capabilities.lock.json` together | `gate:policy` fails on a removed capability without a `gate-removals.toml` entry, a trust root (D115); a PR that also weakens the checker shows in the post-merge run and the digest | D42, D115, D134 |
-| A merged agent PR can change what `publish.yml` publishes | accepted | a PR changes `publish.yml` or a build input | `toolchain:fetch` verifies the `publish.yml` attestation everywhere, so a hand-published release is refused (D116); `publish.yml` itself merges on the required checks like every file, also from M2 (D149) | D111, D116, D149 |
+| A merged agent PR can change what `publish.yml` publishes | accepted | a PR changes `publish.yml` or a build input | `toolchain:fetch` verifies the `publish.yml` attestation for registry images. `publish.yml` merges on the required checks (D149). | D111, D116, D149, D180 |
 | A disabled required workflow goes unnoticed | mitigated | a workflow is disabled | From M1a PR 6, the agent App has no `actions: write` (D134); the daily settings check fails on a disabled workflow | D60, D71, D134 |
 | packslip's `--identity` doesn't pin the `publish.yml` ref | unproven | M2 entry gate (M0 (i) proved it for `builder.yml`) | Keep the M1a attestation verify (D116) as the toolchain trust check | D72, D114, D121 |
 | A PR job's toolchain cache is evicted | limit | `actions/cache` miss | The fetch rule (§2 step 5) falls back to a rebuild, which fails only past the 3-hour `artifact-check` timeout | D72, D83 |
 | A self-hosted workflow is dispatched at a PR's code | mitigated | a `workflow_dispatch` from someone other than `publish.yml` or the owner | Only `GITHUB_TOKEN` and the owner can dispatch (§6 Trust roots); the M2 entry gate tests it | D122, D134 |
-| A release with `main`'s tag is not `main`'s build | mitigated | a release created by hand with the artifact tag | The tag is unique and `toolchain:fetch` verifies the attestation and the `inputs-hash.txt` inside the archive; a failed check rebuilds, which is slow, not wrong | D122, D131, D134 |
+| The registry tag points to a different build | mitigated | a toolchain image published outside the main publisher | `toolchain:fetch` verifies the attestation and the installed archive's `inputs-hash.txt` before switching the active prefix. A refusal allows the next eligible source. | D131, D180, D181 |
 | In M1a, every input-changing PR rebuilds its toolchain in the merge group | scale | a toolchain input change in the queue | Gate jobs wait for `artifact-check`; the merge-group artifact leg arrives in M2; tool bumps are grouped | D61, D111 |
 | apt.llvm.org drops `resolute-23`, or its packages stop installing on 26.10 | dependency | an apt.llvm.org change | The base image is pinned by digest and the capability lock catches a changed compiler; the fallback is building clang 23 with the hash-keyed builder, as for p2996 | D27, D45 |
 | 100% coverage does not count consteval code | limit | code that runs only at compile time | gcov-mode tools never see it; it is tested with `static_assert`, and G4 states the limit | D88, D124 |
@@ -2340,10 +2340,10 @@ is green, or cut at its §10 cut date.
 | `.mise/tasks/pins/validate` **(O)**, `python/pins/` | PR 1, new | The D51/D161 content check for every pins file and non-pin host fragment in §3, backed by `python/pins/pins.py` (standard-library Python 3.11+). Also runs the pin-validation vectors in `tests/pins_validate/`, the artifact-tag vectors in `tests/artifact_tag/`, and the offline `pins:apt-bump` (`python/pins/apt_bump.py`) vectors in `tests/apt_bump/`. |
 | `.mise/tasks/artifact/tag` **(O)** | PR 1, new | Prints the tag for `base`, `tools`, `runner-pc`, `golden` or `<toolchain>-<os>-<arch>` from the inputs listed in §2 (D164), backed by `python/pins/pins.py`. Golden-vector tests in `tests/artifact_tag/` (D90). |
 | `.mise/tasks/artifact/check` **(O)** | PR 2, new | The required PR check, backed by `python/artifact/artifact.py`. Passes when every Linux tag the PR needs exists, with the 3-hour timeout (D61, D62). Offline unit tests of the wait cases live in `tests/artifact/`. |
-| `.mise/tasks/artifact/build` **(O)** | PR 2, new | Builds one missing tag: an image layer, or a toolchain's `build.sh`. It runs the smoke test, records the build-tool versions, and writes `dist/<tag>/`: for a toolchain, `<tag>.tar.zst` with `inputs-hash.txt` at its root; for an image, `image.tar` and `image.txt`. Workflow steps upload it as `toolchain-<tag>` or `image-<tag>` (§2); the PR status job pushes a PR's `image.tar` as its `pr-` tag, and `publish.yml` pushes `main`'s. It holds no token (D98). |
-| `.mise/tasks/artifact/names` **(O)**, `python/artifact/` | PR 2, new | Prints the release tag, release title and image references for a tag (§2, D98), backed by `python/artifact/artifact.py` (also behind `artifact:check`, `image:verify` and `image:resolve`), for tests and local use. `publish.yml` computes the same values inline and never runs it (D114); `tests/artifact/` (`tests/artifact/test_artifact.py`) checks the two agree and covers `artifact:check` and `image:resolve` offline. |
-| `.github/workflows/publish.yml` **(O)** | PR 2, new | Dispatched by `builder.yml` on `main` with the build run id. Refuses any run id that is not a `builder.yml` run from `push`, `schedule` or `workflow_dispatch` on `main` with its head on `main`'s history; the coordinator-run refusal test in `tests/publish_refusal/` (`tests/publish_refusal/README.md`) dispatches it on `main` with a PR run id (D114, D158). Downloads the artifact, computes names inline, attests toolchain tarballs and images (M1a, D116), and from M2 signs toolchains with `jdx/packslip@<commit sha>` (`attest: false`) and dispatches the post-merge workflows (D112). Runs no repository code. A trust root (D108, D114). |
-| `.mise/tasks/toolchain/fetch` **(O)** | PR 3, new | Computes each toolchain's hash, finds the release by its tag on every page of the releases, refusing a title that matches two (D122, D176), and installs it into an immutable `<root>/.<tag>.<unique>/` directory behind `<root>/<tag>`, a symlink switched in one atomic step, so the prefix always resolves to a complete install. In M1a it checks the tarball's attestation (`gh attestation verify --signer-workflow publish.yml --source-ref refs/heads/main`, D116) and, after extracting, the archive's `inputs-hash.txt` (D131); from M2 it installs with `packslip install … --identity https://github.com/ray-manaloto/cpp-standard/.github/workflows/publish.yml@refs/heads/main` (§2, D111, D114). If no release matches, it installs from `.cache/toolchains/<tag>/` (filled by workflow steps, D91); if that is empty, it rebuilds (D72, D83). |
+| `.mise/tasks/artifact/build` **(O)** | PR 2, new | Builds one missing tag: an image layer, or a toolchain's `build.sh`. It runs the smoke test, records the build-tool versions, and writes `dist/<tag>/`: for a toolchain, `<tag>.tar.zst` with `inputs-hash.txt` at its root; for an image, `image.tar` and `image.txt`. The main builder packs the toolchain archive and its hash into a single-layer OCI image with `python/artifact/oci.py`. Workflow steps upload `toolchain-<tag>` or `image-<tag>` (§2); the PR status job pushes a PR's `image.tar` as its `pr-` tag, and `publish.yml` pushes `main`'s. It holds no token (D98). |
+| `.mise/tasks/artifact/names` **(O)**, `python/artifact/` | PR 2, new | Prints the image references for a tag (§2, D98), backed by `python/artifact/artifact.py` (also behind `artifact:check`, `image:verify` and `image:resolve`), for tests and local use. `publish.yml` computes the same values inline and never runs it (D114); `tests/artifact/` (`tests/artifact/test_artifact.py`) checks the two agree and covers `artifact:check` and `image:resolve` offline. |
+| `.github/workflows/publish.yml` **(O)** | PR 2, new | Dispatched by `builder.yml` on `main` with the build run id. Refuses any run id that is not a `builder.yml` run from `push`, `schedule` or `workflow_dispatch` on `main` with its head on `main`'s history; the coordinator-run refusal test in `tests/publish_refusal/` (`tests/publish_refusal/README.md`) dispatches it on `main` with a PR run id (D114, D158). Downloads the artifact, computes names inline, publishes and attests toolchain and runtime images by digest (M1a, D180, D181), and from M2 signs toolchains with `jdx/packslip@<commit sha>` (`attest: false`) and dispatches the post-merge workflows (D112). Runs no repository code. A trust root (D108, D114). |
+| `.mise/tasks/toolchain/fetch` **(O)** | PR 3, new | Computes the toolchain hash, resolves the corresponding GHCR tag, verifies the digest's attestation from `publish.yml` on `refs/heads/main`, and pulls by digest. Checks the archive's `inputs-hash.txt` before atomically switching the `<root>/<tag>` symlink to an immutable installation (D131, D180). Hosted PR and merge-group jobs can use their staged copy (D91). Existing rebuild and dispatch restrictions apply (D72, D83, D122). |
 | `.mise/tasks/image/verify` **(O)**, `.mise/tasks/image/resolve` **(O)** | PR 2, new | Both backed by `python/artifact/artifact.py`. `image:verify` runs `gh attestation verify oci://<image>@<digest> --repo ray-manaloto/cpp-standard --signer-workflow ray-manaloto/cpp-standard/.github/workflows/publish.yml --source-ref refs/heads/main` before any non-PR image use, and prints the digest. `image:resolve` runs in CI's `resolve` job: it picks `main`'s attested `tools:<arch>-<hash>` verified by digest if it exists, else in a PR or merge-group run only the run's own unattested `pr-` image, and fails on any other event (D54); it writes `image=<image>@sha256:<digest>` and `source=main\|pr` to `$GITHUB_OUTPUT`, and container jobs use `image@digest`, never a tag. Negative test: `tests/image_verify/` checks that an image signed from a branch ref is refused (D59, D93, D98). |
 | `toolchains/p2996/build.sh` **(O)** | PR 3, new | Starts from the proven `spikes/m0/h/build.sh` (run 43509894509), with a link: the full CMake line, including `-DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON` (D105), the patch loop, compiler-rt, libcxx, libcxxabi, libunwind and the `llvm-cov` and `llvm-profdata` tools (D88). All CMake arguments live here. The smoke test starts from `spikes/m0/h/smoke.sh` and runs a P2996 `members_of` program with ASan and coverage. The macOS branch comes in M3. |
 | `toolchains/p2996/pins.toml` **(P)** | PR 3, new | Shared by Linux and macOS (D85): `upstream = "21.0.0-p2996"`, the commit (`562409c7942690d59ea470762515f88f24b16e23`), source URL and sha256, `salt`, and `host_tools = ["cmake", "ninja"]`. Renovate bumps the commit in one PR for every OS (D32). |
@@ -2475,8 +2475,9 @@ sha256 = "<64 hex>"
 upstream = "<semver>"           # e.g. "16.2.0", or "21.0.0-p2996"; packslip versioning from it is M2 (D89, D134)
 source = { url = "<url>", sha256 = "<64 hex>", commit = "<sha, p2996 only>" }
 host_tools = ["cmake", "ninja"] # exact .mise/mise.lock entries hashed per platform
-apt_compiler = false            # required; true if build.sh bootstraps with an apt compiler (D162)
-salt = 0                        # bumped only to republish a deleted release (D72)
+apt_compiler = true             # required; true if build.sh bootstraps with an apt compiler (D179)
+apt_packages = ["apt:clang-23", "apt:lld-23"] # required when apt_compiler is true; omit otherwise
+salt = 0                        # bumped only to republish a deleted artifact (D72)
 # [macos] table only for gcc-macos: patch, Homebrew commit, in-tree prerequisites, zstd/make, Xcode/SDK/bootstrap host fields (D33)
 ```
 

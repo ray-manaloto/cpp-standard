@@ -1,29 +1,36 @@
-"""toolchain:fetch: install a toolchain by its artifact tag (M1a PR 3, ticket #130).
+"""toolchain:fetch: install a toolchain by its artifact tag (M1a PR 3, tickets #130 and #254).
 
 environment-standard.md section 2 step 5 and the toolchain/fetch row of the file plan; D72, D83,
-D91, D111, D116, D122, D131, D134. Standard-library Python 3.11 or later, like
-python/artifact/artifact.py; the release store, the attestation verifier and the rebuild are passed
-in, so tests/toolchain/ runs every row of the source table with no network or build.
+D91, D111, D116, D131, D134, #254. Standard-library Python 3.11 or later, like
+python/artifact/artifact.py; the image store, the attestation verifier and the rebuild are
+passed in, so tests/toolchain/ runs every row of the source table with no network or build.
 
-Where a toolchain may come from depends on where the fetch runs (ticket #130):
+Where a toolchain may come from depends on where the fetch runs (ticket #130, #254):
 
-    hosted pull-request or merge-queue job   release, else this run's staged copy, else a rebuild
-    any other Actions run (main, dispatch)   release, else a rebuild; never a staged copy
-    outside Actions (the owner's machines)   release, else a rebuild; never a staged copy
+    hosted pull-request or merge-queue job   main's image, else this run's staged copy, else a rebuild
+    any other Actions run (main, dispatch)   main's image, else a rebuild; never a staged copy
+    outside Actions (the owner's machines)   main's image, else a rebuild; never a staged copy
 
 A staged copy is `.cache/toolchains/<tag>/<tag>.tar.zst`, put there by a workflow step of the same
 run (actions/cache/restore, D91). A miss never fails the fetch while a later source remains (D83).
 `--release-only` turns both fallbacks off; `--no-rebuild` turns the rebuild off, for the jobs that
 wait for the one job of a hosted run that builds.
 
-Every source is checked the same way before anything is installed: a release must be the only
-non-draft release whose title or tag is the artifact tag (D122), and its archive must pass
-`gh attestation verify` as publish.yml on refs/heads/main (D116, the image policy of
-artifact.verify_flags). Every archive is extracted into a new immutable directory
-`<root>/.<tag>.<unique>` and must hold an `inputs-hash.txt` equal to the tag's hash (D131) before
-the public prefix `<root>/<tag>`, a symlink, is switched to it in one atomic step. So a refused
-archive is never installed, a toolchain installed before a refusal is left as it was, and
-`<root>/<tag>` resolves to a complete install at every moment.
+The GitHub Release of ticket #130 is gone (#254): a toolchain is stored as an attested OCI
+image in GHCR, `ghcr.io/ray-manaloto/cpp-standard/tools:p2996-linux-arm64-<hash>`, published only
+from main (publish.yml). Every source is checked before anything is installed: the registry
+probe of the image ref follows the builder's rule — any answer other than "not found" is an
+error, never read as "does not exist" (D90, #254); the image is pulled by digest, so what the
+probe saw is what is installed: the manifest bytes must hash to the digest the probe saw
+before they are parsed, and the manifest's one gzip layer must match its size and digest
+while it streams, before anything is extracted (python/artifact/oci.py packs it; D180); and
+it must pass `gh attestation verify` as publish.yml on refs/heads/main (the image policy of
+artifact.verify_flags, D116). Every archive is extracted
+into a new immutable directory `<root>/.<tag>.<unique>` and must hold an `inputs-hash.txt`
+equal to the tag's hash (D131) before the public prefix `<root>/<tag>`, a symlink, is switched
+to it in one atomic step. So a refused archive is never installed, a toolchain installed
+before a refusal is left as it was, and `<root>/<tag>` resolves to a complete install at every
+moment.
 """
 
 from __future__ import annotations
@@ -32,14 +39,19 @@ import argparse
 import contextlib
 import ctypes
 import fcntl
+import gzip
+import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import uuid
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,10 +59,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "artifact"))
 
 import artifact
+import oci
 
 REPO = artifact.REPO
 TAG = artifact.TOOLCHAIN_TAG
 HASH_FILE = "inputs-hash.txt"
+# The image's layer blob is hashed and counted, and its archive copied out of the tar, in
+# chunks of this many bytes; the blob is never buffered whole.
+CHUNK = 1 << 20
 # The atomic exchange of two paths: renameat2(AT_FDCWD, ..., RENAME_EXCHANGE) on Linux,
 # renamex_np(..., RENAME_SWAP) on macOS (both 1 << 1).
 AT_FDCWD = -100
@@ -58,7 +74,7 @@ RENAME_EXCHANGE = 2
 RENAME_SWAP = 2
 PR_EVENTS = artifact.PR_EVENTS
 
-RELEASE, STAGED, REBUILD = "release", "staged", "rebuild"
+IMAGE, STAGED, REBUILD = "image", "staged", "rebuild"
 
 
 class FetchError(Exception):
@@ -70,9 +86,8 @@ class Refused(Exception):
 
 
 class SourceError(Exception):
-    """The release source could not be asked at all (no gh, no token, an API failure). It is
-    never read as "no release": outside Actions the fetch stops with the reason instead of
-    starting a rebuild; in Actions the next source is tried, with a warning (D83)."""
+    """The registry or attestation service could not give a verdict. Outside Actions the fetch
+    stops with the reason before rebuilding. Actions tries the next source with a warning (D83)."""
 
 
 # --- where the fetch runs -----------------------------------------------------
@@ -106,8 +121,8 @@ def sources(
 ) -> list[str]:
     """The source table: the sources this context may use, in order."""
     if release_only:
-        return [RELEASE]
-    order = [RELEASE]
+        return [IMAGE]
+    order = [IMAGE]
     if ctx.kind == "hosted_pr":
         order.append(STAGED)
     if rebuild:
@@ -115,115 +130,184 @@ def sources(
     return order
 
 
-# --- the release store (D122, D134) -------------------------------------------
+# --- main's image store (D98, #254) --------------------------------------------
 
 
 @dataclass(frozen=True)
-class Release:
-    tag: str
-    title: str
-    assets: tuple[str, ...]
+class Image:
+    ref: str  # ghcr.io/ray-manaloto/cpp-standard/tools:<tag>, the full p2996-linux-arm64-<hash>
+    digest: str  # sha256:... of the manifest the tag resolved to
 
 
-def pick_release(tag: str, releases: list[dict]) -> Release | None:
-    """The one published release of `tag`, from the full list of the repository's releases. A
-    title or tag that matches more than one release is refused (D122); drafts never count (D131)."""
-    hits = [
-        r
-        for r in releases
-        if not r.get("draft") and tag in (r.get("name"), r.get("tag_name"))
-    ]
-    if len(hits) > 1:
+def _sha256(data: bytes) -> str:
+    return f"sha256:{hashlib.sha256(data).hexdigest()}"
+
+
+def _one_layer(manifest: object, at_digest: str) -> tuple[str, int]:
+    """The digest and size of the manifest's one layer (python/artifact/oci.py packs exactly
+    one); any other shape is a malformed manifest, refused."""
+    if not isinstance(manifest, dict):
+        raise Refused(f"{at_digest}: malformed manifest: not a JSON object")
+    layers = manifest.get("layers")
+    if not isinstance(layers, list) or len(layers) != 1:
+        count = len(layers) if isinstance(layers, list) else type(layers).__name__
         raise Refused(
-            f"{len(hits)} releases match {tag}: "
-            + ", ".join(f"{r.get('tag_name')} ({r.get('name')})" for r in hits)
+            f"{at_digest}: malformed manifest: expected exactly one layer, got {count}"
         )
-    if not hits:
-        return None
-    r = hits[0]
-    if r.get("tag_name") != tag or r.get("name") != tag:
+    layer = layers[0]
+    if not isinstance(layer, dict):
+        raise Refused(f"{at_digest}: malformed manifest: the layer is {layer!r}")
+    digest = layer.get("digest")
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise Refused(
-            f"release {r.get('tag_name')} is titled {r.get('name')}; both must be {tag}"
+            f"{at_digest}: malformed manifest: the layer digest is {digest!r}"
         )
-    return Release(tag, r["name"], tuple(a["name"] for a in r.get("assets", [])))
+    size = layer.get("size")
+    if type(size) is not int or size < 0:
+        raise Refused(f"{at_digest}: malformed manifest: the layer size is {size!r}")
+    media_type = layer.get("mediaType")
+    if media_type != oci.LAYER_MEDIA_TYPE:
+        raise Refused(
+            f"{at_digest}: malformed manifest: the layer type is {media_type!r}"
+        )
+    return digest, size
 
 
-class GhReleases:
-    """GitHub Releases through the gh CLI (GH_TOKEN in Actions, the owner's login outside)."""
+def _check_layer(blob: Path, digest: str, size: int, at_digest: str) -> None:
+    """The blob's compressed size and gzip digest, checked while streaming it in chunks."""
+    h = hashlib.sha256()
+    seen = 0
+    with open(blob, "rb") as f:
+        while chunk := f.read(CHUNK):
+            h.update(chunk)
+            seen += len(chunk)
+    if seen != size:
+        raise Refused(
+            f"{at_digest}: the layer blob is {seen} bytes, the manifest says {size}"
+        )
+    got = f"sha256:{h.hexdigest()}"
+    if got != digest:
+        raise Refused(
+            f"{at_digest}: the layer digest is {got}, the manifest says {digest}"
+        )
 
-    def __init__(self, repo: str = REPO) -> None:
-        self.repo = repo
 
-    def find(self, tag: str) -> Release | None:
-        # Every page (D122): an exact match outside the newest page still counts.
+def _extract_archive(blob: Path, archive: Path, at_digest: str) -> None:
+    """Stream the gzip tar in `blob` and copy the toolchain archive out of it member by
+    member: exactly one regular member named like `archive`, no other match, and well-formed
+    gzip and tar data. Anything else is refused, never installed."""
+    name = archive.name
+    found = 0
+    try:
+        with (
+            open(blob, "rb") as f,
+            gzip.GzipFile(fileobj=f, mode="rb") as gz,
+            tarfile.open(fileobj=gz, mode="r|") as tar,
+        ):
+            for member in tar:
+                if member.name != name:
+                    continue
+                if not member.isreg():
+                    raise Refused(f"{at_digest}: {member.name} is not a regular file")
+                found += 1
+                if found > 1:
+                    raise Refused(f"{at_digest}: more than one {name}")
+                with tar.extractfile(member) as src, open(archive, "wb") as out:
+                    shutil.copyfileobj(src, out, CHUNK)
+            # The tar end marker can precede the gzip footer. Read to EOF to check the footer too.
+            while gz.read(CHUNK):
+                pass
+    except (OSError, EOFError, zlib.error, tarfile.TarError) as e:
+        raise Refused(f"{at_digest}: malformed layer data: {e}") from e
+    if found == 0:
+        raise Refused(f"{at_digest} holds no {name}")
+
+
+class GhImage:
+    """main's toolchain image in GHCR: probed by tag with the builder's rule — `find` returns
+    None only for "not found", and the registry's answer is never read as a miss when it is
+    an error (D90, #254) — and pulled by digest, so what the probe saw is what is installed."""
+
+    def __init__(self, registry: artifact.Registry) -> None:
+        self.registry = registry
+
+    def find(self, tag: str) -> Image | None:
+        ref = artifact.names(tag)["ref"]
         try:
-            out = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    "--paginate",
-                    "--slurp",
-                    f"repos/{self.repo}/releases?per_page=100",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
-            pages = json.loads(out)
-        except subprocess.CalledProcessError as e:
-            raise SourceError(
-                f"gh api could not list the releases of {self.repo}: {e.stderr.strip()} "
-                "(no token? run gh auth login or set GH_TOKEN)"
-            ) from e
-        except FileNotFoundError as e:
-            raise SourceError("gh is not on PATH") from e
-        except json.JSONDecodeError as e:
-            raise SourceError(f"gh api returned no release list: {e}") from e
-        return pick_release(tag, [r for page in pages for r in page])
+            digest = self.registry.digest(ref)
+        except artifact.ArtifactError as e:
+            raise SourceError(str(e)) from e
+        return Image(ref, digest) if digest else None
 
-    def download(self, release: Release, asset: str, dest: Path) -> Path:
+    def download(self, image: Image, tag: str, dest: Path) -> Path:
+        """Pull the image by digest and extract the toolchain archive; return it. The manifest
+        bytes must hash to the digest the probe saw before they are parsed (D180); the one
+        layer must match its descriptor's size and gzip digest while streaming, and yield
+        exactly one regular `<tag>.tar.zst` member. Malformed image data is a refusal; the
+        registry not answering is a SourceError."""
+        at_digest = f"{image.ref.rpartition(':')[0]}@{image.digest}"
         try:
-            subprocess.run(
-                [
-                    "gh",
-                    "release",
-                    "download",
-                    release.tag,
-                    "--repo",
-                    self.repo,
-                    "--pattern",
-                    asset,
-                    "--dir",
-                    str(dest),
-                    "--clobber",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
+            raw = self.registry.manifest_bytes(at_digest)
+        except artifact.ArtifactError as e:
+            raise SourceError(str(e)) from e
+        if raw is None:
+            raise SourceError(f"{at_digest} vanished between the probe and the pull")
+        if (got := _sha256(raw)) != image.digest:
+            raise Refused(
+                f"manifest {at_digest} hashes to {got}, the probe saw {image.digest}"
             )
-        except subprocess.CalledProcessError as e:
-            detail = (e.stderr or "").strip() or str(e)
-            raise SourceError(
-                f"gh release download {release.tag}/{asset} from {self.repo} failed: {detail}"
-            ) from e
-        except FileNotFoundError as e:
-            raise SourceError("gh is not on PATH") from e
-        return dest / asset
+        try:
+            manifest = json.loads(raw)
+        except (UnicodeDecodeError, ValueError) as e:
+            raise Refused(f"{at_digest}: malformed manifest: {e}") from e
+        layer_digest, size = _one_layer(manifest, at_digest)
+        try:
+            blob = self.registry.blob(at_digest, layer_digest, dest / "layer")
+        except artifact.ArtifactError as e:
+            raise SourceError(str(e)) from e
+        _check_layer(blob, layer_digest, size, at_digest)
+        archive = dest / f"{tag}.tar.zst"
+        _extract_archive(blob, archive, at_digest)
+        return archive
 
 
-def gh_verify_report(path: Path) -> tuple[bool, str]:
-    """`gh attestation verify` of a release archive, the policy every main image is held to:
+def gh_verify_report(subject: str) -> tuple[bool, str]:
+    """`gh attestation verify` of an image, the policy every main artifact is held to:
     whether it passed, and gh's output (the must-fail fixture checks why it was refused)."""
-    cmd = ["gh", "attestation", "verify", str(path), *artifact.verify_flags()]
+    cmd = ["gh", "attestation", "verify", subject, *artifact.verify_flags()]
     print("+ " + " ".join(cmd), flush=True)
-    r = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    r = subprocess.run(
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NO_COLOR": "1"},
+    )
     out = r.stdout + r.stderr
     print(out, end="", flush=True)
     return r.returncode == 0, out
 
 
-def gh_verify(path: Path) -> bool:
-    return gh_verify_report(path)[0]
+def gh_verify(subject: str) -> bool:
+    try:
+        verified, output = gh_verify_report(subject)
+    except OSError as e:
+        raise SourceError(f"cannot run gh attestation verify for {subject}: {e}") from e
+    if verified:
+        return True
+    # gh uses the same exit status for refusal and failed API requests. Its empty
+    # lookup and certificate-policy messages establish a verdict. A generic
+    # Sigstore failure can also mean the trusted root was unavailable.
+    digest = subject.rpartition("@")[2]
+    lines = set(output.splitlines())
+    if lines & {
+        f"✗ No attestations found for subject {digest}",
+        "✗ Policy verification failed",
+    }:
+        return False
+    raise SourceError(
+        f"gh attestation verify for {subject} could not establish provenance"
+    )
 
 
 # --- installing ---------------------------------------------------------------
@@ -408,34 +492,33 @@ def fetch(
     tag: str,
     root: Path,
     order: list[str],
-    releases,
-    verifier: Callable[[Path], bool],
+    images,
+    verifier: Callable[[str], bool],
     rebuild: Callable[[str], Path],
     staged_dir: Path,
     log: Callable[[str], None] = print,
     stop_on_source_error: bool = False,
 ) -> Result:
     """Install `tag` under `root` from the first source of `order` that passes its checks. When
-    the release source cannot be asked, `stop_on_source_error` (outside Actions) stops there;
+    the image source cannot be asked, `stop_on_source_error` (outside Actions) stops there;
     otherwise the next source is tried after a warning."""
     result = Result()
     archive_name = f"{tag}.tar.zst"
     for source in order:
         try:
-            if source == RELEASE:
-                rel = releases.find(tag)
-                if rel is None:
-                    log(f"{tag}: no release")
+            if source == IMAGE:
+                img = images.find(tag)
+                if img is None:
+                    log(f"{tag}: no image")
                     continue
-                if archive_name not in rel.assets:
-                    raise Refused(f"release {tag} has no {archive_name}")
+                subject = f"oci://{img.ref.rpartition(':')[0]}@{img.digest}"
+                if not verifier(subject):
+                    raise Refused(
+                        f"{img.ref}@{img.digest}: its attestation is not "
+                        f"{artifact.PUBLISHER} on {artifact.MAIN_REF}"
+                    )
                 with tempfile.TemporaryDirectory() as d:
-                    path = releases.download(rel, archive_name, Path(d))
-                    if not verifier(path):
-                        raise Refused(
-                            f"release {tag}: the attestation of {archive_name} is not "
-                            f"publish.yml on {artifact.MAIN_REF}"
-                        )
+                    path = images.download(img, tag, Path(d))
                     result.prefix = install(path, tag, root)
             elif source == STAGED:
                 path = staged_dir / tag / archive_name
@@ -515,6 +598,10 @@ def mise_rebuild(tag: str) -> Path:
     return ROOT / "dist" / tag / f"{tag}.tar.zst"
 
 
+def gh_token() -> str | None:
+    return os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="toolchain-fetch")
     p.add_argument("name", nargs="?", default="p2996")
@@ -539,7 +626,7 @@ def main(argv: list[str]) -> int:
             tag,
             args.root or default_root(env),
             order,
-            GhReleases(),
+            GhImage(artifact.Registry(gh_token())),
             gh_verify,
             mise_rebuild,
             args.staged_dir,

@@ -4,7 +4,7 @@
 
 [fixture.toolchain-unattested]
 check = "toolchain:fetch"
-what = "an unattested release, on the code path used outside Actions (spec #122 Testing Decisions)"
+what = "an image with an unsuccessful attestation check, using local stand-ins (spec #122 Testing Decisions, #254)"
 
 [fixture.uncovered-line-gcc16]
 check = "ci:coverage"
@@ -24,4 +24,4 @@ what = "a vcpkg checkout at another commit than the pinned baseline (D113)"
 
 [fixture.toolchain-wrong-hash]
 check = "toolchain:fetch"
-what = "a main-attested archive whose inputs-hash.txt differs from its tag's hash (D131)"
+what = "an archive that passes a stand-in attestation check but whose inputs-hash.txt differs from its tag's hash (D131)"

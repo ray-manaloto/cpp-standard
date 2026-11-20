@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Install a toolchain by its artifact tag: main's attested release, else a staged copy (hosted PR jobs only), else a rebuild"
+#MISE description="Install a toolchain by its artifact tag: main's attested registry image, else a staged copy (hosted PR jobs only), else a rebuild"
 #USAGE arg "[name]" help="The toolchain" default="p2996"
 #USAGE flag "--os <os>" help="Toolchain OS" default="linux" {
 #USAGE   choices "linux" "macos"
@@ -8,7 +8,7 @@
 #USAGE   choices "arm64" "amd64"
 #USAGE }
 #USAGE flag "--root <dir>" help="Install root (default: $XDG_DATA_HOME/cpp-standard/toolchains)"
-#USAGE flag "--release-only" help="Take only main's attested release: no staged copy, no rebuild"
+#USAGE flag "--release-only" help="Take only main's attested registry image: no staged copy, no rebuild"
 #USAGE flag "--no-rebuild" help="Never rebuild (a job that waits for the run's one build)"
 #
 # environment-standard.md section 2 step 5 and the toolchain/fetch row of the file plan (D72, D83,
@@ -16,7 +16,7 @@
 # tested by tests/toolchain/ and the must-fail fixture fixtures/must-fail/toolchain-unattested/.
 # It installs into <root>/<tag>, a symlink switched atomically to an immutable <root>/.<tag>.<unique>/,
 # and prints, and appends to $GITHUB_OUTPUT, prefix=, source= and
-# tag=. A release is verified with `gh attestation verify` (gh logged in, or GH_TOKEN).
+# tag=. An image digest is verified with `gh attestation verify` (gh logged in, or GH_TOKEN).
 set -euo pipefail
 root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
 args=("${usage_name:-p2996}" --os "${usage_os:-linux}")
