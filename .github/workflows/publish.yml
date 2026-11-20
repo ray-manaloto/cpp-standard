@@ -304,7 +304,7 @@ jobs:
           # Keep the canonical tag invisible until its digest is attested.
           if have="$(skopeo inspect --raw "docker://$REF" 2>err.txt | sha256sum | cut -d' ' -f1)"; then
             [[ "sha256:$have" == "$DIGEST" ]] || { echo "::error::$REF exists with sha256:$have, not $DIGEST"; exit 1; }
-          elif grep -Eqi ': (manifest unknown|name unknown)(:|$)' err.txt; then
+          elif grep -Eqi ': (manifest unknown|name unknown)(:|"|$)' err.txt; then
             skopeo copy --preserve-digests "oci-archive:$DIR/image.tar" "docker://$IMAGE@$DIGEST"
           else
             cat err.txt
@@ -324,15 +324,17 @@ jobs:
           DIGEST: ${{ steps.art.outputs.digest }}
         run: |
           export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
+          # BEGIN toolchain-tag
           if have="$(skopeo inspect --raw "docker://$REF" 2>err.txt | sha256sum | cut -d' ' -f1)"; then
             [[ "sha256:$have" == "$DIGEST" ]] || { echo "::error::$REF exists with sha256:$have, not $DIGEST"; exit 1; }
-          elif grep -Eqi ': (manifest unknown|name unknown)(:|$)' err.txt; then
+          elif grep -Eqi ': (manifest unknown|name unknown)(:|"|$)' err.txt; then
             skopeo copy --preserve-digests "docker://$IMAGE@$DIGEST" "docker://$REF"
           else
             cat err.txt
             echo "::error::probing $REF failed"
             exit 1
           fi
+          # END toolchain-tag
           pushed="sha256:$(skopeo inspect --raw "docker://$REF" | sha256sum | cut -d' ' -f1)"
           [[ "$pushed" == "$DIGEST" ]] || { echo "::error::$REF is $pushed, built $DIGEST"; exit 1; }
           echo "PASS: $REF@$DIGEST"

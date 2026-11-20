@@ -534,11 +534,19 @@ class RegistryProbe(unittest.TestCase):
 
 
 class PublisherToolchain(unittest.TestCase):
-    def run_push(self, error: str) -> tuple[subprocess.CompletedProcess, str]:
+    QUOTED_MANIFEST_UNKNOWN = (
+        'time="2026-11-20T03:31:07Z" level=fatal msg="Error parsing image name '
+        '\\"docker://ghcr.io/ray-manaloto/cpp-standard/tools:'
+        'p2996-linux-arm64-2842aa720aeefb6e\\": reading manifest '
+        "p2996-linux-arm64-2842aa720aeefb6e in "
+        'ghcr.io/ray-manaloto/cpp-standard/tools: manifest unknown"'
+    )
+
+    def run_push(
+        self, error: str, marker: str = "toolchain-push"
+    ) -> tuple[subprocess.CompletedProcess, str]:
         text = PUBLISH.read_text()
-        script = text.split("# BEGIN toolchain-push\n", 1)[1].split(
-            "# END toolchain-push", 1
-        )[0]
+        script = text.split(f"# BEGIN {marker}\n", 1)[1].split(f"# END {marker}", 1)[0]
         fake = """skopeo() {
           case "$1" in
             inspect) printf '%s\n' "$PROBE_ERROR" >&2; return 1 ;;
@@ -581,6 +589,35 @@ class PublisherToolchain(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"docker://{TOOLCHAIN_REF.rsplit(':', 1)[0]}@{DIGEST}", copied)
         self.assertNotIn(f"docker://{TOOLCHAIN_REF}", copied)
+
+    def test_quoted_manifest_unknown_uploads_by_digest(self) -> None:
+        result, copied = self.run_push(self.QUOTED_MANIFEST_UNKNOWN)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"docker://{TOOLCHAIN_REF.rsplit(':', 1)[0]}@{DIGEST}", copied)
+        self.assertNotIn(f"docker://{TOOLCHAIN_REF}", copied)
+
+    def test_quoted_manifest_unknown_publishes_attested_tag(self) -> None:
+        result, copied = self.run_push(
+            self.QUOTED_MANIFEST_UNKNOWN, marker="toolchain-tag"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            copied.strip(),
+            f"copy --preserve-digests docker://{TOOLCHAIN_REF.rsplit(':', 1)[0]}@{DIGEST} "
+            f"docker://{TOOLCHAIN_REF}",
+        )
+
+    def test_quoted_auth_failure_refused_in_push_and_tag(self) -> None:
+        auth_err = (
+            'time="2026-11-20T03:31:07Z" level=fatal msg="Error parsing image name '
+            '\\"docker://ghcr.io/ray-manaloto/cpp-standard/tools:tag\\": '
+            'unauthorized: authentication required"'
+        )
+        for marker in ("toolchain-push", "toolchain-tag"):
+            result, copied = self.run_push(auth_err, marker=marker)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("probing", result.stdout)
+            self.assertEqual(copied, "")
 
 
 def _strip_yaml_comment(value: str) -> str:
@@ -644,12 +681,48 @@ def job_concurrency(text: str, job: str) -> dict[str, str]:
     return out
 
 
+def pull_request_paths(text: str) -> list[str]:
+    """Read `on.pull_request.paths` from a workflow YAML file with standard-library Python."""
+    lines = text.splitlines()
+    on_idx = next(i for i, line in enumerate(lines) if line.rstrip() == "on:")
+    pr_idx = next(
+        i
+        for i in range(on_idx + 1, len(lines))
+        if lines[i].strip().split(":", 1)[0] == "pull_request"
+    )
+    pr_indent = len(lines[pr_idx]) - len(lines[pr_idx].lstrip())
+    paths_idx = next(
+        i
+        for i in range(pr_idx + 1, len(lines))
+        if len(lines[i]) - len(lines[i].lstrip()) > pr_indent
+        and lines[i].strip().split(":", 1)[0] == "paths"
+    )
+    paths_indent = len(lines[paths_idx]) - len(lines[paths_idx].lstrip())
+    out: list[str] = []
+    for i in range(paths_idx + 1, len(lines)):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= paths_indent:
+            break
+        item = line.strip()
+        assert item.startswith("- "), f"expected list item, got {line!r}"
+        out.append(_strip_yaml_comment(item[2:]))
+    return out
+
+
 class BuilderWorkflow(unittest.TestCase):
     def test_toolchain_concurrency_keeps_every_pending_run(self) -> None:
         conc = job_concurrency(BUILDER.read_text(), "toolchain")
         self.assertEqual(conc.get("group"), "builder-${{ needs.tags.outputs.p2996 }}")
         self.assertEqual(conc.get("cancel-in-progress"), "false")
         self.assertEqual(conc.get("queue"), "max")
+
+    def test_pull_request_paths_include_builder_and_publish_workflows(self) -> None:
+        paths = pull_request_paths(BUILDER.read_text())
+        self.assertIn(".github/workflows/builder.yml", paths)
+        self.assertIn(".github/workflows/publish.yml", paths)
 
 
 if __name__ == "__main__":
