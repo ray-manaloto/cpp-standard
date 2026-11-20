@@ -6,7 +6,8 @@ stays the author of everything that leaves the machine.
 ## Which tickets go to agy
 
 - **Goes to agy:** a ticket of documentation, comments, a lint or typo sweep, or a small mechanical change whose
-  checks are `hk check` on the changed files, `typos`, `rumdl`, `ruff`, `ty`, `pytest` or `mise run pins:validate`,
+  checks are scoped to the change, such as `hk check` on the changed files, `typos`, `rumdl`, `ruff`, `ty`,
+  targeted `pytest` or `mise run pins:validate`,
   and whose brief fits in one file.
 - **Stays with a Claude session:** a ticket that needs a design choice, a container, ssh, the network, or a live check
   of agy itself.
@@ -44,9 +45,11 @@ Every brief carries the Claude brief's lines: heavy runs wait for a slot, docker
 ## Start a worker
 
 ```sh
-mise run agents:agy-worker <worktree> <brief> [--plan <PLAN_ID>] [--model <model>] [--dry-run]
+mise run agents:agy-worker <worktree> <brief> --model gemini-pro-orchestrator-neon [--plan <PLAN_ID>] [--dry-run]
 ```
 
+- Always pass `--model gemini-pro-orchestrator-neon`. This is the approved model for the launcher and sign-in
+  preflight. The command supports a default and a model override for compatibility.
 - The worktree is a linked git worktree directly under the repository's worktrees root; the brief is a file. The
   layout comes from the target repository's own mise env (`mise -C <main checkout> env --json`): `AGY_WORKTREE_ROOT`
   is the worktrees root (default `<repo>.worktrees` beside the main checkout) and `PWF_PLAN_ROOT`, the variable
@@ -96,11 +99,10 @@ so the launch guard and the doctor line look at Antigravity.app only.
 
 ## One launcher for every project
 
-`agents:agy-worker` is the one way to start an agy worker, for cpp-standard and for kb. kb today runs
-`~/.local/bin/agy` directly (`--add-dir <worktree> -i <task>`, with and without `--model gemini-pro-orchestrator-neon
---mode auto`), so it gets no rules file and no sign-in check. What kb changes: start its agy tabs through
-`mise run agents:agy-worker <worktree> <brief> --plan <PLAN_ID>` from a cpp-standard checkout (kb sets `AGY_WORKTREE_ROOT` in its own `mise.toml`;
-its plans root defaults to `knowledge-base-v2.plans`, or set `PWF_PLAN_ROOT`), and stop starting agy by hand.
+Use `agents:agy-worker` from a cpp-standard checkout to launch a worker for cpp-standard or another
+repository. Pass the worktree, brief, `--plan <PLAN_ID>` and the required model as above. The launcher reads
+`AGY_WORKTREE_ROOT` and `PWF_PLAN_ROOT` from the target repository's mise environment and applies the reviewed
+rules and sign-in preflight.
 
 ## While a worker runs
 

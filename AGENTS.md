@@ -23,9 +23,10 @@ The five default roles, each label named as its role: `needs-triage`, `needs-inf
 Single-context. Decisions are the D-rows of `docs/designs/level-1/decisions-log.md` (there is no `docs/adr/`); the
 design is `docs/designs/environment-standard.md`. See `docs/agents/domain.md`.
 
-### agy workers
+### Worker routes
 
-Routing tickets to agy workers and starting them: `docs/agents/agy-workers.md`.
+See [agy workers](docs/agents/agy-workers.md) for Antigravity CLI routing and
+[GLM workers](docs/agents/glm-workers.md) for the fenced ZCode route.
 
 ## Workflow facts
 
