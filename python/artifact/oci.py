@@ -159,6 +159,12 @@ def _write_image(
         (_blob_path(manifest_digest), manifest_bytes),
     ]
     with tarfile.open(dest, mode="w") as f:  # an OCI archive is an uncompressed tar
+        # Skopeo's unprivileged extractor tries to chown implicit parent directories.
+        for name in ("blobs", "blobs/sha256"):
+            directory = _entry(name, 0)
+            directory.type = tarfile.DIRTYPE
+            directory.mode = 0o755
+            f.addfile(directory)
         for name, body in members:
             f.addfile(_entry(name, len(body)), io.BytesIO(body))
         f.addfile(_entry(_blob_path(layer_digest), size), layer)
