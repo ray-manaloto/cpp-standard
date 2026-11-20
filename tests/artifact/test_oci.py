@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import gzip
 import hashlib
 import io
@@ -81,6 +82,61 @@ class Pack(unittest.TestCase):
             for name, path in self.inputs:
                 with contents.extractfile(name) as entry:
                     self.assertEqual(entry.read(), path.read_bytes())
+
+    def test_outer_tar_creates_blob_directories_without_changing_image(self) -> None:
+        # Use the legacy fixture's compressed layer so the comparison does not
+        # depend on the local zlib version.
+        layer = base64.b64decode(
+            "H4sIAAAAAAAE/+3UQQ6DIBBAUdc9hRfAICCNxyHtQhOrRjCxPX0xpht2Tasb/2wIQ"
+            "8LAC0Pbj3PwonG+KcISsj1CxrDGZOsYIx2lVOUnt62X8mpUlss9DpPuOfvgplg+zZ"
+            "9kLmVZKqW1MVVlrXOXk9yba24Co6prK7q2nxfhpoc1In0RReyP4uV/+BrWpv6u/43"
+            "Umv4/4o2GYehujWv7fHTPbnD3I4pSAwEEEEAAAQQQQAABBBBAAAEEEEAAAQQQQAAB"
+            "BBBAAAEEEEAAAQQQQOBvAm85oh97ACgAAA=="
+        )
+        dest = self.root / "image.tar"
+        manifest = oci._write_image(
+            dest,
+            io.BytesIO(layer),
+            len(layer),
+            digest(layer),
+            digest(gzip.decompress(layer)),
+            "arm64",
+            "linux",
+            ANNOTATIONS,
+        )
+        legacy_manifest = (
+            "sha256:47d1f2a6692b715ecd30c4829f683530f2b59e3b4f7e1c91a638c076c5b19398"
+        )
+        self.assertEqual(manifest, legacy_manifest)
+        # Ordered SHA-256 digests of the five regular members from the legacy pack.
+        legacy_members = [
+            "18f0797eab35a4597c1e9624aa4f15fd91f6254e5538c1e0d193b2a95dd4acc6",
+            "9aac850e1e0c1a919e270b1c0cbb70ed82fc39a1f502df27d5b65a83a8211a54",
+            "b3c44525b57df69606d47319dc57e3066e8fbee61adac834dc8792e8d613eb95",
+            legacy_manifest.removeprefix("sha256:"),
+            "97bce8c1a0eb68fd0e54154beb2f75aa996b8c8c021469d29d1147b45497ee3f",
+        ]
+        with tarfile.open(dest) as image:
+            entries = image.getmembers()
+            self.assertEqual(
+                [entry.name for entry in entries],
+                ["blobs", "blobs/sha256", "oci-layout", "index.json"]
+                + [f"blobs/sha256/{sha}" for sha in legacy_members[2:]],
+            )
+            for entry in entries[:2]:
+                with self.subTest(directory=entry.name):
+                    self.assertTrue(entry.isdir())
+                    self.assertEqual(
+                        (entry.mode, entry.size, entry.mtime), (0o755, 0, 0)
+                    )
+                    self.assertEqual(
+                        (entry.uid, entry.gid, entry.uname, entry.gname), (0, 0, "", "")
+                    )
+            for entry, sha in zip(entries[2:], legacy_members, strict=True):
+                with self.subTest(member=entry.name):
+                    self.assertTrue(entry.isreg())
+                    with image.extractfile(entry) as body:
+                        self.assertEqual(digest(body.read()), f"sha256:{sha}")
 
     def test_cli_reports_the_manifest_digest(self) -> None:
         dest = self.root / "image.tar"
