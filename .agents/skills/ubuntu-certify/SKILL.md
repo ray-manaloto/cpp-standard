@@ -125,8 +125,13 @@ DOCKER_HOST=ssh://$CERT_UBUNTU_SSH docker volume rm cpp-standard-cert-build cpp-
 - **`[host kernel]`** results are this container on the PC's Omarchy kernel,
   not Ubuntu's kernel.
 - **MSan is recorded, not required** (C6): it needs an MSan-built libc++.
-- The container runs `--privileged` (D137). V2 lists what narrower flags
-  give, if the flags are tuned down later.
+- Never `--privileged` on the PC (D140): the container runs with
+  `--cap-add PERFMON`, `--security-opt seccomp=docs/standard/ubuntu-seccomp.json`,
+  and `-e container=docker` (plus the four `--device` NVIDIA nodes and read-only
+  driver mounts when an NVIDIA GPU is present). `V2` verifies `CAP_PERFMON`
+  without `CAP_SYS_ADMIN` and seccomp mode 2; only the `--local` Mac arm64
+  host-probe helper container uses `--privileged` to `nsenter` into Docker
+  Desktop's VM (see Gotchas).
 
 ## Gotchas
 
