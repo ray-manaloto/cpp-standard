@@ -13,6 +13,7 @@
 #                                  checkout dir for testing) into the slot's tools volume
 #   gha-slot wipe <slot>           delete the slot's tools and sccache volumes (rebuilt on the next job)
 #   gha-slot dry-run <slot>        print the docker command a job would use (no GitHub, nothing started)
+#   gha-slot compiler-once <run-id> <sha> --group-verified  one protected-main CPP compiler qualification
 #   gha-slot once <slot>           warm, then register one single-use (JIT) runner, run one job, clean up
 #   gha-slot run <slot>            loop `once` forever (what gha-slot@<slot>.service runs)
 #
@@ -429,6 +430,16 @@ case "${1:-}" in
     load_slot "${2:-}"; warm "${3:-}"; TOKEN="" ;;
   wipe)
     load_slot "${2:-}"; wipe ;;
+  compiler-once)
+    # Installed beside runner.json, never sourced from a job work directory.
+    helper="$DIR/pc-compiler-once.sh"
+    [[ -f "$helper" && ! -L "$helper" && "$(stat -c '%u:%a' "$helper")" == 0:555 ]] ||
+      die "missing root-owned CPP compiler launcher"
+    # shellcheck source-path=SCRIPTDIR source=pc-compiler-once.sh
+    source "$helper"
+    shift
+    compiler_once "$@"
+    ;;
   once) once "${2:-}" ;;
   run)
     while true; do once "${2:-}" || { echo "gha-slot ${2:-}: round failed, retry in 30 s" >&2; sleep 30; }; done ;;

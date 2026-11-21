@@ -1,0 +1,87 @@
+name: PC Ubuntu amd64 compiler certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      certify:
+        description: Build and certify a fresh Ubuntu amd64 environment
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: cpp-standard-pc-compiler
+  cancel-in-progress: false
+
+jobs:
+  compiler:
+    name: Build and certify Ubuntu amd64
+    if: >-
+      ${{ inputs.certify &&
+          github.event_name == 'workflow_dispatch' &&
+          github.repository == 'ray-manaloto/cpp-standard' &&
+          github.ref == 'refs/heads/main' &&
+          github.workflow_ref == 'ray-manaloto/cpp-standard/.github/workflows/pc-compiler.yml@refs/heads/main' }}
+    runs-on:
+      group: cpp-standard-amd64
+      # The one-job JIT launcher is the only source of the compiler label.
+      labels: [self-hosted, pc-x86, container, cpp-standard, compiler]  # jactionlint ignore=self-hosted-runner
+    timeout-minutes: 350
+    steps:
+      - name: Verify admitted runner and isolated mounts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+          test "$(id -u)" = 1001
+          test "${GHA_SLOT:-}" = cpp-standard
+          test "${ACTIONS_RUNNER_HOOK_JOB_STARTED:-}" = /etc/gha-cpp-compiler-admission.sh
+          test ! -e /var/run/docker.sock
+          test ! -e /cache/sccache
+          grep -Eq '^CapEff:[[:space:]]+0+$' /proc/self/status
+          grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/self/status
+          awk '
+            $5 == "/cache/mise" && $6 ~ /(^|,)ro(,|$)/ { tools = 1 }
+            $5 == "/etc/gha-cpp-compiler-admission.sh" && $6 ~ /(^|,)ro(,|$)/ { policy = 1 }
+            $5 == "/cpp-result" && $6 ~ /(^|,)ro(,|$)/ { result = 1 }
+            $5 == "/cache/sccache" || $5 == "/tmp/gha-cpp-sccache" { shared = 1 }
+            END { exit !(tools && policy && result && !shared) }
+          ' /proc/self/mountinfo
+          test "${SCCACHE_DIR:-}" = /tmp/gha-cpp-sccache
+          test ! -e "$SCCACHE_DIR"
+          printf 'runner=%s run=%s attempt=%s commit=%s\n' \
+            "$RUNNER_NAME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA"
+
+      - name: Wait for compiler result
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The host launcher verifies the API assignment before it provisions
+          # any workload. The job can only read the fixed result directory.
+          timeout 331m bash -c 'until [[ -f /cpp-result/final.json ]]; do sleep 10; done'
+          mkdir -m 0700 "${RUNNER_TEMP}/cpp-result"
+          cp -a /cpp-result/. "${RUNNER_TEMP}/cpp-result/"
+
+      - name: Retain compiler and checklist evidence
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: ubuntu-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cpp-result
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Require complete certification for this assignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/cpp-result"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg commit "$GITHUB_SHA" --arg runner "$RUNNER_NAME" '
+              .run == $run and .attempt == $attempt and .commit == $commit
+              and .runner == $runner and .status == "PASS" and .fail == 0
+              and .pass > 0 and .pass + .na == .total and .timing == "verified"
+            ' "$root/final.json"
+          cat "$root/checklist.txt"
