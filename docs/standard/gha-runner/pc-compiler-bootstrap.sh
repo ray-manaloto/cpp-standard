@@ -24,6 +24,12 @@ bootstrap_compiler_project() (
   CI=true MISE_TRUSTED_CONFIG_PATHS="$PWD" mise -E ubuntu bootstrap --yes
 )
 
+# Run with the locked cert tool binaries on PATH. The project profile selects
+# sccache only on macOS, and Ninja can invoke its compiler launcher from /work.
+build_p2996() {
+  MISE_AUTO_INSTALL=0 mise -C "${MISE_GLOBAL_CONFIG_FILE%/*}" exec -- bash "$@"
+}
+
 # Inside the fresh, capped Ubuntu container only.
 [[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 set -euo pipefail
@@ -103,7 +109,7 @@ test -z "$(ls -A /work)"
 export FLANG_JOBS=1 SCCACHE_DIR=/work/sccache SCCACHE_CACHE_SIZE=2G
 # Six Ninja workers fit the proven p2996 memory profile inside the 16/48 cap.
 # This recipe builds P8's pinned IWYU from source in the p2996 LLVM tree.
-bash docs/standard/ubuntu-p2996/build-linux.sh /work /opt/p2996 6
+build_p2996 /project/docs/standard/ubuntu-p2996/build-linux.sh /work /opt/p2996 6
 /opt/p2996/bin/clang --version
 p2996_head="$(git -C /work/src rev-parse HEAD)"
 p2996_iwyu_head="$(git -C /work/iwyu rev-parse HEAD)"

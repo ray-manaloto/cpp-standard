@@ -85,6 +85,38 @@ bootstrap_compiler_project "$source"
                 self.assertEqual(hk.read_text().splitlines(), ["install --mise"])
                 hk.unlink()
 
+    def test_p2996_build_uses_cert_tools_even_after_changing_directory(self):
+        cert = self.root / "cert tools"
+        tools = cert / "bin"
+        tools.mkdir(parents=True)
+        sccache = tools / "sccache"
+        sccache.write_text('#!/bin/sh\nexit "$fixture_rc"\n')
+        sccache.chmod(0o755)
+        recipe = self.root / "source/build-linux.sh"
+        recipe.write_text(
+            'set -eu\n[[ "$#" == 3 && "$2" == /opt/p2996 && "$3" == 6 ]]\n'
+            'cd "$1"\n[[ "$(command -v sccache)" == "$cert/bin/sccache" ]]\n'
+            "sccache --zero-stats\n"
+        )
+        for status in (0, 37):
+            with self.subTest(status=status):
+                proc = self.shell(
+                    """
+export MISE_GLOBAL_CONFIG_FILE="$cert/mise.toml"
+cd "$source"
+mise() {
+  [[ "$MISE_AUTO_INSTALL" == 0 && "$1" == -C && "$2" == "$cert" &&
+     "$3" == exec && "$4" == -- ]] || return 90
+  shift 4
+  PATH="$cert/bin:$PATH" "$@"
+}
+build_p2996 "$source/build-linux.sh" "$result" /opt/p2996 6
+""",
+                    cert=str(cert),
+                    fixture_rc=str(status),
+                )
+                self.assertEqual(proc.returncode, status, proc.stderr)
+
     def prerequisites(self, *, bundle=True, update_rc=0):
         if bundle:
             (self.root / "bundle").write_text("fixture CA")
