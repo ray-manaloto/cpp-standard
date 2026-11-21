@@ -1,7 +1,7 @@
 # The publisher (environment-standard.md section 2 step 4, D59, D98, D114, D116, #254). A trust
 # root (D108): the only workflow with packages: write for non-pr- tags, attestations: write and
 # id-token: write. builder.yml dispatches it on main with its run id; it refuses any run that is
-# not a builder.yml run from push, schedule or workflow_dispatch on main whose head is on main's
+# outside builder.yml or the admitted PC dispatch on main, or whose head is outside main's
 # history, so a pull-request or merge-group build is never published, released or attested.
 #
 # It runs no repository code (D114): no checkout, no mise. The artifact names are computed inline
@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: The builder.yml run whose artifacts to publish
+        description: The protected main builder or dedicated PC compiler run whose artifacts to publish
         required: true
         type: string
 
@@ -68,10 +68,24 @@ jobs:
           repo="$(jq -r .head_repository.full_name <<<"$run")"
           sha="$(jq -r .head_sha <<<"$run")"
           echo "run $RUN_ID: $path, event $event, branch $branch, repository $repo, head $sha"
-          [[ "$path" == .github/workflows/builder.yml ]] || refuse "run $RUN_ID is $path, not builder.yml"
-          case "$event" in
-            push | schedule | workflow_dispatch) ;;
-            *) refuse "run $RUN_ID came from a $event event" ;;
+          case "$path" in
+            .github/workflows/builder.yml)
+              case "$event" in
+                push | schedule | workflow_dispatch) ;;
+                *) refuse "run $RUN_ID came from a $event event" ;;
+              esac ;;
+            .github/workflows/pc-compiler.yml)
+              [[ "$event" == workflow_dispatch && "$(jq -r .run_attempt <<<"$run")" == 1 ]] || refuse "unexpected PC event or attempt"
+              jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/1/jobs")"
+              jq -e --arg sha "$sha" '
+                .total_count==1 and (.jobs|length)==1 and (.jobs[0] |
+                .head_sha==$sha and .name=="Build and certify Ubuntu amd64" and
+                .runner_group_id==6 and .runner_id>0 and
+                any(.steps[]?; .name=="Verify admitted runner and isolated mounts" and .conclusion=="success") and
+                any(.steps[]?; .name=="Stage verified compiler package" and .conclusion=="success") and
+                any(.steps[]?; .name=="Upload verified compiler package" and .conclusion=="success"))' <<<"$jobs" >/dev/null ||
+                refuse "PC assignment or verified package upload mismatch" ;;
+            *) refuse "unrecognized producer $path" ;;
           esac
           [[ "$branch" == main ]] || refuse "run $RUN_ID ran on $branch, not main"
           [[ "$repo" == "$GITHUB_REPOSITORY" ]] || refuse "run $RUN_ID ran in $repo"
@@ -87,10 +101,17 @@ jobs:
             jq -c '[.[].artifacts[].name]')"
           images="$(jq -c '[.[] | select(test("^image-(base|tools)-(arm64|amd64)-[0-9a-f]{16}$"))] | unique' <<<"$all")"
           toolchains="$(jq -c '[.[] | select(test("^toolchain-[a-z0-9][a-z0-9-]*-(linux|macos)-(arm64|amd64)-[0-9a-f]{16}$"))] | unique' <<<"$all")"
+          if [[ "$path" == .github/workflows/pc-compiler.yml ]]; then
+            [[ "$images" == '[]' ]] || refuse "PC producer cannot publish base or tools images"
+            jq -e 'length==1 and (.[0] | test("^toolchain-p2996-pc-linux-amd64-[0-9a-f]{16}$"))' <<<"$toolchains" >/dev/null ||
+              refuse "unexpected PC compiler package inventory"
+          elif jq -e 'any(.[]; startswith("toolchain-p2996-pc-"))' <<<"$toolchains" >/dev/null; then
+            refuse "PC compiler package needs the dedicated PC producer"
+          fi
           [[ "$(jq length <<<"$images")" -gt 0 || "$(jq length <<<"$toolchains")" -gt 0 ]] ||
             refuse "run $RUN_ID has no image or toolchain artifact"
           { echo "images=$images"; echo "toolchains=$toolchains"; } >> "$GITHUB_OUTPUT"
-          echo "PASS: run $RUN_ID is a builder.yml run on main; images: $images; toolchains: $toolchains"
+          echo "PASS: run $RUN_ID is a $path run on main; images: $images; toolchains: $toolchains"
 
   image:
     name: image (${{ matrix.artifact }})

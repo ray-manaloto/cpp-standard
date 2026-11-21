@@ -30,8 +30,15 @@ def check_tests(report):
         raise ValueError(f"expected two named passing CTest cases, observed {rows}")
 
 
-def check_project(source, build, evidence, triplet, compiler):
+def check_project(source, build, evidence, triplet, compiler, launcher):
     cache = (build / "CMakeCache.txt").read_text().splitlines()
+    # The project enables CXX. Only enabled languages initialize a launcher cache entry.
+    if [
+        line.partition("=")[2]
+        for line in cache
+        if line.startswith("CMAKE_CXX_COMPILER_LAUNCHER:")
+    ] != [launcher]:
+        raise ValueError(f"unexpected C++ compiler launcher for {triplet}")
     for key in ("VCPKG_TARGET_TRIPLET", "VCPKG_HOST_TRIPLET"):
         if [line.partition("=")[2] for line in cache if line.startswith(key + ":")] != [
             triplet
@@ -61,6 +68,8 @@ def check_project(source, build, evidence, triplet, compiler):
                 if "arguments" in entry
                 else shlex.split(entry["command"])
             )
+            if args[0] == launcher:
+                args = args[1:]
             if Path(args[0]).resolve() != Path(compiler).resolve():
                 raise ValueError(f"unexpected compiler for {module}: {args[0]}")
             if triplet.endswith("-libcxx") and module == SOURCES[0]:
@@ -120,12 +129,19 @@ def main():
     os.environ.update(MISE_PROJECT_ROOT=str(source), CPPSTD_P2996_PREFIX="/opt/p2996")
     # The existing bootstrap reads the baseline from this exact checkout.
     subprocess.run(["bash", ".mise/tasks/vcpkg/bootstrap"], check=True)
+    launcher = shutil.which("sccache")
+    if not launcher:
+        raise RuntimeError("locked sccache executable missing")
+    os.environ.update(
+        CMAKE_C_COMPILER_LAUNCHER=launcher, CMAKE_CXX_COMPILER_LAUNCHER=launcher
+    )
     for name, triplet, compiler in TOOLS:
         preset = f"{name}-coverage-amd64"
         build = source / "build" / preset
         dest = evidence / preset
         dest.mkdir()
         junit = dest / "ctest.xml"
+        subprocess.run([launcher, "--zero-stats"], check=True)
         for argv in (
             ["cmake", "--preset", preset],
             ["cmake", "--build", "--preset", preset, "--parallel", "6"],
@@ -142,12 +158,21 @@ def main():
             print(shlex.join(argv), flush=True)
             rc = subprocess.run(argv, check=False).returncode
             print(f"exit={rc} {shlex.join(argv)}", flush=True)
+            if rc != 0 or argv[0] == "ctest":
+                with (dest / "sccache.json").open("w") as report:
+                    stats = subprocess.run(
+                        [launcher, "--show-stats", "--stats-format=json"],
+                        stdout=report,
+                        check=False,
+                    )
+                if rc == 0:
+                    stats.check_returncode()
             if rc != 0:
                 raise SystemExit(rc if rc > 0 else 128 - rc)
         check_tests(junit)
         for filename in ("CMakeCache.txt", "compile_commands.json"):
             shutil.copyfile(build / filename, dest / filename)
-        check_project(source, build, dest, triplet, compiler)
+        check_project(source, build, dest, triplet, compiler, launcher)
         print(f"PASS {preset} {triplet} {compiler} core_test standin_test", flush=True)
 
 

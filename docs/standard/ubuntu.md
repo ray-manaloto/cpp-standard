@@ -447,7 +447,14 @@ three on 2026-11-15. Seen while building the image by hand: FAIL
 `apt-get install iwyu`. The image leaves `iwyu` out.
 
 **B3. sccache.** Probe: `sccache --show-stats | head -3`. PASS if it prints
-statistics.
+statistics. On the dedicated amd64 Actions route, also retain the per-preset
+`sccache.json` reports for the three native builds and the cold compiler report
+when LLVM actually runs. Read cache hits, misses and non-cacheable requests
+separately. A statistics query alone establishes tool availability. For reuse
+across runs, compare the two producer/consumer assignments and compiler package
+digests. Apply the [PC cache checklist](gha-runner/README.md#dedicated-amd64-compiler-cache)
+alongside the 83 environment rows. The checklist applies to runs using the cache
+launcher and preserves earlier dated results.
 
 **B4. binutils and make.** Probe: `dpkg-query -W binutils make`. Expected:
 `2.47-6ubuntu1` and `4.4.1-3`, the D105 pins. PASS if both.

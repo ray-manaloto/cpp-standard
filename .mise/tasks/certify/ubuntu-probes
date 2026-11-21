@@ -304,7 +304,15 @@ if want B2; then
     res B2 FAIL "links:${bad:- ok}; other LLVM packages: ${others:-none}; stray mise shims:${stray:- none}"
 fi
 if want B3; then
-  sccache --show-stats >/dev/null 2>&1 && res B3 PASS "sccache --show-stats prints statistics" || res B3 FAIL "sccache --show-stats failed"
+  if sccache --show-stats >/dev/null 2>&1; then
+    if [[ "${CERT_CPP_ACTIONS_HOST:-0}" == 1 ]]; then
+      sccache --stop-server >/dev/null 2>&1 && res B3 PASS "sccache statistics read and probe server stopped before timing" || res B3 FAIL "could not stop sccache before timing"
+    else
+      res B3 PASS "sccache --show-stats prints statistics"
+    fi
+  else
+    res B3 FAIL "sccache --show-stats failed"
+  fi
 fi
 if want B4; then
   b="$(dpkg-query -W -f '${Version}' binutils)" m="$(dpkg-query -W -f '${Version}' make)"

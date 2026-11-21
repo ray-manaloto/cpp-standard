@@ -51,6 +51,11 @@ test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0
 cat /sys/fs/cgroup/{cpu.max,memory.max,memory.swap.max,pids.max}
 
 cd /project
+# Keep acquisition bytes across fresh roots. apt still authenticates the signed indexes.
+cat >/etc/apt/apt.conf.d/99cpp-compiler-archives <<'APTCONF'
+Dir::Cache::archives "/cache/apt-archives";
+APT::Keep-Downloaded-Packages "true";
+APTCONF
 install_snapshot_prerequisites /tmp/cpp-bootstrap-ca.crt
 test -s /etc/ssl/certs/ca-certificates.crt
 rm /tmp/cpp-bootstrap-ca.crt
@@ -60,12 +65,26 @@ read -r mise_version mise_digest < <(awk -F '[=" ]+' '
   END { print v, h }
 ' docs/standard/ubuntu-cert.Dockerfile)
 [[ "$mise_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$mise_digest" =~ ^[0-9a-f]{64}$ ]]
-curl --fail --silent --show-error --location --retry 2 --max-time 180 \
-  "https://github.com/jdx/mise/releases/download/v${mise_version}/mise-v${mise_version}-linux-x64.tar.gz" -o /tmp/mise.tar.gz
-printf '%s  %s\n' "$mise_digest" /tmp/mise.tar.gz | sha256sum -c -
-tar -C /tmp -xzf /tmp/mise.tar.gz mise/bin/mise
+# Keep only verified downloads across otherwise fresh tool environments.
+export MISE_CACHE_DIR=/root/.cache/mise MISE_DOWNLOAD_CACHE=1 MISE_DOWNLOAD_CACHE_MAX_SIZE=10GiB
+cas="$MISE_CACHE_DIR/downloads-cas"
+mkdir -p "$cas"
+mise_blob="/cache/mise-release/$mise_digest"
+if [[ -f "$mise_blob" ]]; then
+  printf 'mise release cache hit %s\n' "$mise_digest"
+else
+  curl --fail --silent --show-error --location --retry 2 --max-time 180 \
+    "https://github.com/jdx/mise/releases/download/v${mise_version}/mise-v${mise_version}-linux-x64.tar.gz" -o "$mise_blob.part"
+  printf '%s  %s\n' "$mise_digest" "$mise_blob.part" | sha256sum -c -
+  mv "$mise_blob.part" "$mise_blob"
+  printf 'mise release cache stored %s\n' "$mise_digest"
+fi
+printf '%s  %s\n' "$mise_digest" "$mise_blob" | sha256sum -c -
+printf 'mise downloads-cas before: '
+du -sk "$cas"
+tar -C /tmp -xzf "$mise_blob" mise/bin/mise
 install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
-rm -rf /tmp/mise /tmp/mise.tar.gz
+rm -rf /tmp/mise
 mise --version
 bootstrap_compiler_project /project
 
@@ -73,9 +92,11 @@ bootstrap_compiler_project /project
 cp -r docs/standard/ubuntu-cert-tools /opt/cpp-standard-tools
 export MISE_GLOBAL_CONFIG_FILE=/opt/cpp-standard-tools/mise.toml
 (cd /opt/cpp-standard-tools && mise install --locked && mise reshim)
+printf 'mise downloads-cas after: '
+du -sk "$cas"
 
 # The image-ID-pinned addon donor supplies only these five /opt trees. The
-# compiler packages and all p2996 files must come from this fresh build.
+# stock compiler packages come from apt. The p2996 prefix is verified below.
 test "$(dpkg-query -W -f='${Version}' clang-23)" = \
   '1:23.1.6~++20261116013916+5b10d2d74929-1~exp1~20261116133927.96'
 "$(command -v clang-23)" --version
@@ -99,7 +120,7 @@ sha256sum /opt/llvm-23.1.6/bin/clangd /opt/iwyu-llvm23/bin/include-what-you-use 
 
 apt_opts=(-o Dir::Etc::sourceparts=- -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources)
 apt-get "${apt_opts[@]}" -o APT::Update::Error-Mode=any update
-deps=(python3-dev swig libedit-dev libxml2-dev zlib1g-dev libzstd-dev libncurses-dev libffi-dev)
+deps=(zstd python3-dev swig libedit-dev libxml2-dev zlib1g-dev libzstd-dev libncurses-dev libffi-dev)
 plan="$(apt-get "${apt_opts[@]}" -s --no-install-recommends install "${deps[@]}")"
 printf '%s\n' "$plan"
 if grep -Eq '^Remv |^Inst [^ ]+ \[' <<<"$plan"; then
@@ -107,19 +128,46 @@ if grep -Eq '^Remv |^Inst [^ ]+ \[' <<<"$plan"; then
   exit 1
 fi
 apt-get "${apt_opts[@]}" -y --no-install-recommends install "${deps[@]}"
+rm /etc/apt/apt.conf.d/99cpp-compiler-archives
 test ! -e /opt/p2996
 test -z "$(ls -A /work)"
-export FLANG_JOBS=1 SCCACHE_DIR=/work/sccache SCCACHE_CACHE_SIZE=2G
-# Six Ninja workers fit the proven p2996 memory profile inside the 16/48 cap.
-# This recipe builds P8's pinned IWYU from source in the p2996 LLVM tree.
-build_p2996 /project/docs/standard/ubuntu-p2996/build-linux.sh /work /opt/p2996 6
-/opt/p2996/bin/clang --version
-p2996_head="$(git -C /work/src rev-parse HEAD)"
-p2996_iwyu_head="$(git -C /work/iwyu rev-parse HEAD)"
+export FLANG_JOBS=1 SCCACHE_DIR=/cache/sccache SCCACHE_CACHE_SIZE=40G
+transfer=/run/cpp-compiler-transfer
+helper=/project/docs/standard/gha-runner/pc-compiler-cache.py
+recipe=/project/docs/standard/ubuntu-p2996/build-linux.sh
+MISE_AUTO_INSTALL=0 mise -C /opt/cpp-standard-tools exec -- /usr/bin/python3 -I -B "$helper" \
+  identity /project "$CPP_BASE_ID" "$CPP_DONOR_ID" >"$transfer/inputs.tmp"
+mv "$transfer/inputs.tmp" "$transfer/inputs.json"
+key="$(sha256sum "$transfer/inputs.json" | cut -d' ' -f1)"
+# The host owns registry authentication, attestation, and authorization of a cold build.
+# shellcheck disable=SC2016 # The child shell reads its own positional argument.
+timeout 40m bash -c 'until [[ -f "$1/decision" ]]; do sleep 2; done' _ "$transfer"
+mode="$(cat "$transfer/decision")"
+p2996_head="$(sed -nE 's/^commit=([0-9a-f]{40})$/\1/p' "$recipe")"
+p2996_iwyu_head="$(sed -nE 's/^iwyu_commit=([0-9a-f]{40})$/\1/p' "$recipe")"
+case "$mode" in
+  local | registry | retained)
+    entry="/cache/compiler/$key"
+    if [[ "$mode" == retained ]]; then entry="$transfer/package"; fi
+    /usr/bin/python3 -I -B "$helper" restore "$transfer/inputs.json" "$entry" /opt
+    ;;
+  cold)
+    build_p2996 "$recipe" /work /opt/p2996 6
+    [[ "$(git -C /work/src rev-parse HEAD)" == "$p2996_head" ]]
+    [[ "$(git -C /work/iwyu rev-parse HEAD)" == "$p2996_iwyu_head" ]]
+    MISE_AUTO_INSTALL=0 mise -C /opt/cpp-standard-tools exec -- sccache --show-stats --stats-format=json >"$transfer/compiler-sccache.json"
+    ;;
+  *)
+    echo "compiler package unavailable: $mode" >&2
+    exit 1
+    ;;
+esac
+printf 'compiler inputs=%s source=%s\n' "$key" "$mode"
+/opt/p2996/bin/clang --version | grep -F "$p2996_head"
 printf 'clang-p2996 source: %s\nP8 IWYU source: %s\n' "$p2996_head" "$p2996_iwyu_head"
 p2996_iwyu=/opt/p2996/bin/include-what-you-use
 if [[ ! -f "$p2996_iwyu" || ! -x "$p2996_iwyu" || -L "$p2996_iwyu" ]]; then
-  echo "P8: expected a freshly installed executable at $p2996_iwyu" >&2
+  echo "P8: expected an installed executable at $p2996_iwyu" >&2
   exit 1
 fi
 p2996_iwyu_version="$("$p2996_iwyu" --version)"
@@ -132,3 +180,6 @@ if [[ "$p2996_iwyu_version" != *"include-what-you-use 0.25 (git:${p2996_iwyu_hea
 fi
 sha256sum "$p2996_iwyu"
 find /opt/p2996 -type f -print0 | sort -z | xargs -0 -r sha256sum
+if [[ "$mode" == cold ]]; then
+  /usr/bin/python3 -I -B "$helper" pack "$transfer/inputs.json" /opt/p2996 "$transfer/package"
+fi
