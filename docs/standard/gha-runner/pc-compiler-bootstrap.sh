@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
+# Install from the signed Ubuntu snapshot. Only these first APT requests use
+# the CA bundle supplied by the image-ID-pinned donor. Subsequent HTTPS uses
+# the Ubuntu ca-certificates package installed into this fresh root.
+install_snapshot_prerequisites() {
+  local ca_file="$1" snapshot
+  test -s "$ca_file" || return 1
+  snapshot="$(sed -nE 's/^APT::Snapshot "([0-9]{8}T[0-9]{6}Z)";$/\1/p' mise.ubuntu.toml)"
+  [[ "$snapshot" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || return 1
+  local -a apt_options=(-o "APT::Snapshot=$snapshot" -o "Acquire::https::CaInfo=$ca_file")
+  apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update || return "$?"
+  apt-get "${apt_options[@]}" install -y --no-install-recommends ca-certificates curl
+}
+
 # Inside the fresh, capped Ubuntu container only.
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive MISE_YES=1
 export MISE_TRUSTED_CONFIG_PATHS=/project:/opt/cpp-standard-tools
@@ -16,11 +30,9 @@ test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0
 cat /sys/fs/cgroup/{cpu.max,memory.max,memory.swap.max,pids.max}
 
 cd /project
-# Install the documented prerequisites from the signed Ubuntu snapshot.
-sed -n '/^APT::Snapshot /p' mise.ubuntu.toml >/etc/apt/apt.conf.d/50-snapshot
-test -s /etc/apt/apt.conf.d/50-snapshot
-apt-get -o APT::Update::Error-Mode=any update
-apt-get install -y --no-install-recommends ca-certificates curl
+install_snapshot_prerequisites /tmp/cpp-bootstrap-ca.crt
+test -s /etc/ssl/certs/ca-certificates.crt
+rm /tmp/cpp-bootstrap-ca.crt
 read -r mise_version mise_digest < <(awk -F '[=" ]+' '
   $1 == "ARG" && $2 == "MISE_VER" { v = $3 }
   $1 == "ARG" && $2 == "MISE_SHA256_AMD64" { h = $3 }
