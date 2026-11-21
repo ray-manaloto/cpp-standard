@@ -152,10 +152,15 @@ pin="$(grep -oE 'pinned commit \(today `[0-9a-f]{40}' "$doc" | grep -oE '[0-9a-f
 digest="$(grep -oE 'ubuntu:26\.10@sha256:[0-9a-f]{64}' "$doc" | head -1 | sed 's/^ubuntu:26\.10@//')"
 # The p2996 install volume is named after its whole build input: the commit and
 # the hash of the build script and patches, so a new input never overwrites it.
-p2996_in="$(cat "$root"/docs/standard/ubuntu-p2996/build-linux.sh "$root"/docs/standard/ubuntu-p2996/*.patch | shasum -a 256 | cut -c1-12)"
-# CERT_P2996_VOL mounts another volume instead (a scratch build under test); the
-# report header names the volume, so such a report is never mistaken for the pinned one.
-p2996_vol="${CERT_P2996_VOL:-cpp-standard-p2996-${pin:0:12}-$p2996_in}"
+p2996_vol="${CERT_P2996_VOL:-}"
+p2996_target="the compiler image at /opt/p2996"
+if [[ "$actions_host" != 1 ]]; then
+  if [[ -z "$p2996_vol" ]]; then
+    p2996_in="$(cat "$root"/docs/standard/ubuntu-p2996/build-linux.sh "$root"/docs/standard/ubuntu-p2996/*.patch | shasum -a 256 | cut -c1-12)" || exit 2
+    p2996_vol="cpp-standard-p2996-${pin:0:12}-$p2996_in"
+  fi
+  p2996_target="volume $p2996_vol"
+fi
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/certify-ubuntu.XXXXXX")" || exit 2
 cname="cpp-standard-cert-$$"
 ab=/var/tmp/cpp-standard-cert-ab
@@ -166,7 +171,23 @@ if [[ "$actions_host" == 1 ]]; then
   RUN_FLAGS="--label org.cpp-standard.compiler=${CERT_CPP_OWNER:?} --platform linux/amd64 --network none --pids-limit 32768 --security-opt no-new-privileges $RUN_FLAGS"
   RUN_FLAGS="${RUN_FLAGS/cpp-standard-cert-build/$build_vol}"
 fi
+# The launcher reads the top-level body for its final totals. Evidence from an
+# interrupted or refused checklist goes in partial/ for diagnosis.
+check_files=(lines1.txt lines2.txt lines3.txt limits timing-cpu timing-events.jsonl ab-cpu ab-events.jsonl ab_c ab_h rootfs.diff)
+publishing_receipts=0
 cleanup() {
+  local rc=$? name
+  if [[ "$actions_host" == 1 && $rc != 0 && ! -f "$CERT_CPP_EVIDENCE/body.txt" ]]; then
+    if ((publishing_receipts)); then
+      rm -f "${check_files[@]/#/$CERT_CPP_EVIDENCE/}" "$CERT_CPP_EVIDENCE/.body.tmp"
+    fi
+    if mkdir -p "$CERT_CPP_EVIDENCE/partial"; then
+      for name in body.txt "${check_files[@]}"; do
+        [[ -f "$scratch/$name" && ! -L "$scratch/$name" ]] || continue
+        mv "$scratch/$name" "$CERT_CPP_EVIDENCE/partial/" || echo "certify: could not retain partial/$name" >&2
+      done
+    fi
+  fi
   rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"
   if [[ "${usage_keep:-false}" == true ]]; then
     echo "certify: kept container $cname and $scratch" >&2
@@ -396,9 +417,21 @@ timing_marker() {
   docker exec "$cname" /bin/echo "$1" >/dev/null
 }
 prove_timing_events() { # start end before-marker after-marker receipt
-  docker events --since "$1" --until "$2" --filter type=container --format '{{json .}}' >"$5" || return 1
   local id
   id="$(docker inspect -f '{{.Id}}' "$cname")" || return 1
+  # Only the two owned markers, container IDs and lifecycle events enter
+  # the artifact. Other jobs can put private text in exec arguments or labels.
+  docker events --since "$1" --until "$2" --filter type=container --format '{{json .}}' |
+    jq -nc --arg id "$id" --arg name "$cname" --arg begin "$3" --arg end "$4" '
+      inputs |
+      if .Type != "container" or (.Actor.ID | type) != "string" or (.Actor.ID | test("^[0-9a-f]{64}$") | not) or
+        (.Action | type) != "string" or .Action == "" then error("invalid container event")
+      elif .Actor.ID == $id and .Actor.Attributes.name == $name and
+        (.Action == ("exec_create: /bin/echo " + $begin) or .Action == ("exec_create: /bin/echo " + $end))
+        then {Type, Action, Actor: {ID: .Actor.ID, Attributes: {name: $name}}}
+      else {Type, Action: (if (.Action | test("^(create|start|die|stop|kill|destroy|restart|pause|unpause|oom)$"))
+        then .Action else "other" end), Actor: {ID: .Actor.ID}} end
+    ' >"$5" || return 1
   jq -se --arg id "$id" --arg begin "$3" --arg end "$4" '
     def marker($m): .Action == ("exec_create: /bin/echo " + $m) and .Actor.ID == $id;
     (map(marker($begin)) | indices(true)) as $b |
@@ -545,8 +578,8 @@ fix_for() {
     A3) echo "run on the amd64 PC; never under qemu" ;;
     B2) echo "remove the archive clang (it comes with the archive iwyu; ubuntu-cert.Dockerfile leaves it out); for a stray mise shim, pin the tool in the image's tools layer (docs/standard/ubuntu-cert-tools) or drop it" ;;
     E2) echo "clangd matching clang-23 needs llvmorg-23.1.6 or an apt.llvm.org stonking suite (D25)" ;;
-    P8) echo "rebuild p2996 with build-linux.sh (it builds IWYU 0.25 in the tree) into volume $p2996_vol (docs/standard/ubuntu.md, P8)" ;;
-    P*) echo "build p2996 for amd64 and mount it as volume $p2996_vol (docs/standard/ubuntu.md, P)" ;;
+    P8) echo "rebuild p2996 with build-linux.sh (it builds IWYU 0.25 in the tree) into $p2996_target (docs/standard/ubuntu.md, P8)" ;;
+    P*) echo "supply the amd64 p2996 build from $p2996_target (docs/standard/ubuntu.md, P)" ;;
     DB4 | DB5) echo "the p2996 install (P)" ;;
     GO*) echo "the host NVIDIA driver (nvidia-smi on the Docker host), the image's CUDA toolkits and offload runtimes (mise run certify:ubuntu-image), and the p2996 install for GO1 (docs/standard/ubuntu.md, GO)" ;;
     T3) echo "rebuild the image (mise run certify:ubuntu-image; stage iwyu builds IWYU 0.27); if the LLVM 23 snapshot is gone, move LLVM_VER and recertify (docs/standard/ubuntu.md, T3)" ;;
@@ -589,7 +622,12 @@ if [[ "$actions_host" == 1 ]]; then
     echo 'certify: tool install paths or package database changed' >&2
     exit 3
   fi
-  cp "$scratch"/{body.txt,lines1.txt,lines2.txt,lines3.txt,limits,timing-cpu,timing-events.jsonl,ab-cpu,ab-events.jsonl,ab_c,ab_h,rootfs.diff} "$CERT_CPP_EVIDENCE" || exit 2
+  publishing_receipts=1
+  cp "${check_files[@]/#/$scratch/}" "$CERT_CPP_EVIDENCE" || exit 2
+  # The launcher takes final counts from body.txt. Expose it atomically
+  # after every required receipt has been copied successfully.
+  cp "$scratch/body.txt" "$CERT_CPP_EVIDENCE/.body.tmp" &&
+    mv "$CERT_CPP_EVIDENCE/.body.tmp" "$CERT_CPP_EVIDENCE/body.txt" || exit 2
 fi
 inst_after="$(inst_list)"
 inst_diff() { # inst_diff COMM-FLAG FILE1 FILE2 LABEL: comm's lines, labelled
