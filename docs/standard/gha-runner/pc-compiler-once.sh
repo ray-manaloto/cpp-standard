@@ -5,6 +5,7 @@ compiler_once() {
   local repo=ray-manaloto/cpp-standard wf=.github/workflows/pc-compiler.yml
   local base_ref base_digest base_id donor=sha256:31a18ff1d600fcbc3eb860105f499ee290f03ef6a747a1bb63745a38e1ef6f04
   local image_ref source hooked policy runner_img live head job job_id rid='' jit resp
+  local refresh_at=0
   local state result owner_name runner build donor_name check work_volume cert_volume built='' worker='' p slot
   local began phase=preflight status=FAIL timing=unverified deadline path
   local passes=0 fails=0 na=0 total=0 expected
@@ -50,7 +51,15 @@ compiler_once() {
   [[ "$(nproc)" -ge 16 ]] || die 'fewer than 16 host logical CPUs'
   [[ -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)" ]] || die 'NVIDIA compute device is in use'
 
-  TOKEN="$(app_token)"
+  refresh_compiler_token() {
+    if ((SECONDS >= refresh_at)); then
+      # The installation token lasts an hour. Renew before it can expire
+      # during the multi-hour build and checklist.
+      TOKEN="$(app_token)" || die 'could not refresh the compiler GitHub App token'
+      refresh_at=$((SECONDS + 45 * 60))
+    fi
+  }
+  refresh_compiler_token
   live="$(api GET "/repos/$repo/actions/runs/$run")"
   jq -e --arg repo "$repo" --arg wf "$wf" --arg sha "$sha" '
     .event=="workflow_dispatch" and .head_branch=="main" and
@@ -253,6 +262,7 @@ compiler_once() {
   set +m
   local monitor_ok=1 rc=0
   while kill -0 "$worker" 2>/dev/null; do
+    refresh_compiler_token
     if ((SECONDS >= deadline)) || ! runner_job | assigned; then
       monitor_ok=0
       break
@@ -302,6 +312,7 @@ compiler_once() {
   phase=actions-finalize
   slot=$((SECONDS + 600))
   while ((SECONDS < slot)); do
+    refresh_compiler_token
     live="$(runner_job)" || die 'could not verify the completed Actions job'
     if [[ "$(jq -r .status <<<"$live")" == completed ]]; then
       printf '%s\n' "$live" | jq '{id,run_id,head_sha,status,conclusion,html_url,runner_id,runner_name}' >"$state/github-job.json"
