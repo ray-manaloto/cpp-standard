@@ -23,7 +23,23 @@
 # shellcheck disable=SC2015
 set -uo pipefail
 
-root="$(git rev-parse --show-toplevel)"
+actions_host="${CERT_CPP_ACTIONS_HOST:-0}"
+if [[ "$actions_host" == 1 ]]; then
+  # Only the root-operated JIT launcher uses this host-local entry point.
+  # The job container has neither this privilege nor a Docker endpoint.
+  [[ $EUID == 0 && "$(hostname -s)" == nzxth1desktop &&
+  "${CERT_CPP_CONTAINER:-}" =~ ^cpp-compiler-[0-9]+-[a-z0-9]+-check$ &&
+  "${CERT_CPP_EVIDENCE:-}" == /var/lib/gha-runner/cpp-compiler.*/result &&
+  -d "$CERT_CPP_EVIDENCE" && "${usage_image:-}" =~ ^sha256:[0-9a-f]{64}$ &&
+  "${usage_local:-false}" == false && "${usage_ab:-false}" == true &&
+  -z "${usage_only:-}" && "${usage_allow_fail:-false}" == false &&
+  "${usage_keep:-false}" == false ]] || exit 2
+  unset DOCKER_CONTEXT
+  export DOCKER_HOST=unix:///var/run/docker.sock
+  root="${CERT_CPP_SOURCE:?}"
+else
+  root="$(git rev-parse --show-toplevel)"
+fi
 doc="$root/docs/standard/ubuntu.md"
 inner="$root/.mise/tasks/certify/ubuntu-probes"
 [[ -f "$doc" && -f "$inner" ]] || {
@@ -49,12 +65,15 @@ inst_dir="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs"
 # node, another project's linters), and rule 4 is that no check passes on a
 # tool the run installed. installs/.mise, mise's own lock files, is outside
 # every watched folder.
-inst_watch="$(mise -C "$root" ls --current --json |
-  jq -r --arg r "$root/" '[.[][] | select((.source.path // "") | startswith($r)) | .install_path] | unique[]')" &&
-  [[ -n "$inst_watch" ]] || {
-  echo "certify: cannot list this repository's pinned tools (rule 4 proof)" >&2
-  exit 2
-}
+inst_watch=
+if [[ "$actions_host" != 1 ]]; then
+  inst_watch="$(mise -C "$root" ls --current --json |
+    jq -r --arg r "$root/" '[.[][] | select((.source.path // "") | startswith($r)) | .install_path] | unique[]')" &&
+    [[ -n "$inst_watch" ]] || {
+    echo "certify: cannot list this repository's pinned tools (rule 4 proof)" >&2
+    exit 2
+  }
+fi
 inst_list() { # the watched folders that exist now
   local d
   while IFS= read -r d; do [[ ! -e "$d" ]] || printf '%s\n' "$d"; done <<<"$inst_watch"
@@ -82,7 +101,9 @@ inst_walk >"$inst_mark.start" || {
 }
 inst_before="$(inst_list)"
 local_docker="${usage_local:-false}"
-if [[ "$local_docker" == true ]]; then
+if [[ "$actions_host" == 1 ]]; then
+  dest=""
+elif [[ "$local_docker" == true ]]; then
   # arm64 in this Mac's Docker Desktop. The "Docker host" is Docker Desktop's
   # Linux VM: hostsh runs there, in the VM's own namespaces (nsenter into PID 1).
   dest=""
@@ -135,18 +156,30 @@ p2996_in="$(cat "$root"/docs/standard/ubuntu-p2996/build-linux.sh "$root"/docs/s
 # CERT_P2996_VOL mounts another volume instead (a scratch build under test); the
 # report header names the volume, so such a report is never mistaken for the pinned one.
 p2996_vol="${CERT_P2996_VOL:-cpp-standard-p2996-${pin:0:12}-$p2996_in}"
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/certify-ubuntu.XXXXXX")"
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/certify-ubuntu.XXXXXX")" || exit 2
 cname="cpp-standard-cert-$$"
+ab=/var/tmp/cpp-standard-cert-ab
+if [[ "$actions_host" == 1 ]]; then
+  cname="$CERT_CPP_CONTAINER"
+  build_vol="$cname-build"
+  ab="$scratch/ab"
+  RUN_FLAGS="--label org.cpp-standard.compiler=${CERT_CPP_OWNER:?} --platform linux/amd64 --network none --pids-limit 32768 --security-opt no-new-privileges $RUN_FLAGS"
+  RUN_FLAGS="${RUN_FLAGS/cpp-standard-cert-build/$build_vol}"
+fi
 cleanup() {
   rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"
   if [[ "${usage_keep:-false}" == true ]]; then
     echo "certify: kept container $cname and $scratch" >&2
   else
-    docker rm -f "$cname" >/dev/null 2>&1
+    if [[ "$actions_host" != 1 ]]; then docker rm -f "$cname" >/dev/null 2>&1; fi
     rm -rf "$scratch"
   fi
 }
 trap cleanup EXIT
+if [[ "$actions_host" == 1 ]]; then
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+fi
 
 want() { # want ID: is this check selected by --only?
   [[ -z "$only" ]] && return 0
@@ -157,7 +190,9 @@ want() { # want ID: is this check selected by --only?
   return 1
 }
 hostsh() {
-  if [[ "$local_docker" == true ]]; then
+  if [[ "$actions_host" == 1 ]]; then
+    bash -o pipefail -c "$*"
+  elif [[ "$local_docker" == true ]]; then
     docker run --rm --privileged --pid=host --net=host --label org.cpp-standard.cert=1 "$image" \
       nsenter -t 1 -m -u -i -n -p sh -c "$*"
   else ssh -o BatchMode=yes "$dest" "$@"; fi
@@ -224,7 +259,9 @@ docker image inspect "$image" >/dev/null 2>&1 || {
 image_id="$(docker image inspect -f '{{.Id}}' "$image")"
 image_base="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.base.digest"}}' "$image")"
 p2996_mount=""
-docker volume inspect "$p2996_vol" >/dev/null 2>&1 && p2996_mount="-v $p2996_vol:/opt/p2996:ro"
+if [[ "$actions_host" != 1 ]]; then
+  docker volume inspect "$p2996_vol" >/dev/null 2>&1 && p2996_mount="-v $p2996_vol:/opt/p2996:ro"
+fi
 host_threads="$(hostsh nproc)"
 host_binfmt="$(hostsh 'test -e /proc/sys/fs/binfmt_misc/qemu-x86_64 && echo yes || echo no')"
 host_arch="$(hostsh 'uname -m')"
@@ -237,7 +274,12 @@ docker_ver="$(docker version -f '{{.Server.Version}}' 2>/dev/null)"
 # it. Refresh it on every Docker upgrade (docs/standard/ubuntu.md V2).
 profile_docker=29.9.2
 [[ "$docker_ver" == "$profile_docker" ]] || echo "certify: WARNING: Docker $docker_ver, but ubuntu-seccomp.json is Docker $profile_docker's default plus one rule; refresh it (ubuntu.md V2)" >&2
-docker volume inspect "$build_vol" >/dev/null 2>&1 || docker volume create --label org.cpp-standard.cert=1 "$build_vol" >/dev/null
+if [[ "$actions_host" == 1 ]]; then
+  [[ "$docker_ver" == "$profile_docker" ]] || exit 2
+  docker volume inspect "$build_vol" >/dev/null || exit 2
+else
+  docker volume inspect "$build_vol" >/dev/null 2>&1 || docker volume create --label org.cpp-standard.cert=1 "$build_vol" >/dev/null
+fi
 # GPU offload (GO): the compute device nodes (the ones the host's CDI spec lists,
 # without the display-only nvidia-modeset and /dev/dri) and the host's NVIDIA
 # user-space driver, read-only. The libraries must match the host's kernel
@@ -261,12 +303,34 @@ if [[ -n "$gpu_driver" ]]; then
     [[ "$lib" == libcuda ]] && gpu_mount="$gpu_mount -v $src:$ml/libcuda.so:ro"
   done
 fi
+if [[ "$actions_host" == 1 ]]; then
+  [[ -n "$gpu_mount" ]] || exit 2
+  gpu_processes="$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)" || exit 2
+  [[ -z "$gpu_processes" ]] || exit 2
+  for node in /dev/nvidia{0,ctl,-uvm,-uvm-tools}; do [[ -c "$node" ]] || exit 2; done
+fi
 # shellcheck disable=SC2086
 docker run -d --name "$cname" --label org.cpp-standard.cert=1 $RUN_FLAGS $p2996_mount $gpu_mount "$image" sleep infinity >/dev/null || exit 2
-tar -C "$scratch" -cf - probes 2>/dev/null | docker exec -i "$cname" tar -C /root -xf - 2>/dev/null
+tar -C "$scratch" -cf - probes 2>/dev/null | docker exec -i "$cname" tar -C /root -xf - 2>/dev/null || exit 2
+if [[ "$actions_host" == 1 ]]; then
+  docker inspect -f '{{json .HostConfig}} {{json .Mounts}}' "$cname" >"$scratch/limits" || exit 2
+  docker exec "$cname" bash -ec '
+    test "$(cat /sys/fs/cgroup/memory.max)" = max
+    read -r quota period </sys/fs/cgroup/cpu.max
+    test "$quota" = max
+    read -r pids </sys/fs/cgroup/pids.max
+    test "$pids" = max || test "$pids" -ge 32768
+    test -x /opt/p2996/bin/clang
+    cat /sys/fs/cgroup/{cpu.max,memory.max,pids.max}
+  ' >>"$scratch/limits" || exit 2
+fi
 
 run_inner() { # run_inner ONLY SKIP: one pass of the in-container script
-  docker exec -e MISE_AUTO_INSTALL=0 -e usage_only="$1" -e SKIP="$2" -e PROBES=/root/probes -e PIN="$pin" -e EXPECT_DIGEST="$digest" \
+  local probe_env=()
+  if [[ "$actions_host" == 1 ]]; then
+    probe_env=(-e CLANGD=/opt/llvm-23.1.6/bin/clangd)
+  fi
+  docker exec "${probe_env[@]}" -e MISE_AUTO_INSTALL=0 -e usage_only="$1" -e SKIP="$2" -e PROBES=/root/probes -e PIN="$pin" -e EXPECT_DIGEST="$digest" \
     -e IMAGE_BASE="$image_base" -e HOST_BINFMT_X86="$host_binfmt" -e HOST_ARCH="$host_arch" -e HOST_THREADS="$host_threads" \
     -e BUILD_DIR=/build "$cname" bash /root/probes/ubuntu-probes 2>/dev/null
 }
@@ -286,6 +350,23 @@ others_cpu() {
     return
   }
   printf '%s ' "$(tr ' ' , <<<"${ids% }")"
+  if [[ "$actions_host" == 1 ]]; then
+    local i pid cg total=0 value misses=0
+    for i in $ids; do
+      if ! pid="$(docker inspect -f '{{.State.Pid}}' "$i")" ||
+        ! cg="$(sed -n 's/^0:://p' "/proc/$pid/cgroup")" ||
+        [[ "$cg" != /* || "$cg" == / ]] ||
+        ! value="$(awk '$1 == "usage_usec" { print $2 }' "/sys/fs/cgroup$cg/cpu.stat")" ||
+        [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        misses=$((misses + 1))
+        continue
+      fi
+      total=$((total + value))
+    done
+    printf '%s %s
+' "$total" "$misses"
+    return
+  fi
   hostsh "s=0 m=0; for i in $ids; do f=/sys/fs/cgroup/system.slice/docker-\$i.scope/cpu.stat; \
     u=\$(awk '/^usage_usec/ {print \$2}' \$f 2>/dev/null); \
     if [ -n \"\$u\" ]; then s=\$((s + u)); else m=\$((m + 1)); fi; done; echo \$s \$m"
@@ -309,6 +390,25 @@ cpu_trust() {
   return 0
 }
 
+# Unique successful exec_die events bracket both timing windows. Docker keeps
+# a bounded replay; a missing or out-of-order marker makes the result fail.
+timing_marker() {
+  docker exec "$cname" /bin/echo "$1" >/dev/null
+}
+prove_timing_events() { # start end before-marker after-marker receipt
+  docker events --since "$1" --until "$2" --filter type=container --format '{{json .}}' >"$5" || return 1
+  local id
+  id="$(docker inspect -f '{{.Id}}' "$cname")" || return 1
+  jq -se --arg id "$id" --arg begin "$3" --arg end "$4" '
+    def marker($m): .Action == ("exec_create: /bin/echo " + $m) and .Actor.ID == $id;
+    (map(marker($begin)) | indices(true)) as $b |
+    (map(marker($end)) | indices(true)) as $e |
+    ($b|length) == 1 and ($e|length) == 1 and $b[0] < $e[0] and
+    (.[($b[0]+1):$e[0]] | all(.Actor.ID == $id or
+      (.Action | test("^(create|start|die|stop|kill|destroy|restart|pause|unpause|oom)$") | not)))
+  ' "$5" >/dev/null
+}
+strict_timing_failed=0
 pass1_skip="$(echo "$TIMING_IDS" | tr ' ' ',')"
 rc_inner=""
 run_inner "$only" "$pass1_skip" >"$scratch/lines1.txt" || rc_inner="$rc_inner pass1:$?"
@@ -317,12 +417,23 @@ for id in $TIMING_IDS; do want "$id" && timing_only="$timing_only,$id"; done
 : >"$scratch/lines2.txt"
 busy_note=""
 if [[ -n "$timing_only" ]]; then
+  if [[ "$actions_host" == 1 ]]; then
+    time0="$(date -u +%FT%T.%NZ)" && timing_marker "$cname-main-before" || exit 2
+  fi
   s0="$(others_cpu)" l0="$(hostsh 'cut -d" " -f1 /proc/loadavg')"
   run_inner "${timing_only#,}" "" >"$scratch/lines2.txt" || rc_inner="$rc_inner pass2:$?"
   s1="$(others_cpu)" l1="$(hostsh 'cut -d" " -f1 /proc/loadavg')"
   cpu_trust "$s0" "$s1"
+  if [[ "$actions_host" == 1 ]]; then
+    timing_marker "$cname-main-after" && time1="$(date -u +%FT%T.%NZ)" &&
+      prove_timing_events "$time0" "$time1" "$cname-main-before" "$cname-main-after" "$scratch/timing-events.jsonl" ||
+      why="${why:+$why; }incomplete timing-events evidence"
+    printf '%s
+' "$s0" "$s1" >"$scratch/timing-cpu"
+    [[ -z "$why" ]] || strict_timing_failed=1
+  fi
   busy_note="other containers used ${busy} ms CPU during the timing pass; host load ${l0} -> ${l1}${why:+ (untrusted: $why)}"
-  if [[ -n "$why" ]]; then
+  if [[ -n "$why" && "$actions_host" != 1 ]]; then
     # Busy, or not fully accounted for: the timings are not trusted.
     awk '/^[A-Z][A-Z0-9]* +(PASS|FAIL|N\/A) +\[timing\]/ { id = $1; sub(/^[A-Z][A-Z0-9]* +(PASS|FAIL|N\/A) +\[timing\]/, "")
       printf "%-5s %-4s [timing untrusted: see the Timing pass line]%s\n", id, "N/A", $0; next } { print }' \
@@ -339,7 +450,6 @@ if want V6; then
   elif [[ "${usage_ab:-false}" != true ]]; then
     printf '%-5s %-4s %s\n' V6 N/A "not run: pass --ab (writes a rootfs under /var/tmp on the Docker host)" >"$scratch/lines3.txt"
   else
-    ab=/var/tmp/cpp-standard-cert-ab
     free_gb="$(hostsh "df -BG --output=avail /var/tmp | tail -1 | tr -dc 0-9")"
     # The workload: compile heavy.cpp, run bench (both from the appendix), on cores 2-5.
     docker exec "$cname" bash -c 'mkdir -p /ab && cp /root/probes/heavy.cpp /root/probes/bench.cpp /root/probes/hf_best.py /ab/ &&
@@ -358,6 +468,9 @@ if want V6; then
       awk -F= 'NF > 1 { k = $1; sub(/^[^=]*=/, ""); printf " --setenv %s %s", k, $0 }')"
     bw="bwrap --unshare-user --uid 0 --gid 0 --bind $ab/rootfs / --proc /proc --dev /dev --tmpfs /tmp --ro-bind /sys /sys \
       --setenv HOME /root$envs --setenv MISE_AUTO_INSTALL 0 --chdir /ab"
+    if [[ "$actions_host" == 1 ]]; then
+      time0="$(date -u +%FT%T.%NZ)" && timing_marker "$cname-ab-before" || exit 2
+    fi
     s0="$(others_cpu)"
     : >"$scratch/ab_c" && : >"$scratch/ab_h"
     for _ in 1 2 3; do # alternate the two sides
@@ -365,8 +478,19 @@ if want V6; then
       hostsh "$bw bash -c '$meas'" | tr '\n' ' ' >>"$scratch/ab_h" && echo >>"$scratch/ab_h"
     done
     s1="$(others_cpu)"
+    if [[ "$actions_host" == 1 ]]; then
+      timing_marker "$cname-ab-after" && time1="$(date -u +%FT%T.%NZ)" &&
+        prove_timing_events "$time0" "$time1" "$cname-ab-before" "$cname-ab-after" "$scratch/ab-events.jsonl" ||
+        strict_timing_failed=1
+      printf '%s
+' "$s0" "$s1" >"$scratch/ab-cpu"
+    fi
     hostsh "rm -rf $ab; test -e $ab && echo still-there || echo removed" >"$scratch/ab_rm"
     cpu_trust "$s0" "$s1"
+    if [[ "$actions_host" == 1 && -n "$why" ]]; then
+      strict_timing_failed=1
+      why=""
+    fi
     # Best (minimum) wall time per side over 3 rounds; overhead in % of the host's.
     # -B: no .pyc written into the Mac's mise python install (rule 4 proof).
     python3 -I -B - "$scratch/ab_c" "$scratch/ab_h" "$busy" "$(cat "$scratch/ab_size")" "$free_gb" "$(cat "$scratch/ab_rm")" "$why" \
@@ -440,7 +564,13 @@ report() {
   printf '[host kernel] marks a kernel-dependent check: it ran in a container on %s, not Ubuntu'"'"'s.\n' "$host_kernel_desc"
   cat "$scratch/body.txt"
   printf 'Summary: %d PASS, %d FAIL, %d N/A\n' "$npass" "$nfail" "$nna"
-  printf 'mise installs (this Mac): %s\n' "$inst_note"
+  if [[ "$actions_host" == 1 ]]; then
+    printf 'No-install proof: installed compiler paths and package database unchanged (see rootfs.diff)
+'
+  else
+    printf 'mise installs (this Mac): %s
+' "$inst_note"
+  fi
   printf 'Missing or wrong:'
   ids="$(grep -E '^[A-Z0-9]+ +FAIL' "$scratch/body.txt" | awk '{print $1}')"
   if [[ -z "$ids" ]]; then printf ' none\n'; else
@@ -452,6 +582,14 @@ report() {
 if [[ $((npass + nfail + nna)) == 0 ]]; then
   echo "certify: --only '$only' matched no check" >&2
   exit 2
+fi
+if [[ "$actions_host" == 1 ]]; then
+  docker diff "$cname" >"$scratch/rootfs.diff" || exit 2
+  if grep -Eq '^[ACD] (/opt/(p2996|cpp-standard-tools)|/root/\.local/share/mise/installs|/usr/local/bin|/var/lib/dpkg)(/|$)' "$scratch/rootfs.diff"; then
+    echo 'certify: tool install paths or package database changed' >&2
+    exit 3
+  fi
+  cp "$scratch"/{body.txt,lines1.txt,lines2.txt,lines3.txt,limits,timing-cpu,timing-events.jsonl,ab-cpu,ab-events.jsonl,ab_c,ab_h,rootfs.diff} "$CERT_CPP_EVIDENCE" || exit 2
 fi
 inst_after="$(inst_list)"
 inst_diff() { # inst_diff COMM-FLAG FILE1 FILE2 LABEL: comm's lines, labelled
@@ -477,5 +615,5 @@ fi
 report | mask
 [[ -n "$out" ]] && report | mask >"$out"
 [[ "$inst_after" == "$inst_before" ]] || exit 3
-[[ -z "$rc_inner" ]] || exit 1
+[[ -z "$rc_inner" && "$strict_timing_failed" == 0 ]] || exit 1
 [[ $nfail == 0 || "${usage_allow_fail:-false}" == true ]]

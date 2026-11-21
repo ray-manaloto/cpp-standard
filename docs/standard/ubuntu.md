@@ -651,8 +651,10 @@ Expected: 15 and `polly-ok`.
 `791e69ea4662`) built in the p2996 tree as an LLVM external project
 (`LLVM_EXTERNAL_PROJECTS=iwyu`, `IWYU_RESOURCE_RELATIVE_TO=iwyu`), the way
 the dotfiles p2996 recipe builds it for macOS (dotfiles #707).
-`build-linux.sh` pins the commit, so it is part of the volume's input
-hash, and checks the checkout is exactly that commit. Probe:
+[`build-linux.sh`](ubuntu-p2996/build-linux.sh) checks out the pinned IWYU
+source, builds it with p2996, and installs `$P2996/bin/include-what-you-use`.
+The IWYU commit is part of the p2996 build's input hash. T3 covers the
+separate stock LLVM 23 build. Probe:
 
 ```sh
 "$P2996"/bin/include-what-you-use --version

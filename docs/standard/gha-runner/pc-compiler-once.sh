@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+# Sourced only by the host gha-slot launcher. Never mounted into a runner.
+compiler_once() {
+  local run="${1:-}" sha="${2:-}" trusted=/etc/gha-runner/cpp-compiler
+  local repo=ray-manaloto/cpp-standard wf=.github/workflows/pc-compiler.yml
+  local base_ref base_digest base_id donor=sha256:31a18ff1d600fcbc3eb860105f499ee290f03ef6a747a1bb63745a38e1ef6f04
+  local image_ref source hooked policy runner_img live head job job_id rid='' jit resp
+  local state result owner_name runner build donor_name check work_volume cert_volume built='' worker='' p slot
+  local began phase=preflight status=FAIL timing=unverified deadline path
+  local passes=0 fails=0 na=0 total=0 expected
+  # The App may be unable to read group policy. Require operator confirmation
+  # of group 6's exact CPP repository and protected-main workflow allowlist.
+  [[ "$run" =~ ^[1-9][0-9]*$ && "$sha" =~ ^[0-9a-f]{40}$ && $# == 3 &&
+    "${3:-}" == --group-verified ]] ||
+    die 'usage: gha-slot compiler-once <run-id> <verified-main-sha> --group-verified'
+  [[ $EUID == 0 && "$(hostname -s)" == nzxth1desktop && "$(uname -m)" == x86_64 ]] ||
+    die 'compiler-once requires root on nzxth1desktop'
+  unset DOCKER_CONTEXT
+  export DOCKER_HOST=unix:///var/run/docker.sock
+  [[ "$(cfg .github.api)" == https://api.github.com ]] || die 'unexpected GitHub API URL'
+  [[ "$(cfg .github.owner)" == ray-manaloto ]] || die 'unexpected App owner'
+  # shellcheck disable=SC2034 # app_token in gha-slot reads this selector
+  APP="$(jq -er '[.apps | to_entries[] | select((.value.installation_id|tostring) == "180565088") | .key] |
+    if length == 1 then .[0] else error("expected exactly one CPP App configuration") end' "$CONF")"
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+  # The installation pins its own source tree and runner image before JIT.
+  [[ "$(stat -c '%u:%a' "$trusted")" == 0:755 && ! -L "$trusted" ]] ||
+    die 'trusted compiler deployment missing or writable by a non-owner'
+  hooked="$trusted/admission.sh"
+  policy="$(stat -c '%u:%a' "$hooked")"
+  [[ "$policy" == 0:555 && -f "$hooked" && ! -L "$hooked" ]] || die 'admission hook is not root-owned and read-only'
+  [[ "$(stat -c '%u:%a' "$trusted/runner-image")" == 0:444 && ! -L "$trusted/runner-image" ]] ||
+    die 'trusted runner image pin missing'
+  runner_img="$(cat "$trusted/runner-image")"
+  [[ "$runner_img" =~ ^sha256:[0-9a-f]{64}$ ]] || die 'runner image pin must be a complete ID'
+  [[ "$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$runner_img")" == linux/amd64 ]] ||
+    die 'pinned Linux amd64 JIT image unavailable'
+  [[ "$(docker version -f '{{.Server.Version}}')" == 29.9.2 ]] ||
+    die 'Docker release must match the pinned certification seccomp profile'
+  for p in bwrap jq flock timeout python3 nvidia-smi; do command -v "$p" >/dev/null; done
+  # Check the installed fence. Do not repair the shared network in this lane.
+  [[ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}' "$NET")" == br-gha ]]
+  iptables -t mangle -C FORWARD -i br-gha -o tailscale0 -j DROP
+  [[ "$(iptables -S DOCKER-USER | grep -c -- '-i br-gha .*ufw-docker-logging-deny')" -ge 6 ]]
+  iptables -S ufw-before-input | grep -- '-i br-gha .*-j DROP' >/dev/null
+  [[ "$(awk '$1=="MemAvailable:" {print $2}' /proc/meminfo)" -ge 58720256 ]] ||
+    die 'less than 56 GiB host memory available for the 48-GiB build and incumbents'
+  [[ "$(df -BG --output=avail "$(docker info -f '{{.DockerRootDir}}')" | awk 'NR==2 {sub(/G$/,"");print}')" -ge 120 ]] ||
+    die 'less than 120 GiB in the Docker store'
+  [[ "$(nproc)" -ge 16 ]] || die 'fewer than 16 host logical CPUs'
+  [[ -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)" ]] || die 'NVIDIA compute device is in use'
+
+  TOKEN="$(app_token)"
+  live="$(api GET "/repos/$repo/actions/runs/$run")"
+  jq -e --arg repo "$repo" --arg wf "$wf" --arg sha "$sha" '
+    .event=="workflow_dispatch" and .head_branch=="main" and
+    .head_sha==$sha and .head_repository.full_name==$repo and .repository.full_name==$repo and
+    .path==$wf and .run_attempt==1 and (.status=="queued" or .status=="in_progress")
+  ' <<<"$live" >/dev/null || die 'workflow run does not match the qualification'
+  head="$(api GET "/repos/$repo/branches/main")"
+  jq -e --arg sha "$sha" '.protected and .commit.sha==$sha' <<<"$head" >/dev/null ||
+    die 'the requested SHA is not current protected main'
+  # The checkout is prepared and sealed by the deployment operator. It is read
+  # by git archive on the host and is never writable from the Actions job.
+  local git_dir="$trusted/source.git"
+  [[ "$(stat -c '%u:%a' "$git_dir")" == 0:755 && ! -L "$git_dir" ]] ||
+    die 'sealed CPP source mirror missing'
+  sha256sum --status -c <(
+    printf '%s  %s\n' "$(git --git-dir="$git_dir" show "$sha:docs/standard/gha-runner/pc-compiler-admission.sh" | sha256sum | cut -d' ' -f1)" "$hooked"
+  ) || die 'installed admission does not match the exact protected-main bytes'
+  # shellcheck disable=SC2153 # STATE is the base directory defined by gha-slot
+  install -d -m 0700 "$STATE"
+  exec 8<"$STATE"
+  flock -n 8 || die 'another one-time CPP compiler launch is active'
+  state="$(mktemp -d "$STATE/cpp-compiler.${run}.XXXXXXXX")"
+  result="$state/result"
+  source="$state/source"
+  install -d -m 0755 "$result" "$source"
+  owner_name="cpp-compiler-$run-${state##*.}"
+  owner_name="${owner_name,,}"
+  runner="$owner_name-runner"
+  build="$owner_name-build"
+  donor_name="$owner_name-donor"
+  check="$owner_name-check"
+  work_volume="$build-work"
+  cert_volume="$check-build"
+  deadline=$((SECONDS + 19440))
+  began="$(date -u +%FT%TZ)"
+
+  remove_compiler_container() {
+    local name="$1" matching
+    matching="$(docker ps -aq --no-trunc --filter "name=^/${name}$")" || return 1
+    [[ -n "$matching" ]] || return 0
+    [[ "$matching" =~ ^[a-f0-9]{64}$ &&
+      "$(docker inspect -f '{{index .Config.Labels "org.cpp-standard.compiler"}}' "$matching")" == "$owner_name" ]] || return 1
+    docker rm -f "$matching" >/dev/null
+  }
+  remove_compiler_volume() {
+    local name="$1" matching
+    matching="$(docker volume ls -q --filter "name=^${name}$")" || return 1
+    [[ -n "$matching" ]] || return 0
+    [[ "$matching" == "$name" && "$(docker volume inspect -f '{{index .Labels "org.cpp-standard.compiler"}}' "$name")" == "$owner_name" ]] || return 1
+    docker volume rm "$name" >/dev/null
+  }
+  compiler_cleanup() {
+    local rc="$1" failure=0 item code=""
+    trap - EXIT
+    trap '' INT TERM
+    if [[ -n "$worker" ]]; then
+      kill -TERM -- "-$worker" 2>/dev/null || true
+      local stop=$((SECONDS + 30))
+      while kill -0 -- "-$worker" 2>/dev/null && ((SECONDS < stop)); do sleep 1; done
+      kill -KILL -- "-$worker" 2>/dev/null || true
+      wait "$worker" || true
+      kill -0 -- "-$worker" 2>/dev/null && failure=1
+    fi
+    if [[ -s "$state/compiled-image" ]]; then built="$(cat "$state/compiled-image")"; fi
+    for item in "$check" "$build" "$donor_name" "$runner"; do
+      remove_compiler_container "$item" || failure=1
+    done
+    for item in "$work_volume" "$cert_volume"; do remove_compiler_volume "$item" || failure=1; done
+    if [[ -n "$built" ]]; then
+      if [[ "$built" =~ ^sha256:[a-f0-9]{64}$ && "$(docker image inspect -f '{{index .Config.Labels "org.cpp-standard.compiler"}}' "$built")" == "$owner_name" ]]; then
+        docker image rm "$built" >/dev/null || failure=1
+      else
+        failure=1
+      fi
+    fi
+    if [[ -n "$rid" ]]; then
+      TOKEN="$(app_token)" && code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X DELETE \
+        -H @- -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+        "https://api.github.com/orgs/ray-manaloto/actions/runners/$rid" <<<"Authorization: Bearer $TOKEN")"
+      [[ "$code" == 204 || "$code" == 404 ]] || failure=1
+    fi
+    rm -rf -- "$source"
+    printf 'phase=%s exit=%s cleanup=%s completed=%s\n' "$phase" "$rc" "$failure" "$(date -u +%FT%TZ)" >"$state/closeout"
+    printf 'CPP compiler run %s runner %s (%s): phase %s; receipts %s; cleanup %s\n' \
+      "$run" "$runner" "${rid:-unregistered}" "$phase" "$result" "$failure"
+    ((failure == 0)) || exit 1
+    exit "$rc"
+  }
+  trap 'compiler_cleanup "$?"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  git --git-dir="$git_dir" archive "$sha" | tar -C "$source" -xf -
+  base_ref="$(sed -nE 's/^image = "(ubuntu:26\.10@sha256:[a-f0-9]{64})"$/\1/p' "$source/image/base.inputs.toml")"
+  [[ "$base_ref" =~ ^ubuntu:26\.10@sha256:[a-f0-9]{64}$ ]] || die 'Ubuntu base pin missing'
+  base_digest="${base_ref#*@}"
+  # A pull is limited to the exact base index. The compatible addon donor is a
+  # retained image by full ID, and is never used as a pre-provisioned base.
+  [[ "$(docker image inspect -f '{{.Os}}/{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.base.digest"}}' "$donor")" == "linux/amd64 $base_digest" ]] || die 'retained addon donor missing or no longer matches the pinned base'
+  timeout --kill-after=10s 300s docker pull --platform linux/amd64 "$base_ref" >"$result/base.log" 2>&1
+  base_id="$(docker image inspect -f '{{.Id}}' "$base_ref")"
+  [[ "$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$base_id")" == linux/amd64 ]] ||
+    die 'base image platform mismatch'
+
+  # Require only the reviewed, CPP-specific job waiting for registration.
+  runner_job() {
+    api GET "/repos/$repo/actions/runs/$run/attempts/1/jobs" | jq -ce --arg sha "$sha" '
+      if .total_count==1 and (.jobs|length)==1 and .jobs[0].head_sha==$sha and
+          .jobs[0].name=="Build and certify Ubuntu amd64" then .jobs[0]
+      else error("unexpected job inventory") end'
+  }
+  job="$(runner_job)"
+  jq -e '.status=="queued" and (.runner_id==null or .runner_id==0)' <<<"$job" >/dev/null ||
+    die 'another runner already owns this job or it is not queued'
+  job_id="$(jq -er .id <<<"$job")"
+  # The candidate-specific RO tools mount is empty. All build-time tool
+  # installations and compiler caches are local to the separate fresh rootfs.
+  install -d -m 0555 "$state/tools"
+  phase=registration
+  resp="$(api POST /orgs/ray-manaloto/actions/runners/generate-jitconfig "$(jq -nc --arg n "$runner" '
+    {name:$n, runner_group_id:6, labels:["self-hosted","pc-x86","container","cpp-standard","compiler"], work_folder:"_work"}')")"
+  rid="$(jq -er '.runner.id | select(type=="number" and .>0)' <<<"$resp")"
+  jit="$(jq -er '.encoded_jit_config | strings | select(length>0)' <<<"$resp")"
+  unset resp
+  image_ref="$(docker image inspect -f '{{.Id}}' "$runner_img")"
+  local -a hardening=(--cap-drop ALL --security-opt no-new-privileges --pids-limit 32768)
+  ACTIONS_RUNNER_INPUT_JITCONFIG="$jit" docker run -d --name "$runner" \
+    --label "org.cpp-standard.compiler=$owner_name" --network "$NET" --dns 1.1.1.1 --dns 9.9.9.9 \
+    --user 1001:1001 "${hardening[@]}" --cpus 2 --memory 2g --memory-swap 2g \
+    --mount "type=bind,src=$hooked,dst=/etc/gha-cpp-compiler-admission.sh,readonly" \
+    --mount "type=bind,src=$result,dst=/cpp-result,readonly" \
+    --mount "type=bind,src=$state/tools,dst=/cache/mise,readonly" \
+    -e ACTIONS_RUNNER_INPUT_JITCONFIG -e GHA_SLOT=cpp-standard -e SCCACHE_DIR=/tmp/gha-cpp-sccache \
+    -e "CPP_EXPECTED_RUN=$run" -e "CPP_EXPECTED_SHA=$sha" \
+    -e ACTIONS_RUNNER_HOOK_JOB_STARTED=/etc/gha-cpp-compiler-admission.sh \
+    --log-driver local --entrypoint ./run.sh "$image_ref" >"$state/runner.cid"
+  unset jit
+  phase=assignment
+  assigned() {
+    jq -e --argjson job "$job_id" --argjson rid "$rid" --arg n "$runner" '
+      .id==$job and .runner_id==$rid and .runner_name==$n and .status=="in_progress" and
+      any(.steps[]?; .name=="Verify admitted runner and isolated mounts" and .conclusion=="success") and
+      any(.steps[]?; .name=="Wait for compiler result" and .status=="in_progress")
+    ' >/dev/null
+  }
+  slot=$((SECONDS + 300))
+  while ! runner_job | assigned; do
+    ((SECONDS < slot)) || die 'exact job did not reach the admitted wait step'
+    sleep 5
+  done
+  jq -n --arg run "$run" --arg job "$job_id" --arg rid "$rid" --arg runner "$runner" --arg sha "$sha" \
+    --arg base "$base_id" --arg digest "$base_digest" --arg donor "$donor" --arg began "$began" \
+    '{run:$run, job:$job, runner_id:$rid, runner:$runner, commit:$sha, base:$base, base_digest:$digest, addon_donor:$donor, started:$began}' \
+    >"$result/assignment.json"
+  printf 'START https://github.com/%s/actions/runs/%s/job/%s runner=%s id=%s\n' "$repo" "$run" "$job_id" "$runner" "$rid"
+
+  run_compiler_phases() {
+    set -euo pipefail
+    docker volume create --label "org.cpp-standard.compiler=$owner_name" "$work_volume" >/dev/null
+    docker volume create --label "org.cpp-standard.compiler=$owner_name" "$cert_volume" >/dev/null
+    docker create --platform linux/amd64 --name "$donor_name" --network none --privileged=false \
+      --label "org.cpp-standard.compiler=$owner_name" "$donor" >/dev/null
+    docker create --platform linux/amd64 --name "$build" --init --privileged=false \
+      --label "org.cpp-standard.compiler=$owner_name" --network "$NET" --dns 1.1.1.1 --dns 9.9.9.9 \
+      --cpus 16 --memory 48g --memory-swap 48g --pids-limit 32768 --security-opt no-new-privileges \
+      -e container=docker -e MISE_GLOBAL_CONFIG_FILE=/opt/cpp-standard-tools/mise.toml \
+      -e "PATH=/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      --mount "type=bind,src=$source,dst=/project,readonly" \
+      --mount "type=volume,src=$work_volume,dst=/work" --workdir /root --log-driver local --entrypoint /bin/bash \
+      "$base_id" /project/docs/standard/gha-runner/pc-compiler-bootstrap.sh >"$state/build.cid"
+    for path in cuda-12.9 cuda-13.2 llvm-23.1.6 llvm23-offload iwyu-llvm23; do
+      docker cp "$donor_name:/opt/$path" - | docker cp - "$build:/opt/"
+    done
+    remove_compiler_container "$donor_name"
+    docker start "$build" >/dev/null
+    local rc
+    rc="$(timeout --kill-after=30s 4h30m docker wait "$build")" || return 1
+    docker logs "$build" >"$result/build.log" 2>&1
+    [[ "$rc" == 0 && "$(docker inspect -f '{{.State.Status}}' "$build")" == exited ]] || return 1
+    docker commit --change 'ENTRYPOINT ["/usr/bin/env"]' --change "LABEL org.opencontainers.image.base.digest=$base_digest" \
+      --change "LABEL org.cpp-standard.compiler=$owner_name" "$build" >"$state/compiled-image"
+    local candidate
+    candidate="$(cat "$state/compiled-image")"
+    [[ "$candidate" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$candidate" >"$result/built-image"
+    remove_compiler_container "$build"
+    # No build quota, swap quota, CPU affinity or toolchain mount is inherited.
+    # --ab enables the pinned V6 comparison. The driver must retain V1/V3 and
+    # fail on a busy/unobservable timing window or an unavailable GPU.
+    timeout --kill-after=30s 35m env -i PATH="$PATH" HOME=/root TMPDIR="$state" \
+      MISE_AUTO_INSTALL=0 CERT_CPP_ACTIONS_HOST=1 "CERT_CPP_SOURCE=$source" \
+      "CERT_CPP_CONTAINER=$check" "CERT_CPP_EVIDENCE=$result" \
+      "usage_image=$candidate" usage_ab=true usage_name=nzxth1desktop \
+      "CERT_CPP_OWNER=$owner_name" bash "$source/.mise/tasks/certify/ubuntu" >"$result/checklist.txt" 2>"$result/checklist.stderr"
+  }
+  phase=compile-and-certify
+  # Reset errexit context in the child (an if/while caller would mask failures).
+  set -m
+  run_compiler_phases &
+  worker=$!
+  set +m
+  local monitor_ok=1 rc=0
+  while kill -0 "$worker" 2>/dev/null; do
+    if ((SECONDS >= deadline)) || ! runner_job | assigned; then
+      monitor_ok=0
+      break
+    fi
+    sleep 15
+  done
+  if ((monitor_ok == 1)); then
+    wait "$worker" || rc=$?
+    worker=''
+  else
+    die 'workflow ended, lost assignment, or passed its host deadline'
+  fi
+  [[ ! -s "$state/compiled-image" ]] || built="$(cat "$state/compiled-image")"
+  if ((rc == 0)) && [[ -s "$result/body.txt" ]]; then
+    expected="$(grep -cE '^\*\*[A-Z]+[0-9]+\.' "$source/docs/standard/ubuntu.md")"
+    read -r passes fails na total < <(awk '
+      $2=="PASS" {pass++} $2=="FAIL" {fail++} $2=="N/A" {na++}
+      END {print pass+0,fail+0,na+0,NR}
+    ' "$result/body.txt")
+    if ((total == expected && passes + na == total && fails == 0)) &&
+      awk '$1=="P8" && $2=="PASS" { p2996_iwyu++ }
+            $1=="T3" && $2=="PASS" { stock_iwyu++ }
+            $2=="N/A" && (NF<3 || $1~/^(GO[123]|R2|V[12346])$/ || /timing untrusted/) { bad=1 }
+            END {exit (bad || p2996_iwyu!=1 || stock_iwyu!=1)}' "$result/body.txt"; then
+      status=PASS
+      timing=verified
+    fi
+  fi
+
+  # Finish the build/checklist cleanup before waking the upload step, so a
+  # green job cannot conceal leaked workload resources.
+  phase=teardown
+  remove_compiler_container "$check"
+  for slot in "$work_volume" "$cert_volume"; do remove_compiler_volume "$slot"; done
+  if [[ -n "$built" ]]; then
+    docker image rm "$built" >/dev/null
+    built=''
+    rm -f "$state/compiled-image"
+  fi
+  phase=artifact
+  jq -n --arg run "$run" --arg job "$job_id" --arg runner "$runner" --arg sha "$sha" --arg status "$status" \
+    --arg timing "$timing" --argjson pass "$passes" --argjson fail "$fails" --argjson na "$na" --argjson total "$total" \
+    '{run:$run, job:$job, attempt:"1", runner:$runner, commit:$sha, status:$status, timing:$timing, pass:$pass,
+      fail:$fail, na:$na, total:$total}' >"$result/.final.json"
+  chmod -R a+rX "$result"
+  mv -T "$result/.final.json" "$result/final.json"
+  phase=actions-finalize
+  slot=$((SECONDS + 600))
+  while ((SECONDS < slot)); do
+    live="$(runner_job)" || die 'could not verify the completed Actions job'
+    if [[ "$(jq -r .status <<<"$live")" == completed ]]; then
+      printf '%s\n' "$live" | jq '{id,run_id,head_sha,status,conclusion,html_url,runner_id,runner_name}' >"$state/github-job.json"
+      if [[ "$status" == PASS ]] &&
+        jq -e --argjson rid "$rid" '.runner_id==$rid and .conclusion=="success"' <<<"$live" >/dev/null; then
+        compiler_cleanup 0
+      else
+        compiler_cleanup 1
+      fi
+    fi
+    sleep 10
+  done
+  die 'Actions did not finalize after the evidence was delivered'
+}
