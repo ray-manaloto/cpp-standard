@@ -219,15 +219,21 @@ hostsh() {
   else ssh -o BatchMode=yes "$dest" "$@"; fi
 }
 mask() { # mask the Mac's home and user, and the ssh destination
-  local tilde='~' s
-  s="$(cat)"
+  local tilde='~' s login
+  s="$(cat)" || return 1
   s="${s//"$HOME"/$tilde}"
-  s="${s//"$(id -un)"/<user>}"
+  login="$(id -un)" || return 1
+  if [[ "$login" == root ]]; then
+    # Root runs the Actions driver. Preserve technical words such as rootfs.
+    s="$(perl -pe 's/\broot\b/<user>/g' <<<"$s")" || return 1
+  else
+    s="${s//"$login"/<user>}"
+  fi
   # The destination only as a whole host name: a short alias such as `pc`
   # must not hit `vpclmulqdq` or `cppcheck`. An alias equal to the machine
   # label names nothing private, so it stays.
   [[ -z "$dest" || "$dest" == "$label" ]] ||
-    s="$(D="$dest" perl -pe 's/(?<![\w.-])\Q$ENV{D}\E(?![\w.-])/<pc>/g' <<<"$s")"
+    s="$(D="$dest" perl -pe 's/(?<![\w.-])\Q$ENV{D}\E(?![\w.-])/<pc>/g' <<<"$s")" || return 1
   printf '%s\n' "$s"
 }
 
@@ -650,8 +656,10 @@ if [[ "$inst_after" == "$inst_before" ]]; then
 else
   inst_note="CHANGED during the run (by this run or another process; rerun when nothing else installs): $(diff <(printf '%s\n' "$inst_before") <(printf '%s\n' "$inst_after") | sed -n "s#^\([<>]\) $inst_dir/#\1 #p" | tr '\n' ' ')"
 fi
-report | mask
-[[ -n "$out" ]] && report | mask >"$out"
+report | mask || exit 2
+if [[ -n "$out" ]]; then
+  report | mask >"$out" || exit 2
+fi
 [[ "$inst_after" == "$inst_before" ]] || exit 3
 [[ -z "$rc_inner" && "$strict_timing_failed" == 0 ]] || exit 1
 [[ $nfail == 0 || "${usage_allow_fail:-false}" == true ]]

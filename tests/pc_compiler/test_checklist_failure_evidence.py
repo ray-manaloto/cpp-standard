@@ -75,6 +75,56 @@ docker() {
             timeout=5,
         )
 
+    def test_report_mask_keeps_rootfs_evidence_name(self):
+        mask = DRIVER[
+            DRIVER.index("mask() {") : DRIVER.index("\n}", DRIVER.index("mask() {")) + 2
+        ]
+        for user in ("root", "fixture-user"):
+            with self.subTest(user=user):
+                proc = subprocess.run(
+                    ["bash", "-c", mask + '\nid() { echo "$fixture_account"; }; mask'],
+                    env={
+                        "PATH": "/usr/bin:/bin",
+                        "HOME": f"/{user}",
+                        "fixture_account": user,
+                        "dest": "test-pc",
+                        "label": "amd64",
+                    },
+                    input=f"{user}@test-pc /{user}/private rootfs 10 MB (see rootfs.diff)\n",
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                    timeout=5,
+                )
+                self.assertEqual(
+                    proc.stdout,
+                    "<user>@<pc> ~/private rootfs 10 MB (see rootfs.diff)\n",
+                )
+
+    def test_mask_failure_and_unwritable_output_fail_certification(self):
+        footer = DRIVER[DRIVER.index("\nreport | mask") :]
+        for output, mask_rc in [("", "1"), (str(self.result), "0")]:
+            with self.subTest(output=output):
+                proc = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        'set -o pipefail; report() { echo row; }; mask() { cat; return "$mask_rc"; }; '
+                        + footer,
+                    ],
+                    env={
+                        "PATH": "/usr/bin:/bin",
+                        "out": output,
+                        "mask_rc": mask_rc,
+                        "strict_timing_failed": "0",
+                        "nfail": "0",
+                    },
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                )
+                self.assertEqual(proc.returncode, 2)
+
     def test_protected_change_keeps_partial_rows_and_path(self):
         proc = self.run_guard(
             """
