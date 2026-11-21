@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # Sourced only by the host gha-slot launcher. Never mounted into a runner.
 compiler_once() {
-  local run="${1:-}" sha="${2:-}" trusted=/etc/gha-runner/cpp-compiler
+  # Bash can unwind function locals before calling EXIT on an errexit. Keep
+  # closeout state at launcher scope. This process runs exactly one attempt.
+  run="${1:-}" rid='' worker='' phase=preflight execution_rc=0
+  prepare_compiler "$@"
+}
+
+prepare_compiler() {
+  local sha="${2:-}" trusted=/etc/gha-runner/cpp-compiler
   local repo=ray-manaloto/cpp-standard wf=.github/workflows/pc-compiler.yml
   local base_ref base_digest base_id donor=sha256:31a18ff1d600fcbc3eb860105f499ee290f03ef6a747a1bb63745a38e1ef6f04
-  local image_ref source hooked policy runner_img live head job job_id rid='' jit resp
+  local image_ref hooked policy runner_img live head job job_id jit resp
   local refresh_at=0
-  local state result owner_name runner build donor_name check work_volume cert_volume built='' worker='' p slot
-  local began phase=preflight status=FAIL timing=unverified deadline path
+  local p slot
+  local began status=FAIL timing=unverified deadline path
   local passes=0 fails=0 na=0 total=0 expected
   # The App may be unable to read group policy. Require operator confirmation
   # of group 6's exact CPP repository and protected-main workflow allowlist.
@@ -96,58 +103,124 @@ compiler_once() {
   deadline=$((SECONDS + 19440))
   began="$(date -u +%FT%TZ)"
 
-  remove_compiler_container() {
-    local name="$1" matching
-    matching="$(docker ps -aq --no-trunc --filter "name=^/${name}$")" || return 1
-    [[ -n "$matching" ]] || return 0
-    [[ "$matching" =~ ^[a-f0-9]{64}$ &&
-      "$(docker inspect -f '{{index .Config.Labels "org.cpp-standard.compiler"}}' "$matching")" == "$owner_name" ]] || return 1
-    docker rm -f "$matching" >/dev/null
-  }
-  remove_compiler_volume() {
-    local name="$1" matching
-    matching="$(docker volume ls -q --filter "name=^${name}$")" || return 1
-    [[ -n "$matching" ]] || return 0
-    [[ "$matching" == "$name" && "$(docker volume inspect -f '{{index .Labels "org.cpp-standard.compiler"}}' "$name")" == "$owner_name" ]] || return 1
-    docker volume rm "$name" >/dev/null
-  }
-  compiler_cleanup() {
-    local rc="$1" failure=0 item code=""
-    trap - EXIT
-    trap '' INT TERM
-    if [[ -n "$worker" ]]; then
-      kill -TERM -- "-$worker" 2>/dev/null || true
-      local stop=$((SECONDS + 30))
-      while kill -0 -- "-$worker" 2>/dev/null && ((SECONDS < stop)); do sleep 1; done
-      kill -KILL -- "-$worker" 2>/dev/null || true
-      wait "$worker" || true
-      kill -0 -- "-$worker" 2>/dev/null && failure=1
+  supervise_compiler
+}
+
+seed_compiler_ca() {
+  docker cp "$donor_name:/etc/ssl/certs/ca-certificates.crt" "$state/bootstrap-ca.crt" || return "$?"
+  [[ -f "$state/bootstrap-ca.crt" && ! -L "$state/bootstrap-ca.crt" && -s "$state/bootstrap-ca.crt" ]] || return 1
+  docker cp "$state/bootstrap-ca.crt" "$build:/tmp/cpp-bootstrap-ca.crt"
+}
+
+wait_compiler_build() {
+  local name="$1" container_rc wait_rc=0
+  container_rc="$(timeout --kill-after=30s 270m docker wait "$name")" || wait_rc=$?
+  if ((wait_rc != 0)) || [[ ! "$container_rc" =~ ^(0|[1-9][0-9]{0,2})$ ]] || ((container_rc > 255)); then
+    printf 'wait_exit=%s container_exit=unknown\n' "$wait_rc" >"$result/build-exit.txt"
+    ((wait_rc != 0)) || return 1
+    return "$wait_rc"
+  fi
+  printf 'wait_exit=0 container_exit=%s\n' "$container_rc" >"$result/build-exit.txt"
+  return "$container_rc"
+}
+
+capture_compiler_build() {
+  local cid
+  [[ -s "$state/build.cid" && ! -f "$result/build.log" ]] || return 0
+  [[ ! -e "$result/build-log-attempt.txt" ]] || return 1
+  read -r cid <"$state/build.cid" || return 1
+  [[ "$cid" =~ ^[a-f0-9]{64}$ &&
+    "$(docker inspect -f '{{index .Config.Labels "org.cpp-standard.compiler"}}' "$cid")" == "$owner_name" ]] || return 1
+  # Keep partial output and the Docker error if log retrieval itself fails.
+  if docker logs "$cid" >"$result/build-log-attempt.txt" 2>&1; then
+    mv "$result/build-log-attempt.txt" "$result/build.log"
+  else
+    return 1
+  fi
+}
+
+release_compiler_workload() {
+  local failure=0 item built
+  for item in "$check" "$build" "$donor_name"; do
+    remove_compiler_container "$item" || failure=1
+  done
+  for item in "$work_volume" "$cert_volume"; do remove_compiler_volume "$item" || failure=1; done
+  if [[ -s "$state/compiled-image" ]]; then
+    built="$(cat "$state/compiled-image")"
+    if [[ "$built" =~ ^sha256:[a-f0-9]{64}$ &&
+      "$(docker image inspect -f '{{index .Config.Labels "org.cpp-standard.compiler"}}' "$built")" == "$owner_name" ]] &&
+      docker image rm "$built" >/dev/null; then
+      rm -f "$state/compiled-image" || failure=1
+    else
+      failure=1
     fi
-    if [[ -s "$state/compiled-image" ]]; then built="$(cat "$state/compiled-image")"; fi
-    for item in "$check" "$build" "$donor_name" "$runner"; do
-      remove_compiler_container "$item" || failure=1
-    done
-    for item in "$work_volume" "$cert_volume"; do remove_compiler_volume "$item" || failure=1; done
-    if [[ -n "$built" ]]; then
-      if [[ "$built" =~ ^sha256:[a-f0-9]{64}$ && "$(docker image inspect -f '{{index .Config.Labels "org.cpp-standard.compiler"}}' "$built")" == "$owner_name" ]]; then
-        docker image rm "$built" >/dev/null || failure=1
-      else
-        failure=1
-      fi
-    fi
-    if [[ -n "$rid" ]]; then
-      TOKEN="$(app_token)" && code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X DELETE \
-        -H @- -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
-        "https://api.github.com/orgs/ray-manaloto/actions/runners/$rid" <<<"Authorization: Bearer $TOKEN")"
-      [[ "$code" == 204 || "$code" == 404 ]] || failure=1
-    fi
-    rm -rf -- "$source"
-    printf 'phase=%s exit=%s cleanup=%s completed=%s\n' "$phase" "$rc" "$failure" "$(date -u +%FT%TZ)" >"$state/closeout"
-    printf 'CPP compiler run %s runner %s (%s): phase %s; receipts %s; cleanup %s\n' \
-      "$run" "$runner" "${rid:-unregistered}" "$phase" "$result" "$failure"
-    ((failure == 0)) || exit 1
-    exit "$rc"
-  }
+  fi
+  return "$failure"
+}
+
+remove_compiler_container() {
+  local name="$1" matching
+  matching="$(docker ps -aq --no-trunc --filter "name=^/${name}$")" || return 1
+  [[ -n "$matching" ]] || return 0
+  [[ "$matching" =~ ^[a-f0-9]{64}$ &&
+    "$(docker inspect -f '{{index .Config.Labels "org.cpp-standard.compiler"}}' "$matching")" == "$owner_name" ]] || return 1
+  docker rm -f "$matching" >/dev/null
+}
+remove_compiler_volume() {
+  local name="$1" matching
+  matching="$(docker volume ls -q --filter "name=^${name}$")" || return 1
+  [[ -n "$matching" ]] || return 0
+  [[ "$matching" == "$name" && "$(docker volume inspect -f '{{index .Labels "org.cpp-standard.compiler"}}' "$name")" == "$owner_name" ]] || return 1
+  docker volume rm "$name" >/dev/null
+}
+compiler_cleanup() {
+  local rc="$1" failure=0 code=""
+  ((execution_rc == 0)) || rc="$execution_rc"
+  set +e
+  trap - EXIT
+  trap '' INT TERM
+  if [[ -n "$worker" ]]; then
+    kill -TERM -- "-$worker" 2>/dev/null || true
+    local stop=$((SECONDS + 30))
+    while kill -0 -- "-$worker" 2>/dev/null && ((SECONDS < stop)); do sleep 1; done
+    kill -KILL -- "-$worker" 2>/dev/null || true
+    wait "$worker" || true
+    kill -0 -- "-$worker" 2>/dev/null && failure=1
+  fi
+  capture_compiler_build || failure=1
+  release_compiler_workload || failure=1
+  remove_compiler_container "$runner" || failure=1
+  if [[ -n "$rid" ]]; then
+    TOKEN="$(app_token)" && code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X DELETE \
+      -H @- -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "https://api.github.com/orgs/ray-manaloto/actions/runners/$rid" <<<"Authorization: Bearer $TOKEN")"
+    [[ "$code" == 204 || "$code" == 404 ]] || failure=1
+  fi
+  rm -rf -- "$source" || failure=1
+  printf 'phase=%s exit=%s cleanup=%s completed=%s\n' "$phase" "$rc" "$failure" "$(date -u +%FT%TZ)" >"$state/closeout"
+  printf 'CPP compiler run %s runner %s (%s): phase %s; receipts %s; cleanup %s\n' \
+    "$run" "$runner" "${rid:-unregistered}" "$phase" "$result" "$failure"
+  ((rc != 0 || failure == 0)) || exit 1
+  exit "$rc"
+}
+finish_compiler_workload() {
+  phase=teardown
+  local cleanup_rc=0 checklist=not_run
+  [[ ! -f "$result/checklist.txt" ]] || checklist=attempted
+  capture_compiler_build || cleanup_rc=1
+  release_compiler_workload >"$result/workload-cleanup.log" 2>&1 || cleanup_rc=1
+  ((cleanup_rc == 0)) || status=FAIL
+  phase=artifact
+  jq -n --arg run "$run" --arg job "$job_id" --arg runner "$runner" --arg sha "$sha" --arg status "$status" \
+    --argjson execution_exit "$execution_rc" --argjson cleanup_exit "$cleanup_rc" \
+    --arg checklist "$checklist" --arg timing "$timing" --argjson pass "$passes" --argjson fail "$fails" --argjson na "$na" --argjson total "$total" \
+    '{run:$run, job:$job, attempt:"1", runner:$runner, commit:$sha, status:$status, timing:$timing, pass:$pass,
+      fail:$fail, na:$na, total:$total, checklist:$checklist, execution_exit:$execution_exit, cleanup_exit:$cleanup_exit}' >"$result/.final.json"
+  chmod -R a+rX "$result"
+  mv "$result/.final.json" "$result/final.json"
+}
+
+supervise_compiler() {
   trap 'compiler_cleanup "$?"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -229,15 +302,15 @@ compiler_once() {
       --mount "type=bind,src=$source,dst=/project,readonly" \
       --mount "type=volume,src=$work_volume,dst=/work" --workdir /root --log-driver local --entrypoint /bin/bash \
       "$base_id" /project/docs/standard/gha-runner/pc-compiler-bootstrap.sh >"$state/build.cid"
+    seed_compiler_ca
     for path in cuda-12.9 cuda-13.2 llvm-23.1.6 llvm23-offload iwyu-llvm23; do
       docker cp "$donor_name:/opt/$path" - | docker cp - "$build:/opt/"
     done
     remove_compiler_container "$donor_name"
     docker start "$build" >/dev/null
-    local rc
-    rc="$(timeout --kill-after=30s 4h30m docker wait "$build")" || return 1
-    docker logs "$build" >"$result/build.log" 2>&1
-    [[ "$rc" == 0 && "$(docker inspect -f '{{.State.Status}}' "$build")" == exited ]] || return 1
+    wait_compiler_build "$build"
+    capture_compiler_build
+    [[ "$(docker inspect -f '{{.State.Status}}' "$build")" == exited ]]
     docker commit --change 'ENTRYPOINT ["/usr/bin/env"]' --change "LABEL org.opencontainers.image.base.digest=$base_digest" \
       --change "LABEL org.cpp-standard.compiler=$owner_name" "$build" >"$state/compiled-image"
     local candidate
@@ -257,10 +330,10 @@ compiler_once() {
   phase=compile-and-certify
   # Reset errexit context in the child (an if/while caller would mask failures).
   set -m
-  run_compiler_phases &
+  run_compiler_phases >"$result/worker.log" 2>&1 &
   worker=$!
   set +m
-  local monitor_ok=1 rc=0
+  local monitor_ok=1
   while kill -0 "$worker" 2>/dev/null; do
     refresh_compiler_token
     if ((SECONDS >= deadline)) || ! runner_job | assigned; then
@@ -270,19 +343,18 @@ compiler_once() {
     sleep 15
   done
   if ((monitor_ok == 1)); then
-    wait "$worker" || rc=$?
+    wait "$worker" || execution_rc=$?
     worker=''
   else
     die 'workflow ended, lost assignment, or passed its host deadline'
   fi
-  [[ ! -s "$state/compiled-image" ]] || built="$(cat "$state/compiled-image")"
-  if ((rc == 0)) && [[ -s "$result/body.txt" ]]; then
+  if [[ -s "$result/body.txt" ]]; then
     expected="$(grep -cE '^\*\*[A-Z]+[0-9]+\.' "$source/docs/standard/ubuntu.md")"
     read -r passes fails na total < <(awk '
       $2=="PASS" {pass++} $2=="FAIL" {fail++} $2=="N/A" {na++}
       END {print pass+0,fail+0,na+0,NR}
     ' "$result/body.txt")
-    if ((total == expected && passes + na == total && fails == 0)) &&
+    if ((execution_rc == 0 && total == expected && passes + na == total && fails == 0)) &&
       awk '$1=="P8" && $2=="PASS" { p2996_iwyu++ }
             $1=="T3" && $2=="PASS" { stock_iwyu++ }
             $2=="N/A" && (NF<3 || $1~/^(GO[123]|R2|V[12346])$/ || /timing untrusted/) { bad=1 }
@@ -294,21 +366,7 @@ compiler_once() {
 
   # Finish the build/checklist cleanup before waking the upload step, so a
   # green job cannot conceal leaked workload resources.
-  phase=teardown
-  remove_compiler_container "$check"
-  for slot in "$work_volume" "$cert_volume"; do remove_compiler_volume "$slot"; done
-  if [[ -n "$built" ]]; then
-    docker image rm "$built" >/dev/null
-    built=''
-    rm -f "$state/compiled-image"
-  fi
-  phase=artifact
-  jq -n --arg run "$run" --arg job "$job_id" --arg runner "$runner" --arg sha "$sha" --arg status "$status" \
-    --arg timing "$timing" --argjson pass "$passes" --argjson fail "$fails" --argjson na "$na" --argjson total "$total" \
-    '{run:$run, job:$job, attempt:"1", runner:$runner, commit:$sha, status:$status, timing:$timing, pass:$pass,
-      fail:$fail, na:$na, total:$total}' >"$result/.final.json"
-  chmod -R a+rX "$result"
-  mv -T "$result/.final.json" "$result/final.json"
+  finish_compiler_workload
   phase=actions-finalize
   slot=$((SECONDS + 600))
   while ((SECONDS < slot)); do
