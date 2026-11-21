@@ -22,6 +22,9 @@ set -uo pipefail
 # a check would PASS on a tool the image did not have. With auto-install off,
 # that shim fails instead. The launcher passes it too.
 export MISE_AUTO_INSTALL=0
+# Console scripts such as gcovr import from installed packages. Keep those
+# imports read-only, including in isolated interpreters (which need -B).
+export PYTHONDONTWRITEBYTECODE=1
 
 probes="${usage_probes:-${PROBES:-}}"
 [[ -d "$probes" ]] || {
@@ -110,11 +113,11 @@ iwyu_works() { # iwyu_works IWYU [FLAGS]: it analyses a file and finds the unuse
   [[ $r == 0 && "$o" == *"should remove these lines"* && "$o" == *"#include <vector>"* && "$o" != *"error:"* ]]
 }
 dap_probe() { # dap_probe LLDB-DAP PROGRAM: the appendix probe (it launches with ASLR on, DB2)
-  timeout 120 python3 -I dap_probe.py "$1" "$2" dap.cpp 10 2>&1 | tail -1
+  timeout 120 python3 -I -B dap_probe.py "$1" "$2" dap.cpp 10 2>&1 | tail -1
 }
 best_ms() { # best_ms CMD...: the fastest of 5 runs on cores 2-5, in ms (hyperfine)
   hyperfine -N -w 1 -r 5 --export-json "$PROBE/hf.json" -- "taskset -c 2-5 $*" >/dev/null 2>&1 &&
-    python3 -I "$PROBE/hf_best.py" "$PROBE/hf.json" | tr -d " "
+    python3 -I -B "$PROBE/hf_best.py" "$PROBE/hf.json" | tr -d " "
 }
 instr_u() { # instr_u CMD...: user-space instructions retired (perf stat)
   perf stat -x, -e instructions:u -- "$@" 2>&1 >/dev/null | awk -F, '/instructions/ && $1 ~ /^[0-9]+$/ {print $1; exit}'
@@ -206,7 +209,7 @@ if want A7; then
       grep -qx 'Components: main' "$f" && ok_src=yes
     src="$(grep -E '^(URIs|Suites|Components):' "$f" | tr '\n' ' ')"
     fpr="$(
-      python3 -I - "$f" <<'PY' 2>/dev/null
+      python3 -I -B - "$f" <<'PY' 2>/dev/null
 import base64, hashlib, sys
 lines, inkey = [], False
 for raw in open(sys.argv[1]):
@@ -972,7 +975,7 @@ if want V4; then
   t() { # t BUILD-DIR: configure, then time a full -j build (best of 3, cleaned each time)
     rm -rf "$1" && cmake -S v4 -B "$1" -G Ninja -DCMAKE_CXX_COMPILER=$G >/dev/null 2>&1 &&
       hyperfine -N -r 3 -p "ninja -C $1 -t clean" --export-json hf4.json -- "ninja -C $1 -j$(nproc)" >/dev/null 2>&1 &&
-      python3 -I "$PROBE/hf_best.py" hf4.json | tr -d " "
+      python3 -I -B "$PROBE/hf_best.py" hf4.json | tr -d " "
   }
   o="$(t "$PROBE/v4b")" v="$(t "$BUILD_DIR/v4b")"
   rm -rf "$BUILD_DIR/v4b"

@@ -492,7 +492,7 @@ if want V6; then
       >"$scratch/ab_size" || true
     meas='cd /ab && hyperfine -N -w 1 -r 5 --export-json /tmp/hf.json \
       "taskset -c 2-5 g++-16 -std=c++26 -O2 -c heavy.cpp -o /tmp/h.o" "taskset -c 2-5 ./bench" >/dev/null 2>&1 &&
-      python3 -I hf_best.py /tmp/hf.json &&
+      python3 -I -B hf_best.py /tmp/hf.json &&
       perf stat -x, -e instructions:u -- taskset -c 2-5 g++-16 -std=c++26 -O2 -c heavy.cpp -o /tmp/h.o 2>&1 >/dev/null | cut -d, -f1 &&
       perf stat -x, -e instructions:u -- taskset -c 2-5 ./bench 2>&1 >/dev/null | cut -d, -f1'
     # The host side gets the image's own environment (PATH, the mise config), so both

@@ -97,6 +97,12 @@ ln -s "$scratch/unrelated" "$scratch/lines2.txt"
         self.assertFalse((self.result / "body.txt").exists())
         self.assertFalse((self.base / "scratch").exists())
 
+    def test_installed_python_change_is_still_refused(self):
+        path = "C /root/.local/share/mise/installs/python/3.14.8/lib/python3.14/os.py"
+        proc = self.run_guard("", diff=path)
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        self.assertEqual((self.result / "partial/rootfs.diff").read_text(), path + "\n")
+
     def test_retention_error_preserves_original_refusal_and_cleanup(self):
         (self.result / "partial").touch()
         proc = self.run_guard("")
