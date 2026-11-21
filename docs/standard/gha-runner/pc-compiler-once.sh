@@ -139,13 +139,38 @@ capture_compiler_build() {
   fi
 }
 
+certify_compiler_project() {
+  local candidate="$1" name="$check-project" tag="cpp-standard-qualified:run-$run" rc=0
+  # Only the built image survives the first teardown. Launch a fresh project
+  # container by local tag and compare its immutable ID before running it.
+  release_compiler_workload keep-image
+  docker image tag "$candidate" "$tag"
+  # Run after the quiet checklist windows, with a private writable layer.
+  docker create --name "$name" --platform linux/amd64 --privileged=false \
+    --label "org.cpp-standard.compiler=$owner_name" --network "$NET" --dns 1.1.1.1 --dns 9.9.9.9 \
+    --cap-drop ALL --security-opt no-new-privileges --pids-limit 32768 --cpus 16 --memory 48g --memory-swap 48g \
+    --mount "type=bind,src=$source,dst=/project,readonly" --workdir /tmp \
+    -e container=docker -e MISE_AUTO_INSTALL=0 -e MISE_TRUSTED_CONFIG_PATHS=/opt/cpp-standard-tools \
+    --entrypoint /usr/local/bin/mise "$tag" -C /opt/cpp-standard-tools exec -- \
+    /usr/bin/python3 -I -B /project/docs/standard/gha-runner/pc-compiler-project.py >"$state/project.cid"
+  [[ "$(docker inspect -f '{{.Image}}' "$name")" == "$candidate" ]]
+  printf 'image=%s checkout=%s run=%s job=%s host=%s\n' "$candidate" "$sha" "$run" "$job_id" "$(hostname -s)" >"$result/project-assignment.txt"
+  timeout --kill-after=10s 25m docker start -a "$name" >"$result/project.log" 2>&1 || rc=$?
+  if ((rc == 0)); then
+    [[ "$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$name")" == 'exited 0' ]] || rc=1
+  fi
+  docker cp "$name:/tmp/project-evidence" "$result/project" || { ((rc != 0)) || rc=1; }
+  return "$rc"
+}
+
 release_compiler_workload() {
   local failure=0 item built
   for item in "$check" "$build" "$donor_name"; do
     remove_compiler_container "$item" || failure=1
   done
   for item in "$work_volume" "$cert_volume"; do remove_compiler_volume "$item" || failure=1; done
-  if [[ -s "$state/compiled-image" ]]; then
+  remove_compiler_container "$check-project" || failure=1
+  if [[ "${1:-}" != keep-image && -s "$state/compiled-image" ]]; then
     built="$(cat "$state/compiled-image")"
     if [[ "$built" =~ ^sha256:[a-f0-9]{64}$ &&
       "$(docker image inspect -f '{{index .Config.Labels "org.cpp-standard.compiler"}}' "$built")" == "$owner_name" ]] &&
@@ -326,6 +351,7 @@ supervise_compiler() {
       "CERT_CPP_CONTAINER=$check" "CERT_CPP_EVIDENCE=$result" \
       "usage_image=$candidate" usage_ab=true usage_name=nzxth1desktop \
       "CERT_CPP_OWNER=$owner_name" bash "$source/.mise/tasks/certify/ubuntu" >"$result/checklist.txt" 2>"$result/checklist.stderr"
+    certify_compiler_project "$candidate"
   }
   phase=compile-and-certify
   # Reset errexit context in the child (an if/while caller would mask failures).
@@ -366,6 +392,15 @@ supervise_compiler() {
 
   # Finish the build/checklist cleanup before waking the upload step, so a
   # green job cannot conceal leaked workload resources.
+  if [[ "$status" == PASS ]]; then
+    local tag="cpp-standard-qualified:run-$run" image
+    image="$(cat "$state/compiled-image")"
+    [[ "$(docker image inspect -f '{{.Id}}' "$tag")" == "$image" ]]
+    # Transfer the verified image out of transient cleanup ownership. Keep a
+    # durable ID and the launch reference next to the uploaded project results.
+    printf 'tag=%s\nid=%s\ncheckout=%s\n' "$tag" "$image" "$sha" >"$result/retained-image.txt"
+    mv "$state/compiled-image" "$state/retained-image"
+  fi
   finish_compiler_workload
   phase=actions-finalize
   slot=$((SECONDS + 600))
