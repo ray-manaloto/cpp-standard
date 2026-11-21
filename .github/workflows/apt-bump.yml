@@ -8,7 +8,9 @@
 #
 # The App's credential lives only in the `apt-bump` environment, whose deployment branches are `main` alone, so no
 # pull-request workflow can read it: the variable APT_BUMP_CLIENT_ID (the App's client ID) and the secret
-# APT_BUMP_PRIVATE_KEY. The token is minted per run and scoped down to contents and pull requests.
+# APT_BUMP_PRIVATE_KEY. Store the same client ID as an environment secret named APT_BUMP_CLIENT_ID.
+# Use the masked copy in the job because Actions logs evaluated step environments and action inputs.
+# The token is minted per run and scoped down to contents and pull requests.
 name: apt-bump
 
 on:
@@ -64,12 +66,12 @@ jobs:
     steps:
       - name: Check the App credential
         env:
-          CLIENT_ID: ${{ vars.APT_BUMP_CLIENT_ID }}
+          HAS_CLIENT_ID: ${{ secrets.APT_BUMP_CLIENT_ID != '' }}
           HAS_KEY: ${{ secrets.APT_BUMP_PRIVATE_KEY != '' }}
         run: |
           missing=0
-          if [[ -z "$CLIENT_ID" ]]; then
-            echo "::error::environment apt-bump has no variable APT_BUMP_CLIENT_ID (the cpp-standard-agents App's client ID)"
+          if [[ "$HAS_CLIENT_ID" != "true" ]]; then
+            echo "::error::environment apt-bump has no masked APT_BUMP_CLIENT_ID secret (copy the App client ID from the environment variable)"
             missing=1
           fi
           if [[ "$HAS_KEY" != "true" ]]; then
@@ -99,7 +101,7 @@ jobs:
         if: ${{ steps.bump.outputs.changed == 'true' }}
         uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc  # v3.4.0
         with:
-          client-id: ${{ vars.APT_BUMP_CLIENT_ID }}
+          client-id: ${{ secrets.APT_BUMP_CLIENT_ID }}
           private-key: ${{ secrets.APT_BUMP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write

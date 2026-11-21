@@ -1086,7 +1086,10 @@ required checks. The owner (or the repository's settings owner on the
 owner's word; no App here has repository Administration or secrets
 permission) creates the `apt-bump` environment, restricts its deployment
 branches to `main`, and stores `APT_BUMP_CLIENT_ID` and
-`APT_BUMP_PRIVATE_KEY`.
+`APT_BUMP_PRIVATE_KEY`. The settings owner also stores the same client ID as
+an environment secret named `APT_BUMP_CLIENT_ID`. The workflow uses this
+masked copy because Actions logs evaluated step environments and action
+inputs.
 
 **Accepted risk (D173):** a copy of the agent App's private key lives in
 GitHub Actions rather than on the Mac host alone. Any job running on `main`
