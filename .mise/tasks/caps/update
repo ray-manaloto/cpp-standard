@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Merge capabilities.json probe files into cmake/capabilities.lock.json (D42, D53)"
+#USAGE arg "<file>..." var=#true help="One or more capabilities.json files, each a CI job's upload for one environment"
+#
+# The capability lock's explicit update task (D42): `mise run caps:update` merges the
+# capabilities.json artifacts that each environment's CI job uploads into the committed lock,
+# and the diff is the pull request's record of the change (D42). It runs offline: the probe
+# files are arguments, not live probes. CPPSTD_CAPS_LOCK names another lock (tests).
+set -euo pipefail
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+if [[ $# -lt 1 ]]; then
+  echo "caps:update: FAIL give at least one capabilities.json" >&2
+  exit 1
+fi
+exec python3 -I "$root/python/caps/caps.py" update "$@" \
+  --lock "${CPPSTD_CAPS_LOCK:-$root/cmake/capabilities.lock.json}"

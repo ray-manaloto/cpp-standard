@@ -117,9 +117,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The gate presets (.mise/tasks/ci/_default). A later PR takes the list
-        # from the capability lock.
-        preset: [gcc16-coverage, clang23-coverage, p2996-coverage]
+        # A lock-disabled TSan leg records an explicit skip. Missing reports still fail
+        # the checklist. Keep this list in sync with gate-items.toml.
+        preset: [gcc16-coverage, clang23-coverage, p2996-coverage, gcc16-asan-ubsan, clang23-asan-ubsan, p2996-asan-ubsan, gcc16-tsan, clang23-tsan, p2996-tsan, gcc16-valgrind]
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 90
     permissions:
@@ -183,6 +183,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: capabilities-${{ matrix.preset }}
+          path: build/${{ matrix.preset }}/capabilities.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Copied from ci.yml's job of the same name (#130), the daily fixture run (D119):
   # `mise run ci-must-fail` in the same tools image. Its runner's own test runs
   # first: a fixture that goes green fails the job.
@@ -239,7 +247,7 @@ jobs:
 
   # D119: writes the results JSON that ticks gate-items.toml — one entry per item,
   # passed / failed / not run, from the report lines the jobs above uploaded. Only a check
-  # with an outcome reports, so a skipped check has no line and its item comes out not run; any item not passed fails the run (spec #133). The JSON uploads
+  # with an outcome reports. Missing results fail. Only explicit lock-authorized TSan skips pass. The JSON uploads
   # either way, and the run summary shows the table until review:digest exists
   # (D119).
   checklist:

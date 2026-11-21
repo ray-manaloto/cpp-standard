@@ -34,6 +34,13 @@ job = "gate-linux-arm64"
 preset = "gcc16-coverage"
 check = "ci:coverage"
 
+[items.caps-gcc16-coverage]
+what = "gcc16-coverage's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-coverage"
+check = "ci:caps"
+
 [items.build-clang23-coverage]
 what = "clang23-coverage configures and builds"
 environment = "linux"
@@ -55,6 +62,13 @@ job = "gate-linux-arm64"
 preset = "clang23-coverage"
 check = "ci:coverage"
 
+[items.caps-clang23-coverage]
+what = "clang23-coverage's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-coverage"
+check = "ci:caps"
+
 [items.build-p2996-coverage]
 what = "p2996-coverage configures and builds"
 environment = "linux"
@@ -75,6 +89,166 @@ environment = "linux"
 job = "gate-linux-arm64"
 preset = "p2996-coverage"
 check = "ci:coverage"
+
+[items.caps-p2996-coverage]
+what = "p2996-coverage's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-coverage"
+check = "ci:caps"
+
+# The sanitizer, TSan and Valgrind presets (environment-standard.md section 5
+# steps 6 and 7, D19, D42). Each gate preset reports build and caps lines; the
+# sanitizer presets report sanitizers, the Valgrind preset valgrind, and the
+# lock can authorize explicit TSan build and sanitizer skips after the capability
+# probes agree. A missing report still fails the checklist (D42, spec #133).
+
+[items.build-gcc16-asan-ubsan]
+what = "gcc16-asan-ubsan configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-asan-ubsan"
+check = "ci"
+
+[items.caps-gcc16-asan-ubsan]
+what = "gcc16-asan-ubsan's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-asan-ubsan"
+check = "ci:caps"
+
+[items.sanitizers-gcc16-asan-ubsan]
+what = "gcc16-asan-ubsan's ctest passes under ASan+UBSan"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-asan-ubsan"
+check = "ci:sanitizers"
+
+[items.build-clang23-asan-ubsan]
+what = "clang23-asan-ubsan configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-asan-ubsan"
+check = "ci"
+
+[items.caps-clang23-asan-ubsan]
+what = "clang23-asan-ubsan's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-asan-ubsan"
+check = "ci:caps"
+
+[items.sanitizers-clang23-asan-ubsan]
+what = "clang23-asan-ubsan's ctest passes under ASan+UBSan"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-asan-ubsan"
+check = "ci:sanitizers"
+
+[items.build-p2996-asan-ubsan]
+what = "p2996-asan-ubsan configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-asan-ubsan"
+check = "ci"
+
+[items.caps-p2996-asan-ubsan]
+what = "p2996-asan-ubsan's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-asan-ubsan"
+check = "ci:caps"
+
+[items.sanitizers-p2996-asan-ubsan]
+what = "p2996-asan-ubsan's ctest passes under ASan+UBSan"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-asan-ubsan"
+check = "ci:sanitizers"
+
+[items.build-gcc16-tsan]
+what = "gcc16-tsan configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-tsan"
+check = "ci"
+
+[items.caps-gcc16-tsan]
+what = "gcc16-tsan's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-tsan"
+check = "ci:caps"
+
+[items.sanitizers-gcc16-tsan]
+what = "gcc16-tsan's ctest passes under TSan, where the lock allows TSan"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-tsan"
+check = "ci:sanitizers"
+
+[items.build-clang23-tsan]
+what = "clang23-tsan configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-tsan"
+check = "ci"
+
+[items.caps-clang23-tsan]
+what = "clang23-tsan's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-tsan"
+check = "ci:caps"
+
+[items.sanitizers-clang23-tsan]
+what = "clang23-tsan's ctest passes under TSan, where the lock allows TSan"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "clang23-tsan"
+check = "ci:sanitizers"
+
+[items.build-p2996-tsan]
+what = "p2996-tsan configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-tsan"
+check = "ci"
+
+[items.caps-p2996-tsan]
+what = "p2996-tsan's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-tsan"
+check = "ci:caps"
+
+[items.sanitizers-p2996-tsan]
+what = "p2996-tsan's ctest passes under TSan, where the lock allows TSan"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "p2996-tsan"
+check = "ci:sanitizers"
+
+[items.build-gcc16-valgrind]
+what = "gcc16-valgrind configures and builds"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-valgrind"
+check = "ci"
+
+[items.caps-gcc16-valgrind]
+what = "gcc16-valgrind's probes match the capability lock"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-valgrind"
+check = "ci:caps"
+
+[items.valgrind-gcc16-valgrind]
+what = "gcc16-valgrind's ctest passes under Valgrind memcheck"
+environment = "linux"
+job = "gate-linux-arm64"
+preset = "gcc16-valgrind"
+check = "ci:valgrind"
 
 [items.must-fail-toolchain-unattested]
 what = "toolchain:fetch refuses the fixture image when its stand-in verifier rejects the attestation"
@@ -117,3 +291,31 @@ environment = "linux"
 job = "must-fail"
 fixture = "toolchain-wrong-hash"
 check = "toolchain:fetch"
+
+[items.must-fail-asan-overflow]
+what = "ci:sanitizers refuses a heap-buffer-overflow"
+environment = "linux"
+job = "must-fail"
+fixture = "asan-overflow"
+check = "ci:sanitizers"
+
+[items.must-fail-ubsan-signed-overflow]
+what = "ci:sanitizers refuses a signed integer overflow"
+environment = "linux"
+job = "must-fail"
+fixture = "ubsan-signed-overflow"
+check = "ci:sanitizers"
+
+[items.must-fail-tsan-race]
+what = "ci:sanitizers refuses a data race, where the lock allows TSan"
+environment = "linux"
+job = "must-fail"
+fixture = "tsan-race"
+check = "ci:sanitizers"
+
+[items.must-fail-valgrind-leak]
+what = "ci:valgrind refuses a leaking program"
+environment = "linux"
+job = "must-fail"
+fixture = "valgrind-leak"
+check = "ci:valgrind"

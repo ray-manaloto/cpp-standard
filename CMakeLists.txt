@@ -16,6 +16,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # for the coverage step.
 set(CPPSTD_GCOV "" CACHE STRING "gcov executable for the coverage step")
 
+# The configure-time probes (D39, D42) write build/<preset>/capabilities.json,
+# which `mise run ci:caps` compares with the committed lock.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/probes.cmake")
+
 enable_testing()
 
 add_subdirectory(src)

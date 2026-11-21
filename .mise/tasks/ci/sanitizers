@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#MISE description="The sanitizer check: run a preset's tests, failing by sanitizer name (D19, D37)"
+#USAGE arg "[preset]" help="The gate preset whose build tree is tested (e.g. gcc16-asan-ubsan, clang23-tsan)"
+#USAGE flag "--build-dir <dir>" help="A build tree to test (default: build/<preset>)"
+#
+# environment-standard.md section 5 steps 4 and 6 (D19): the sanitizer presets' tests run under
+# ASan+UBSan or TSan (the flags are the presets', cmake/presets/checks.json); any sanitizer
+# report fails the check, named after the sanitizer that fired — the gate's failure names the
+# capability, like the capability comparison does (D42). The asan-overflow, ubsan-signed-overflow
+# and tsan-race must-fail fixtures run this same check on a planted fault and expect the failure
+# named "ci:sanitizers" with that sanitizer's own diagnostic.
+set -euo pipefail
+repo="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+if [[ -n "${usage_build_dir:-}" ]]; then
+  dir="${usage_build_dir}"
+  label="$dir"
+  run=(ctest --test-dir "$dir" --verbose --no-tests=error)
+elif [[ -n "${usage_preset:-}" ]]; then
+  dir="$repo/build/$usage_preset"
+  label="$usage_preset"
+  run=(ctest --preset "$usage_preset" --verbose --no-tests=error)
+else
+  echo "ci:sanitizers: FAIL give a preset or --build-dir"
+  exit 1
+fi
+echo "::group::sanitizers $label"
+rc=0
+out="$("${run[@]}" 2>&1)" || rc=$?
+printf '%s\n' "$out"
+echo "::endgroup::"
+fired=()
+for sanitizer in AddressSanitizer LeakSanitizer ThreadSanitizer UndefinedBehaviorSanitizer; do
+  if grep -Eq "(ERROR|WARNING|SUMMARY): $sanitizer:|$sanitizer:DEADLYSIGNAL" <<<"$out"; then
+    fired+=("$sanitizer")
+  fi
+done
+# GCC and Clang UBSan may emit just a source location and a runtime diagnostic.
+if grep -Eq ':[0-9]+(:[0-9]+)?: runtime error: ' <<<"$out"; then
+  fired+=(UndefinedBehaviorSanitizer)
+fi
+if [[ ${#fired[@]} -gt 0 ]]; then
+  echo "ci:sanitizers: FAIL $label: ${fired[*]} reported a fault (the sanitizer output is above)"
+elif [[ $rc -ne 0 ]]; then
+  echo "ci:sanitizers: FAIL $label: a test failed without a sanitizer report (output above)"
+else
+  echo "PASS: no sanitizer reported a fault for $label"
+  exit 0
+fi
+exit 1

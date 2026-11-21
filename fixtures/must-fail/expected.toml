@@ -1,6 +1,15 @@
 # The must-fail fixtures (environment-standard.md section 5, D37, D42): one table per fixture directory, naming the
 # check that must refuse it. `mise run ci-must-fail` runs `<fixture>/run` for each; a run that exits 0 means the
 # check refused the planted fault as it must. Ticket #130 adds the first one; Ticket #132 (M1a PR 4) adds the gate's.
+# A fixture with a `capability` row is tied to the capability lock (D42): it applies to the compilers whose lock
+# entry allows that capability — the presets it applies to are those compilers' presets of that check — and
+# `mise run ci-must-fail` runs it once per such compiler, passing the compiler as the run's argument.
+
+[fixture.asan-overflow]
+check = "ci:sanitizers"
+capability = "asan"
+presets = ["gcc16-asan-ubsan", "clang23-asan-ubsan", "p2996-asan-ubsan"]
+what = "a heap-buffer-overflow on the heap, refused by the ASan check (D37)"
 
 [fixture.toolchain-unattested]
 check = "toolchain:fetch"
@@ -17,6 +26,24 @@ what = "a source with one uncovered line, measured with clang23's llvm-cov gcov 
 [fixture.uncovered-line-p2996]
 check = "ci:coverage"
 what = "a source with one uncovered line, measured with the p2996 toolchain's llvm-cov gcov (D88, D131)"
+
+[fixture.ubsan-signed-overflow]
+check = "ci:sanitizers"
+capability = "ubsan"
+presets = ["gcc16-asan-ubsan", "clang23-asan-ubsan", "p2996-asan-ubsan"]
+what = "a signed integer overflow, refused by the UBSan check (D37)"
+
+[fixture.tsan-race]
+check = "ci:sanitizers"
+capability = "tsan"
+presets = ["gcc16-tsan", "clang23-tsan", "p2996-tsan"]
+what = "a data race on two threads, refused by the TSan check, where the lock allows TSan (D37, D42)"
+
+[fixture.valgrind-leak]
+check = "ci:valgrind"
+capability = "valgrind"
+presets = ["gcc16-valgrind"]
+what = "a leaking program, refused by the Valgrind check, where the lock allows Valgrind (D37, D42)"
 
 [fixture.vcpkg-baseline]
 check = "vcpkg:bootstrap"

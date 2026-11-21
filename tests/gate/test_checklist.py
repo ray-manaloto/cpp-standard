@@ -140,7 +140,11 @@ class Checker(unittest.TestCase):
     """Rules 3 and 4: the checker's results JSON and its exit codes."""
 
     def run_check(
-        self, items: str, results: str | None, summary: bool = False
+        self,
+        items: str,
+        results: str | None,
+        summary: bool = False,
+        lock: dict | None = None,
     ) -> tuple[int, dict | None, str | None]:
         """Run the checker on the two texts and return its exit code, the parsed
         JSON or None when it wrote none, and the summary text or None. A None
@@ -154,6 +158,9 @@ class Checker(unittest.TestCase):
                 results_path.write_text(results, encoding="utf-8")
             out_path = d / "out.json"
             argv = [str(items_path), str(results_path), str(out_path)]
+            if lock is not None:
+                (d / "lock.json").write_text(json.dumps(lock))
+                argv += ["--lock", str(d / "lock.json")]
             summary_path = d / "summary.md"
             if summary:
                 argv += ["--summary", str(summary_path)]
@@ -322,15 +329,60 @@ check = "ci"
         self.assertEqual(results["must-fail-toolchain-unattested"], "passed")
         self.assertEqual(results["must-fail-toolchain-wrong-hash"], "not run")
 
+    def test_only_an_explicit_optional_tsan_skip_is_accepted(self) -> None:
+        items = ITEMS_FILE.read_text(encoding="utf-8")
+        rows = tomllib.loads(items)["items"]
+        green = "".join(f"{row['job']} {key} passed\n" for key, row in rows.items())
+        results = green.replace(
+            "build-gcc16-tsan passed", "build-gcc16-tsan skipped"
+        ).replace("sanitizers-gcc16-tsan passed", "sanitizers-gcc16-tsan skipped")
+        lock = json.loads(checklist.DEFAULT_LOCK.read_text())
+        entries = lock["environments"]["linux-arm64"]["presets"]
+        entries["gcc16-tsan"]["capabilities"]["tsan"] = True
+        rc, report, _ = self.run_check(items, results, lock=lock)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(len(report["items"]), len(rows))
+        entries["gcc16-tsan"]["capabilities"]["tsan"] = False
+        entries["gcc16-tsan"]["skip_reasons"] = {"tsan": "runtime unavailable"}
+        self.assertEqual(self.run_check(items, results, lock=lock)[0], 0)
+        self.assertNotEqual(
+            self.run_check(
+                items,
+                results.replace("caps-gcc16-tsan passed", "caps-gcc16-tsan skipped"),
+                lock=lock,
+            )[0],
+            0,
+        )
+        results = results.replace(
+            "must-fail-tsan-race passed", "must-fail-tsan-race skipped"
+        )
+        entries["clang23-tsan"]["capabilities"]["tsan"] = True
+        rc, report, _ = self.run_check(items, results, lock=lock)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(len(report["items"]), len(rows))
+        for preset in ("clang23-tsan", "p2996-tsan"):
+            entries[preset]["capabilities"]["tsan"] = False
+            entries[preset]["skip_reasons"] = {"tsan": "runtime unavailable"}
+        self.assertEqual(self.run_check(items, results, lock=lock)[0], 0)
+        rc, _, _ = self.run_check(
+            TWO_ITEMS,
+            GREEN.replace(
+                "build-gcc16-coverage passed", "build-gcc16-coverage skipped"
+            ),
+        )
+        self.assertNotEqual(rc, 0)
+
     def test_the_real_checklist_passes_a_full_green_run(self) -> None:
         items = tomllib.loads(ITEMS_FILE.read_text(encoding="utf-8"))["items"]
         pairs = {(row["job"], item_id) for item_id, row in items.items()}
         results = "".join(f"{job} {item_id} passed\n" for job, item_id in sorted(pairs))
         rc, out, _ = self.run_check(ITEMS_FILE.read_text(encoding="utf-8"), results)
         self.assertEqual(rc, 0)
-        # build, tests and coverage for each of the three M1a presets, plus one
-        # item per must-fail fixture.
-        self.assertEqual(len(out["items"]), 15)
+        # build and caps for each of the ten gate presets, the kind's own check
+        # per preset (tests and coverage, sanitizers, or Valgrind), and one item
+        # per must-fail fixture: 12 coverage legs, 9 ASan+UBSan legs, 9 TSan
+        # legs, 3 Valgrind legs and 10 fixtures.
+        self.assertEqual(len(out["items"]), 43)
         self.assertEqual({entry["result"] for entry in out["items"]}, {"passed"})
 
 
@@ -363,11 +415,26 @@ class Mapping(unittest.TestCase):
 
     def test_the_workflow_gates_exactly_the_gate_presets(self) -> None:
         self.assertEqual(self.matrix_presets, self.gate_presets)
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        matrix = re.search(r"^        preset: \[(.+)\]$", ci, re.MULTILINE)
+        self.assertEqual(
+            [p.strip() for p in matrix.group(1).split(",")], self.gate_presets
+        )
 
-    def test_every_preset_has_build_tests_and_coverage_items(self) -> None:
+    def test_every_preset_has_the_items_of_the_report_lines_it_writes(self) -> None:
+        # build and caps for every gate preset (the gate writes both per preset),
+        # then the preset kind's own check: tests and coverage, sanitizers, or
+        # Valgrind.
         for preset in self.gate_presets:
-            for leg in ("build", "tests", "coverage"):
+            for leg in ("build", "caps"):
                 self.assertIn(f"{leg}-{preset}", self.items)
+            if preset.endswith("-coverage"):
+                for leg in ("tests", "coverage"):
+                    self.assertIn(f"{leg}-{preset}", self.items)
+            elif preset.endswith("-valgrind"):
+                self.assertIn(f"valgrind-{preset}", self.items)
+            else:
+                self.assertIn(f"sanitizers-{preset}", self.items)
 
     def test_every_fixture_has_an_item_naming_its_check(self) -> None:
         for name, fixture in self.expected.items():
@@ -385,15 +452,17 @@ class Mapping(unittest.TestCase):
                 self.assertIn(row["preset"], self.matrix_presets, item_id)
                 stage = item_id.removesuffix(f"-{row['preset']}")
                 command = {
-                    "build": 'build "$preset"',
+                    "build": 'cmake --build --preset "$preset"',
                     "tests": 'test_preset "$preset"',
                     "coverage": 'mise run -q ci:coverage "$preset"',
+                    "caps": 'mise run -q ci:caps "$preset"',
+                    "sanitizers": 'mise run -q ci:sanitizers "$preset"',
+                    "valgrind": 'mise run -q ci:valgrind "$preset"',
                 }[stage]
                 self.assertRegex(block, r"(?m)^          mise run ci$")
                 self.assertIn("CPPSTD_GATE_REPORT:", block)
                 gate = CI_DEFAULT.read_text(encoding="utf-8")
                 self.assertIn(f'run_check "{stage}-$preset" {command}', gate)
-                self.assertIn('cmake --build --preset "$1"', gate)
                 self.assertIn('ctest --preset "$1" --no-tests=error', gate)
             else:
                 fixture = row["fixture"]

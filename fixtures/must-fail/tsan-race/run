@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Ticket #134: a data race on two threads must be refused by the TSan check (D37, D42)
+exec "$(dirname "$0")/../sanitizer-fault.sh" tsan "$1"

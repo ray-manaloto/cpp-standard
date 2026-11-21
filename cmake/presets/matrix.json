@@ -11,6 +11,34 @@
     {
       "configurePreset": "p2996-coverage",
       "name": "p2996-coverage"
+    },
+    {
+      "configurePreset": "gcc16-asan-ubsan",
+      "name": "gcc16-asan-ubsan"
+    },
+    {
+      "configurePreset": "clang23-asan-ubsan",
+      "name": "clang23-asan-ubsan"
+    },
+    {
+      "configurePreset": "p2996-asan-ubsan",
+      "name": "p2996-asan-ubsan"
+    },
+    {
+      "configurePreset": "gcc16-tsan",
+      "name": "gcc16-tsan"
+    },
+    {
+      "configurePreset": "clang23-tsan",
+      "name": "clang23-tsan"
+    },
+    {
+      "configurePreset": "p2996-tsan",
+      "name": "p2996-tsan"
+    },
+    {
+      "configurePreset": "gcc16-valgrind",
+      "name": "gcc16-valgrind"
     }
   ],
   "configurePresets": [
@@ -37,6 +65,62 @@
         "coverage"
       ],
       "name": "p2996-coverage"
+    },
+    {
+      "inherits": [
+        "base",
+        "gcc16",
+        "asan-ubsan"
+      ],
+      "name": "gcc16-asan-ubsan"
+    },
+    {
+      "inherits": [
+        "base",
+        "clang23",
+        "asan-ubsan"
+      ],
+      "name": "clang23-asan-ubsan"
+    },
+    {
+      "inherits": [
+        "base",
+        "p2996",
+        "asan-ubsan"
+      ],
+      "name": "p2996-asan-ubsan"
+    },
+    {
+      "inherits": [
+        "base",
+        "gcc16",
+        "tsan"
+      ],
+      "name": "gcc16-tsan"
+    },
+    {
+      "inherits": [
+        "base",
+        "clang23",
+        "tsan"
+      ],
+      "name": "clang23-tsan"
+    },
+    {
+      "inherits": [
+        "base",
+        "p2996",
+        "tsan"
+      ],
+      "name": "p2996-tsan"
+    },
+    {
+      "inherits": [
+        "base",
+        "gcc16",
+        "valgrind"
+      ],
+      "name": "gcc16-valgrind"
     }
   ],
   "include": [
@@ -62,6 +146,55 @@
     {
       "configurePreset": "p2996-coverage",
       "name": "p2996-coverage",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "gcc16-asan-ubsan",
+      "name": "gcc16-asan-ubsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "clang23-asan-ubsan",
+      "name": "clang23-asan-ubsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "p2996-asan-ubsan",
+      "name": "p2996-asan-ubsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "gcc16-tsan",
+      "name": "gcc16-tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "clang23-tsan",
+      "name": "clang23-tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "p2996-tsan",
+      "name": "p2996-tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "gcc16-valgrind",
+      "name": "gcc16-valgrind",
       "output": {
         "outputOnFailure": true
       }

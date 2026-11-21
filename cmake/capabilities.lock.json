@@ -1,0 +1,111 @@
+{
+  "environments": {
+    "linux-arm64": {
+      "presets": {
+        "clang23-asan-ubsan": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": false
+          },
+          "skip_reasons": {
+            "valgrind": "Valgrind is gcc16's check on Linux (D37); clang 23 runs the sanitizer checks instead"
+          }
+        },
+        "clang23-coverage": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": false
+          },
+          "skip_reasons": {
+            "valgrind": "Valgrind is gcc16's check on Linux (D37); clang 23 runs the sanitizer checks instead"
+          }
+        },
+        "clang23-tsan": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": false
+          },
+          "skip_reasons": {
+            "valgrind": "Valgrind is gcc16's check on Linux (D37); clang 23 runs the sanitizer checks instead"
+          }
+        },
+        "gcc16-asan-ubsan": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": true
+          },
+          "skip_reasons": {}
+        },
+        "gcc16-coverage": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": true
+          },
+          "skip_reasons": {}
+        },
+        "gcc16-tsan": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": true
+          },
+          "skip_reasons": {}
+        },
+        "gcc16-valgrind": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": true
+          },
+          "skip_reasons": {}
+        },
+        "p2996-asan-ubsan": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": false
+          },
+          "skip_reasons": {
+            "valgrind": "Valgrind is gcc16's check on Linux (D37); the p2996 reference compiler runs the sanitizer checks instead"
+          }
+        },
+        "p2996-coverage": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": false
+          },
+          "skip_reasons": {
+            "valgrind": "Valgrind is gcc16's check on Linux (D37); the p2996 reference compiler runs the sanitizer checks instead"
+          }
+        },
+        "p2996-tsan": {
+          "capabilities": {
+            "asan": true,
+            "tsan": true,
+            "ubsan": true,
+            "valgrind": false
+          },
+          "skip_reasons": {
+            "valgrind": "Valgrind is gcc16's check on Linux (D37); the p2996 reference compiler runs the sanitizer checks instead"
+          }
+        }
+      }
+    }
+  },
+  "schema": 1
+}

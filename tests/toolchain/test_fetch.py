@@ -328,6 +328,38 @@ class ReleaseOnlyTest(Case):
         self.assertIsNone(r.prefix)
         self.assertEqual((self.installed(), self.rebuilt), (None, 0))
 
+    def test_hosted_release_only_refusals_keep_the_same_install(self) -> None:
+        good = FakeImages(make_archive(self.tmp / "good.tar.zst", "baseline"))
+        initial = self.run_fetch("actions", good, release_only=True)
+        self.assertEqual(initial.source, "image")
+        active = self.root / TAG
+        target = active.readlink()
+        self.stage("must never be selected")
+        for verified, payload_hash, reason in (
+            (False, HASH, "attestation"),
+            (True, "badbadbadbadbad0", "inputs-hash.txt"),
+        ):
+            with self.subTest(verified=verified):
+                rejected = FakeImages(
+                    make_archive(self.tmp / "bad.tar.zst", "bad", payload_hash)
+                )
+                check = mock.Mock(return_value=verified)
+                with mock.patch.object(
+                    rejected, "download", wraps=rejected.download
+                ) as pull:
+                    result = self.run_fetch(
+                        "actions", rejected, verifier=check, release_only=True
+                    )
+                check.assert_called_once_with(SUBJECT)
+                self.assertEqual(pull.call_count, int(verified))
+                self.assertIsNone(result.prefix)
+                self.assertEqual(result.errors, [])
+                self.assertEqual(len(result.refusals), 1)
+                self.assertIn(reason, result.refusals[0])
+                self.assertEqual(active.readlink(), target)
+                self.assertEqual(self.installed(), "baseline")
+                self.assertEqual(self.rebuilt, 0)
+
 
 class WaitTest(Case):
     """A job that waits for the staged copy fails when the wait ends without one and never

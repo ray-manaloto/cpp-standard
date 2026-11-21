@@ -2,10 +2,16 @@
 green fails the run, as do an unlisted fixture, a listed one with no `run` and an empty list. The
 real toolchain fixture is planted green with MUST_FAIL_PLANT=accept, which needs neither gh nor the
 network. Run: python3 -I tests/must_fail/test_ci_must_fail.py
+
+The capability fixtures of #134 are stand-ins here too: a fixture with a `capability` row runs once
+per compiler the lock allows, with the compiler as the run's argument (D42); a planted-green one
+fails the run; one unavailable on one of two applicable compilers cannot turn the aggregate into a
+pass; a legacy fixture runs once with no compiler argument.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -21,18 +27,10 @@ _REPO_VARS = subprocess.run(
     ["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True
 ).stdout.split()
 CLEAN_ENV = {k: v for k, v in os.environ.items() if k not in _REPO_VARS}
-_LOCAL_GIT_VARS = frozenset(
-    subprocess.run(
-        ["git", "rev-parse", "--local-env-vars"],
-        capture_output=True,
-        check=True,
-        text=True,
-    ).stdout.split()
-)
 
 
 def clean_git_env() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in _LOCAL_GIT_VARS}
+    env = CLEAN_ENV.copy()
     env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["GIT_TERMINAL_PROMPT"] = "0"
@@ -57,15 +55,58 @@ class Runner(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def fixture(self, name: str, exit_code: int | None, listed: bool = True) -> None:
+    def fixture(
+        self,
+        name: str,
+        exit_code: int | None,
+        listed: bool = True,
+        capability: str | None = None,
+        body: str | None = None,
+    ) -> None:
         d = self.dir / name
         d.mkdir()
-        if exit_code is not None:
-            (d / "run").write_text(f"#!/bin/sh\nexit {exit_code}\n")
+        if exit_code is not None or body is not None:
+            text = body if body is not None else f"exit {exit_code}\n"
+            (d / "run").write_text(f"#!/bin/sh\n{text}")
             (d / "run").chmod(0o755)
         if listed:
+            row = f'[fixture.{name}]\ncheck = "some:check"\n'
+            if capability:
+                row += f'capability = "{capability}"\n'
             with open(self.dir / "expected.toml", "a") as f:
-                f.write(f'[fixture.{name}]\ncheck = "some:check"\n')
+                f.write(row)
+
+    def with_lock(self, compilers: dict[str, dict]) -> subprocess.CompletedProcess[str]:
+        """Runs the runner against a temp capability lock: CPPSTD_CAPS_LOCK and
+        CPPSTD_CAPS_ENVIRONMENT replace the lock and the environment, as the
+        runner's header documents (D42)."""
+        lock = self.dir / "capabilities.lock.json"
+        lock.write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "environments": {
+                        "test-linux-arm64": {
+                            "presets": {
+                                f"{compiler}-tsan": {
+                                    **entry,
+                                    "skip_reasons": {"tsan": "fixture lock reason"},
+                                }
+                                for compiler, entry in compilers.items()
+                            }
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return run(
+            {
+                "CPPSTD_MUST_FAIL_DIR": str(self.dir),
+                "CPPSTD_CAPS_LOCK": str(lock),
+                "CPPSTD_CAPS_ENVIRONMENT": "test-linux-arm64",
+            }
+        )
 
     def local(self) -> subprocess.CompletedProcess[str]:
         (self.dir / "expected.toml").touch()
@@ -76,7 +117,7 @@ class Runner(unittest.TestCase):
         self.fixture("b", 0)
         r = self.local()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("PASS: every must-fail fixture was refused", r.stdout)
+        self.assertIn("PASS: every applicable must-fail fixture was refused", r.stdout)
 
     def test_a_green_fixture_fails_the_run(self) -> None:
         self.fixture("a", 0)
@@ -163,6 +204,93 @@ class Runner(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("a could not run", r.stderr)
         self.assertNotIn("went green", r.stderr)
+
+    def test_a_legacy_fixture_runs_once_with_no_compiler_argument(self) -> None:
+        # A fixture without a capability row is not a capability fixture: it
+        # runs once, with no compiler argument, whatever the lock says.
+        self.fixture("a", 0, body='echo "invoked:$1"\n')
+        r = self.local()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.count("invoked:"), 1)
+        self.assertNotIn("invoked:gcc16", r.stdout)
+
+    def test_a_capability_fixture_runs_once_per_applicable_compiler(self) -> None:
+        # The lock decides where a capability fixture applies (D42): once per
+        # compiler the lock allows, with the compiler as the run's argument,
+        # never where a live probe would; the skip says why (D42).
+        self.fixture("race", 0, capability="tsan", body='echo "invoked:$1"\n')
+        r = self.with_lock(
+            {
+                "gcc16": {"capabilities": {"tsan": True}},
+                "clang23": {"capabilities": {"tsan": True}},
+                "p2996": {"capabilities": {"tsan": False}},
+            }
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.count("invoked:"), 2)
+        self.assertIn("invoked:gcc16", r.stdout)
+        self.assertIn("invoked:clang23", r.stdout)
+        self.assertNotIn("invoked:p2996", r.stdout)
+        self.assertIn("skipped: tsan on p2996", r.stderr)
+
+    def test_a_planted_green_capability_fixture_fails_the_run(self) -> None:
+        self.fixture("race", 1, capability="tsan")
+        r = self.with_lock({"gcc16": {"capabilities": {"tsan": True}}})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("race went green (on gcc16)", r.stderr)
+        self.assertNotIn(
+            "PASS: every applicable must-fail fixture was refused", r.stdout
+        )
+
+    def test_a_capability_fixture_unavailable_on_one_compiler_fails(self) -> None:
+        # Exit 3 on one applicable compiler: the check was not tested there, so
+        # the aggregate is not a pass, even where the fixture ran and was
+        # refused (the runner's status needs ran and no unavailable).
+        self.fixture(
+            "race",
+            None,
+            capability="tsan",
+            body='case "$1" in\n  gcc16) exit 0 ;;\n  clang23) exit 3 ;;\nesac\n',
+        )
+        r = self.with_lock(
+            {
+                "gcc16": {"capabilities": {"tsan": True}},
+                "clang23": {"capabilities": {"tsan": True}},
+            }
+        )
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("race could not run (on clang23)", r.stderr)
+        self.assertNotIn("went green", r.stderr)
+        self.assertNotIn(
+            "PASS: every applicable must-fail fixture was refused", r.stdout
+        )
+
+    def test_a_capability_fixture_that_applies_to_no_compiler_is_skipped(self) -> None:
+        # The lock disallows the capability everywhere: the fixture is skipped
+        # with the lock's reasons and explicitly appears as skipped in the checklist.
+        self.fixture("race", 0, capability="tsan")
+        r = self.with_lock(
+            {
+                "gcc16": {"capabilities": {"tsan": False}},
+                "clang23": {"capabilities": {"tsan": False}},
+                "p2996": {"capabilities": {"tsan": False}},
+            }
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(
+            "skipped: race applies to no compiler here: the lock allows no tsan",
+            r.stdout,
+        )
+        self.assertIn("skipped: tsan on gcc16", r.stderr)
+
+    def test_wrong_refusal_is_reported_as_failed(self) -> None:
+        self.fixture("wrong", 2)
+        report = self.dir / "report.txt"
+        result = run(
+            {"CPPSTD_MUST_FAIL_DIR": str(self.dir), "CPPSTD_GATE_REPORT": str(report)}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(report.read_text(), "must-fail must-fail-wrong failed\n")
 
     def test_a_fixture_name_is_matched_exactly(self) -> None:
         # "a.b" must not match a listed "axb" (a regex dot would).

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#MISE description="The Valgrind check: run a preset's tests under valgrind memcheck, failing by name (D19, D37)"
+#USAGE arg "[preset]" help="The gate preset whose build tree is tested (gcc16-valgrind)"
+#USAGE flag "--build-dir <dir>" help="A build tree to test (default: build/<preset>)"
+#
+# environment-standard.md section 5 step 7 (D19): Valgrind on Linux GCC only; where the check
+# applies comes from the capability lock, never a live probe (D42). Each test runs under
+# `valgrind --leak-check=full` with --error-exitcode, so a leak or an invalid access fails the
+# test and the check. The valgrind-leak must-fail fixture runs this same check on a planted
+# leak and expects the failure named "ci:valgrind" with valgrind's own report.
+set -euo pipefail
+repo="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+if [[ -n "${usage_build_dir:-}" ]]; then
+  dir="${usage_build_dir}"
+  label="$dir"
+elif [[ -n "${usage_preset:-}" ]]; then
+  dir="$repo/build/$usage_preset"
+  label="$usage_preset"
+else
+  echo "ci:valgrind: FAIL give a preset or --build-dir"
+  exit 1
+fi
+valgrind_bin="$(command -v valgrind)" || {
+  echo "ci:valgrind: FAIL valgrind is not on PATH (apt:valgrind, D45)"
+  exit 1
+}
+options="--leak-check=full --errors-for-leak-kinds=definite --error-exitcode=99 --num-callers=20"
+echo "::group::valgrind $label"
+# CTest reuses these per-test filenames on repeated runs.
+shopt -s nullglob
+for log in "$dir/Testing/Temporary"/MemoryChecker.*.log; do
+  rm -- "$log"
+done
+rc=0
+out="$(ctest --test-dir "$dir" -T memcheck \
+  --overwrite "MemoryCheckCommand=$valgrind_bin" \
+  --overwrite "MemoryCheckCommandOptions=$options" \
+  --output-on-failure --no-tests=error 2>&1)" || rc=$?
+printf '%s\n' "$out"
+echo "::endgroup::"
+if grep -Eq 'Defects: [1-9][0-9]*' <<<"$out"; then
+  echo "ci:valgrind: FAIL $label: valgrind reported a defect (see the per-test memcheck logs above)"
+  exit 1
+fi
+if [[ $rc -ne 0 ]]; then
+  echo "ci:valgrind: FAIL $label: a test failed under memcheck without a valgrind report (output above)"
+  exit 1
+fi
+test_ids="$(sed -En 's/^[[:space:]]*[0-9]+\/[0-9]+ MemCheck[[:space:]]+#([0-9]+):.*/\1/p' <<<"$out")"
+if [[ -z "$test_ids" ]]; then
+  echo "ci:valgrind: FAIL $label: no completed memcheck tests"
+  exit 1
+fi
+while IFS= read -r id; do
+  log="$dir/Testing/Temporary/MemoryChecker.$id.log"
+  if ! grep -Eq '^==[0-9]+== ERROR SUMMARY: 0 errors from ' "$log"; then
+    echo "ci:valgrind: FAIL $label: missing clean memcheck summary for test $id"
+    exit 1
+  fi
+done <<<"$test_ids"
+echo "PASS: valgrind reported no defect for $label"

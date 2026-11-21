@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #MISE description="The gate on one preset (gcc16-coverage by default): the quick loop before the full ci"
-#USAGE arg "[preset]" help="a gate preset: gcc16-coverage, clang23-coverage or p2996-coverage" default="gcc16-coverage"
-# environment-standard.md section 5. The same steps as `mise run ci` (vcpkg baseline check, configure,
-# build, test, ci:coverage) for one preset, in the tools image. p2996-coverage needs CPPSTD_P2996_PREFIX.
+#USAGE arg "[preset]" help="a gate preset: <compiler>-coverage, <compiler>-asan-ubsan, <compiler>-tsan or <compiler>-valgrind" default="gcc16-coverage"
+# environment-standard.md section 5. The same steps as `mise run ci` (the capability lock's
+# filter, vcpkg baseline check, configure, build, ci:caps, ci:coverage, ci:sanitizers or
+# ci:valgrind) for one preset, in the tools image. p2996 presets need CPPSTD_P2996_PREFIX.
 set -euo pipefail
 CPPSTD_GATE_PRESETS="${usage_preset:-gcc16-coverage}" exec mise run -q ci

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Ticket #134: a heap-buffer-overflow must be refused by the ASan check (D37, D42)
+exec "$(dirname "$0")/../sanitizer-fault.sh" asan "$1"

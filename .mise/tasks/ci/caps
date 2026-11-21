@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#MISE description="The capability check: the preset's probes match cmake/capabilities.lock.json (D42)"
+#USAGE arg "[preset]" help="The gate preset whose build tree's capabilities.json is compared"
+#USAGE flag "--build-dir <dir>" help="A build tree whose capabilities.json is compared (default: build/<preset>)"
+#
+# environment-standard.md section 5 step 1 (D42): the configure-time probes (cmake/probes.cmake)
+# write build/<preset>/capabilities.json; this check compares them with the committed capability
+# lock and fails by capability name on any disagreement. The gate runs it after each configure;
+# tests/caps/ plants a disagreement to show the failure naming the capability.
+set -euo pipefail
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+if [[ -n "${usage_build_dir:-}" ]]; then
+  dir="${usage_build_dir}"
+elif [[ -n "${usage_preset:-}" ]]; then
+  dir="$root/build/$usage_preset"
+else
+  echo "ci:caps: FAIL give a preset or --build-dir"
+  exit 1
+fi
+exec python3 -I "$root/python/caps/caps.py" check "$dir/capabilities.json" \
+  --lock "${CPPSTD_CAPS_LOCK:-$root/cmake/capabilities.lock.json}" --preset "${usage_preset:-}"

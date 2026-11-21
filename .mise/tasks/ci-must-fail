@@ -4,9 +4,14 @@
 # in the tools image, and it runs the same way outside Actions. fixtures/must-fail/expected.toml lists each fixture and
 # the check that must refuse it; `<fixture>/run` exits 0 only when that check refused the fault for the right reason,
 # and 3 when it could not run at all (the toolchain fixture needs gh, a GitHub token and the network).
-# A fixture that goes green (the check accepted the fault), a listed fixture with no `run`, a fixture directory that
-# expected.toml does not list, or an empty list fails the run. $CPPSTD_MUST_FAIL_DIR replaces fixtures/must-fail for
-# the runner's own test (tests/must_fail/). Ticket #130 adds the first fixture; M1a PR 4 adds the gate's.
+# A fixture with a `capability` row applies where the committed capability lock allows that capability (D42, never a
+# live probe): the runner runs it once per such compiler, passing the compiler as the run's argument, and skips it,
+# with the lock's reasons, where the lock disallows it. A fixture that goes green (the check accepted the fault), a
+# listed fixture with no `run`, a fixture directory that expected.toml does not list, or an empty list fails the run.
+# $CPPSTD_MUST_FAIL_DIR replaces fixtures/must-fail for the runner's own test (tests/must_fail/); $CPPSTD_CAPS_LOCK
+# and $CPPSTD_CAPS_ENVIRONMENT replace the lock and the environment the same way (tests/caps/ and tests/must_fail/).
+# Ticket #130 adds the first fixture; M1a PR 4 adds the gate's; #134 ties the sanitizer, TSan and Valgrind fixtures
+# to the capability lock.
 set -euo pipefail
 # A git hook exports GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and the rest; clear them so a test or fixture's
 # scratch `git init` or `git commit` cannot reach the real repository (#280).
@@ -14,6 +19,7 @@ set -euo pipefail
 unset $(git rev-parse --local-env-vars)
 root="${MISE_PROJECT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
 dir="${CPPSTD_MUST_FAIL_DIR:-$root/fixtures/must-fail}"
+lock="${CPPSTD_CAPS_LOCK:-$root/cmake/capabilities.lock.json}"
 listed="$(python3 -I -c '
 import sys, tomllib
 try:
@@ -24,7 +30,12 @@ except (OSError, tomllib.TOMLDecodeError) as e:
 for name, row in sorted(fixtures.items()):
     if not isinstance(row, dict) or not row.get("check"):
         sys.exit(f"FAIL: fixture {name} in {sys.argv[1]} names no check")
-    print(name, row["check"])
+    presets = row.get("presets", [])
+    if not isinstance(presets, list) or not all(
+        isinstance(preset, str) and preset.replace("-", "").isalnum() for preset in presets
+    ) or len(set(presets)) != len(presets):
+        sys.exit(f"FAIL: fixture {name} in {sys.argv[1]} lists invalid presets")
+    print(name, row["check"], row.get("capability", ""), ",".join(presets))
 ' "$dir/expected.toml")"
 [[ -n "$listed" ]] || {
   echo "FAIL: $dir/expected.toml lists no fixture" >&2
@@ -43,40 +54,89 @@ for d in "$dir"/*/; do
     failed=1
   }
 done
-while read -r -u 3 name check; do
+while read -r -u 3 name check capability presets; do
   echo "::group::must-fail $name ($check)"
-  status=
   if [[ ! -x "$dir/$name/run" ]]; then
     echo "FAIL: $name has no executable run" >&2
     failed=1
-  else
+    echo "::endgroup::"
+    continue
+  fi
+  compilers=("")
+  if [[ -n "$capability" ]]; then
+    # The lock decides where a capability fixture applies (D42): the fixture runs once per
+    # compiler the lock allows the capability for, never where a live probe would.
+    allowed="$(python3 -I "$root/python/caps/caps.py" applicable "$capability" --lock "$lock" --presets "${presets:-}")" || {
+      echo "FAIL: the lock lookup for $name ($capability) failed" >&2
+      failed=1
+      echo "::endgroup::"
+      continue
+    }
+    read -r -a compilers <<<"$allowed"
+    if [[ ${#compilers[@]} -eq 0 ]]; then
+      echo "skipped: $name applies to no compiler here: the lock allows no $capability"
+      if [[ "$capability" != tsan ]]; then
+        echo "FAIL: $name requires $capability" >&2
+        failed=1
+      elif [[ -n "${CPPSTD_GATE_REPORT:-}" ]]; then
+        printf 'must-fail must-fail-%s skipped\n' "$name" >>"$CPPSTD_GATE_REPORT"
+      fi
+      echo "::endgroup::"
+      continue
+    fi
+  fi
+  ran=0
+  unavailable=0
+  fixture_failed=0
+  repo_changed=0
+  for compiler in "${compilers[@]}"; do
     rc=0
     state="$(repo_state)"
-    "$dir/$name/run" </dev/null || rc=$?
+    if [[ -n "$compiler" ]]; then
+      "$dir/$name/run" "$compiler" </dev/null || rc=$?
+    else
+      "$dir/$name/run" </dev/null || rc=$?
+    fi
     if [[ "$(repo_state)" != "$state" ]]; then
       echo "FAIL: $name changed the repository (HEAD or core.worktree)" >&2
-      failed=1
-      status=failed
+      repo_changed=1
     fi
     if [[ $rc -eq 0 ]]; then
-      echo "PASS: $check refused $name"
+      ran=1
     elif [[ $rc -eq 3 ]]; then
-      # Exit 3: the fixture could not run (no gh, token or network); the check was not tested.
-      echo "FAIL: $name could not run: see its output (gh, GH_TOKEN and network are needed)" >&2
-      failed=1
+      # Exit 3: the fixture could not run (no gh, token, compiler or network); the check was not tested.
+      echo "FAIL: $name could not run (on ${compiler:-the host}): see its output (gh, GH_TOKEN, the compilers and network are needed)" >&2
+      unavailable=1
+    elif [[ $rc -eq 1 ]]; then
+      ran=1
+      fixture_failed=1
+      if [[ -n "$compiler" ]]; then
+        echo "FAIL: $name went green (on $compiler): $check did not refuse it as it must" >&2
+      else
+        echo "FAIL: $name went green: $check did not refuse it as it must" >&2
+      fi
+    elif [[ $rc -eq 2 ]]; then
+      echo "FAIL: $name did not demonstrate the expected refusal on ${compiler:-the host}" >&2
+      fixture_failed=1
     else
-      echo "FAIL: $name went green: $check did not refuse it as it must" >&2
-      failed=1
+      echo "FAIL: $name returned an unexpected result (on ${compiler:-the host}): see its output" >&2
+      unavailable=1
     fi
-    if [[ -z "$status" && $rc -ne 3 ]]; then
-      status=failed
-      [[ $rc -ne 0 ]] || status=passed
-    fi
+  done
+  status=
+  if [[ $fixture_failed -eq 1 || $repo_changed -eq 1 ]]; then
+    status=failed
+  elif [[ $ran -eq 1 && $unavailable -eq 0 ]]; then
+    status=passed
   fi
-  if [[ -n "${CPPSTD_GATE_REPORT:-}" && -n "$status" ]]; then
+  if [[ $status == passed ]]; then
+    echo "PASS: $check refused $name"
+  fi
+  if [[ -n "$status" && -n "${CPPSTD_GATE_REPORT:-}" ]]; then
     printf 'must-fail must-fail-%s %s\n' "$name" "$status" >>"$CPPSTD_GATE_REPORT"
   fi
+  [[ $status == passed ]] || failed=1
   echo "::endgroup::"
 done 3<<<"$listed"
 [[ $failed -eq 0 ]] || exit 1
-echo "PASS: every must-fail fixture was refused"
+echo "PASS: every applicable must-fail fixture was refused"

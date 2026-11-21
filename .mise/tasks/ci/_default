@@ -1,30 +1,40 @@
 #!/usr/bin/env bash
-#MISE description="The gate: configure, build, test and gcov-mode coverage for each gate preset"
-# environment-standard.md section 5. The tracer bullet (#125) runs steps 1,
-# 3, 4 and 5 for the gcc16-coverage preset. M1a PR 4 (#132) adds the clang23 and p2996
-# presets, each with its own coverage report (ci:coverage); the probes, the capability lock and
-# gate:policy are further steps in this file.
+#MISE description="The gate: configure, build, test, coverage, sanitizers and Valgrind for the gate presets"
+# environment-standard.md section 5. The tracer bullet (#125) ran steps 1, 3, 4 and 5 for the
+# gcc16-coverage preset; #132 added the clang23 and p2996 presets, each with its own coverage
+# report (ci:coverage); #134 adds the capability comparison of step 1 (ci:caps), the sanitizer
+# presets of step 6 (ci:sanitizers) and the Valgrind run of step 7 (ci:valgrind) (D19, D37, D42).
 set -euo pipefail
 
-# The gate presets. A later PR takes the list from the capability lock. ci:fast runs the gate on one
-# of them through CPPSTD_GATE_PRESETS (space-separated).
-read -r -a gate_presets <<<"${CPPSTD_GATE_PRESETS:-gcc16-coverage clang23-coverage p2996-coverage}"
+# Coverage and ASan+UBSan run on all three compilers, and Valgrind on Linux GCC.
+# The committed lock decides whether to run TSan and logs the reason for every skip.
+read -r -a requested <<<"${CPPSTD_GATE_PRESETS:-gcc16-coverage clang23-coverage p2996-coverage gcc16-asan-ubsan clang23-asan-ubsan p2996-asan-ubsan gcc16-tsan clang23-tsan p2996-tsan gcc16-valgrind}"
+
+if [[ ${#requested[@]} -eq 0 ]]; then
+  echo "FAIL: no gate presets requested"
+  exit 1
+fi
 
 root="${MISE_PROJECT_ROOT:-$PWD}"
 cd "$root"
 
-# A preset name is a build directory name (build_and_test removes build/<preset>).
-for preset in "${gate_presets[@]}"; do
-  [[ "$preset" =~ ^[a-z0-9]+-coverage$ ]] || {
+# A preset name is a build directory name (configure removes build/<preset>).
+for preset in "${requested[@]}"; do
+  [[ "$preset" =~ ^[a-z0-9]+-(coverage|asan-ubsan|tsan|valgrind)$ ]] || {
     echo "FAIL: \"$preset\" is not a gate preset name"
     exit 1
   }
 done
 
+# The committed capability lock filters the candidates (D42).
+lock="${CPPSTD_CAPS_LOCK:-$root/cmake/capabilities.lock.json}"
+allowed="$(python3 -I "$root/python/caps/caps.py" gate-presets \
+  --lock "$lock" --requested "${requested[*]}")"
 # Step 0: the dependencies are the pinned ones (vcpkg at the baseline, D113), and the p2996
 # presets have a toolchain (toolchain:fetch prints its prefix; the workflow passes it).
 mise run -q vcpkg:bootstrap --check
-if [[ " ${gate_presets[*]} " == *" p2996-coverage "* && ! -d "${CPPSTD_P2996_PREFIX:-}/bin" ]]; then
+if [[ " ${requested[*]} " == *" p2996-"* &&
+  (-z "${CPPSTD_P2996_PREFIX:-}" || ! -d "$CPPSTD_P2996_PREFIX/bin") ]]; then
   echo "FAIL: CPPSTD_P2996_PREFIX must name the installed p2996 toolchain (mise run toolchain:fetch)"
   exit 1
 fi
@@ -44,10 +54,10 @@ run_check() { # <item> <command> [args...]
 }
 
 # Steps 1 and 3: configure and build in an empty build tree.
-build() { # <preset>
+configure() { # <preset>
   rm -rf "build/$1" || return "$?"
   echo "::group::configure $1"
-  cmake --preset "$1" || {
+  cmake --preset "${2:-$1}" -B "build/$1" -DCPPSTD_GATE_PRESET="$1" || {
     # vcpkg prints only "unable to detect the compiler"; its own logs say why.
     echo "::endgroup::"
     echo "::group::vcpkg logs for $1 (ninja: $(command -v ninja || echo none))"
@@ -61,9 +71,6 @@ build() { # <preset>
     return 1
   }
   echo "::endgroup::"
-  echo "::group::build $1"
-  cmake --build --preset "$1" || return "$?"
-  echo "::endgroup::"
 }
 
 # Step 4: run the tests.
@@ -74,10 +81,42 @@ test_preset() { # <preset>
   echo "::endgroup::"
 }
 
-for preset in "${gate_presets[@]}"; do
-  run_check "build-$preset" build "$preset"
-  run_check "tests-$preset" test_preset "$preset"
+probe_disabled() {
+  configure "$1" "${1%-tsan}-coverage" && mise run -q ci:caps "$1"
+}
+
+for preset in "${requested[@]}"; do
+  if [[ " $allowed " != *" $preset "* ]]; then
+    # Probe with the same compiler but without requiring a working TSan runtime
+    # during compiler detection. The artifact and lock key still name this leg.
+    run_check "caps-$preset" probe_disabled "$preset"
+    if [[ -n "${CPPSTD_GATE_REPORT:-}" ]]; then
+      printf 'gate-linux-arm64 %s skipped\n' "build-$preset" "sanitizers-$preset" >>"$CPPSTD_GATE_REPORT"
+    fi
+    continue
+  fi
+  if ! configure "$preset"; then
+    if [[ -n "${CPPSTD_GATE_REPORT:-}" ]]; then
+      printf 'gate-linux-arm64 build-%s failed\n' "$preset" >>"$CPPSTD_GATE_REPORT"
+    fi
+    exit 1
+  fi
+  run_check "caps-$preset" mise run -q ci:caps "$preset"
+  echo "::group::build $preset"
+  run_check "build-$preset" cmake --build --preset "$preset"
+  echo "::endgroup::"
   case "$preset" in
-    *-coverage) run_check "coverage-$preset" mise run -q ci:coverage "$preset" ;;
+    *-coverage)
+      run_check "tests-$preset" test_preset "$preset"
+      run_check "coverage-$preset" mise run -q ci:coverage "$preset"
+      ;;
+    *-asan-ubsan | *-tsan)
+      # Step 6: the tests run under the preset's sanitizers (ci:sanitizers).
+      run_check "sanitizers-$preset" mise run -q ci:sanitizers "$preset"
+      ;;
+    *-valgrind)
+      # Step 7: the tests run under Valgrind memcheck (ci:valgrind, Linux GCC only, D19).
+      run_check "valgrind-$preset" mise run -q ci:valgrind "$preset"
+      ;;
   esac
 done

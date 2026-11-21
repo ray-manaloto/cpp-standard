@@ -5,11 +5,40 @@
         "CMAKE_BUILD_TYPE": "Debug"
       },
       "environment": {
+        "CXXFLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -O0",
+        "LDFLAGS": "-fsanitize=address,undefined"
+      },
+      "hidden": true,
+      "name": "asan-ubsan"
+    },
+    {
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      },
+      "environment": {
         "CXXFLAGS": "--coverage -O0",
         "LDFLAGS": "--coverage"
       },
       "hidden": true,
       "name": "coverage"
+    },
+    {
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      },
+      "environment": {
+        "CXXFLAGS": "-fsanitize=thread -O0",
+        "LDFLAGS": "-fsanitize=thread"
+      },
+      "hidden": true,
+      "name": "tsan"
+    },
+    {
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      },
+      "hidden": true,
+      "name": "valgrind"
     }
   ],
   "version": 13

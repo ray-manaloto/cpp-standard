@@ -1,12 +1,12 @@
 """The gate checklist checker (D119): gate-items.toml and the run's report lines in, the results
 JSON out. post-merge.yml (D119) runs the gate and the must-fail fixtures on every M1a preset after
 each push to main and once a day; its jobs report what each check's outcome was, and this script
-writes the results JSON — one entry per item, passed / failed / not run — that ticks the checklist
+writes the results JSON — one entry per item, passed / failed / skipped / not run — that ticks the checklist
 (D119) and, later, review:digest reads. An item whose check did not run is reported "not run",
-never passed (spec #133); any item not passed exits non-zero, so the run fails.
+never passed (spec #133). Only explicit capability-lock TSan skips are exempt.
 
-A report line is `<job> <item> <passed|failed>`: only a check with an outcome writes a line, so a
-skipped or cancelled check has no line and its items come out "not run".
+A report line is `<job> <item> <passed|failed|skipped>`: only a check with an outcome writes a line, so a
+cancelled check has no line and its items come out "not run".
 
 Run: python3 -I python/gate/checklist.py gate-items.toml results.txt gate-results.json
 """
@@ -23,9 +23,14 @@ from pathlib import Path
 # tick; an item of another environment, such as a macOS one (D46), belongs to that workflow's run.
 ENVIRONMENT = "linux"
 # The statuses a report line may carry; the absence of a line is "not run".
-REPORTED = ("passed", "failed")
+REPORTED = ("passed", "failed", "skipped")
 FIELDS = ("what", "environment", "job", "check")
 OPTIONAL_FIELDS = ("preset", "fixture")
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "python/caps"))
+from caps import DEFAULT_LOCK, CapsError, load_lock, preset_entry
 
 
 class ChecklistError(Exception):
@@ -80,7 +85,7 @@ def load_results(path: Path) -> dict[tuple[str, str], str]:
         parts = line.split()
         if len(parts) != 3:
             raise ChecklistError(
-                f"{path}:{number} is not <job> <item> <passed|failed>: {line}"
+                f"{path}:{number} is not <job> <item> <passed|failed|skipped>: {line}"
             )
         job, item_id, status = parts
         if status not in REPORTED:
@@ -93,13 +98,42 @@ def load_results(path: Path) -> dict[tuple[str, str], str]:
     return results
 
 
-def check(items: list[dict], results: dict[tuple[str, str], str]) -> list[dict]:
+def can_skip(item: dict, lock_path: Path) -> bool:
+    if item.get("fixture") == "tsan-race":
+        registry = _read_toml(ROOT / "fixtures/must-fail/expected.toml")
+        presets = registry.get("fixture", {}).get("tsan-race", {}).get("presets", [])
+    elif item["check"] in {"ci", "ci:sanitizers"}:
+        presets = [item.get("preset", "")]
+    else:
+        return False
+    lock = load_lock(lock_path)
+    if not presets or not all(preset.endswith("-tsan") for preset in presets):
+        return False
+    for preset in presets:
+        entry = preset_entry(lock, "linux-arm64", preset)
+        if (
+            entry["capabilities"].get("tsan") is not False
+            or not entry.get("skip_reasons", {}).get("tsan", "").strip()
+        ):
+            return False
+    return True
+
+
+def check(
+    items: list[dict],
+    results: dict[tuple[str, str], str],
+    lock_path: Path = DEFAULT_LOCK,
+) -> list[dict]:
     """Each item with its result: passed, failed, or not run — a check with no report
     line did not run (spec #133)."""
     rows = []
     for item in items:
         reported = (item["job"], item["id"])
-        rows.append({**item, "result": results.get(reported, "not run")})
+        result = results.get(reported, "not run")
+        if result == "skipped" and not can_skip(item, lock_path):
+            print(f"checklist: {item['id']} cannot be skipped", file=sys.stderr)
+            result = "failed"
+        rows.append({**item, "result": result})
     return rows
 
 
@@ -128,7 +162,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "results",
         type=Path,
-        help="the run's report lines: '<job> <item> <passed|failed>'",
+        help="the run's report lines: '<job> <item> <passed|failed|skipped>'",
     )
     parser.add_argument("out", type=Path, help="the results JSON to write")
     parser.add_argument(
@@ -136,10 +170,11 @@ def main(argv: list[str]) -> int:
         type=Path,
         help="append the results table to this file (the run summary)",
     )
+    parser.add_argument("--lock", type=Path, default=DEFAULT_LOCK)
     args = parser.parse_args(argv)
     try:
-        rows = check(load_items(args.items), load_results(args.results))
-    except (ChecklistError, OSError) as error:
+        rows = check(load_items(args.items), load_results(args.results), args.lock)
+    except (ChecklistError, CapsError, OSError) as error:
         print(f"checklist: FAIL {error}", file=sys.stderr)
         return 1
     args.out.write_text(json.dumps({"items": rows}, indent=2) + "\n", encoding="utf-8")
@@ -148,14 +183,15 @@ def main(argv: list[str]) -> int:
             file.write(summary(rows))
     for row in rows:
         print(f"checklist: {row['id']} {row['result']}")
-    open_items = sum(1 for row in rows if row["result"] != "passed")
+    open_items = sum(1 for row in rows if row["result"] not in ("passed", "skipped"))
     if open_items:
         print(
             f"checklist: FAIL {open_items} of {len(rows)} items not green "
             "(not run or failed; a not-run item never passes, spec #133)"
         )
         return 1
-    print(f"checklist: PASS all {len(rows)} items green")
+    skips = sum(row["result"] == "skipped" for row in rows)
+    print(f"checklist: PASS {len(rows) - skips} passed, {skips} lock-authorized skips")
     return 0
 
 
