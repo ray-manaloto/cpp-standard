@@ -1,0 +1,75 @@
+{
+  "buildPresets": [
+    {
+      "configurePreset": "gcc16-coverage-amd64",
+      "name": "gcc16-coverage-amd64"
+    },
+    {
+      "configurePreset": "clang23-coverage-amd64",
+      "name": "clang23-coverage-amd64"
+    },
+    {
+      "configurePreset": "p2996-coverage-amd64",
+      "name": "p2996-coverage-amd64"
+    }
+  ],
+  "configurePresets": [
+    {
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -D_GLIBCXX_ASSERTIONS",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_HOST_TRIPLET": "x64-linux-gcc16",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-gcc16"
+      },
+      "inherits": "gcc16-coverage",
+      "name": "gcc16-coverage-amd64"
+    },
+    {
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_HOST_TRIPLET": "x64-linux-clang23-libcxx",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang23-libcxx"
+      },
+      "inherits": "clang23-coverage",
+      "name": "clang23-coverage-amd64"
+    },
+    {
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_HOST_TRIPLET": "x64-linux-p2996-libcxx",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-p2996-libcxx"
+      },
+      "inherits": "p2996-coverage",
+      "name": "p2996-coverage-amd64"
+    }
+  ],
+  "include": [
+    "matrix.json"
+  ],
+  "testPresets": [
+    {
+      "configurePreset": "gcc16-coverage-amd64",
+      "name": "gcc16-coverage-amd64",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "clang23-coverage-amd64",
+      "name": "clang23-coverage-amd64",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "configurePreset": "p2996-coverage-amd64",
+      "name": "p2996-coverage-amd64",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "version": 13
+}

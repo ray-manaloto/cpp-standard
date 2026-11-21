@@ -84,4 +84,16 @@ jobs:
               and .runner == $runner and .status == "PASS" and .fail == 0
               and .pass > 0 and .pass + .na == .total and .timing == "verified"
             ' "$root/final.json"
+          image="$(cat "$root/built-image")"
+          [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]]
+          grep -Fx "id=$image" "$root/retained-image.txt"
+          grep -Fx "checkout=$GITHUB_SHA" "$root/retained-image.txt"
+          grep -Fx "tag=cpp-standard-qualified:run-$GITHUB_RUN_ID" "$root/retained-image.txt"
+          for tool in gcc16 clang23 p2996; do
+            preset="$tool-coverage-amd64"
+            for receipt in CMakeCache.txt compile_commands.json ctest.xml core_test.ldd vcpkg-status.txt; do
+              test -s "$root/project/$preset/$receipt"
+            done
+            grep -E "^PASS $preset [^ ]+ [^ ]+ core_test standin_test$" "$root/project.log"
+          done
           cat "$root/checklist.txt"

@@ -1,6 +1,7 @@
 {
   "include": [
-    "cmake/presets/matrix.json"
+    "cmake/presets/matrix.json",
+    "cmake/presets/amd64.json"
   ],
   "version": 13
 }
