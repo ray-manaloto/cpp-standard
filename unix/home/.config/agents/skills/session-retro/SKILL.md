@@ -1,10 +1,12 @@
 ---
 name: session-retro
-description: "Use after a session, a wiki round or any finished piece of work, or when asked for a retrospective: propose improvements to the agent environment, most severe first."
+description: "Use after a session, a wiki round or any finished piece of work, or when asked for a retrospective: find improvements to the agent environment and use Skill Creator to automate recurring workflow problems."
 disable-model-invocation: false
 ---
 
-A **retrospective** is due, asked for by the user or required after a round of work (a kb retro gate, for one). You are suggesting improvements to the coding agent's **environment** to improve future runs.
+# Session Retrospective
+
+A **retrospective** is due, asked for by the user or required after a round of work (a kb retro gate, for one). Improve the coding agent's **environment** for future runs.
 
 ## Steps
 
@@ -22,7 +24,19 @@ A **retrospective** is due, asked for by the user or required after a round of w
 - **No-ops**: look for instructions in steering files that don't modify the agent's behavior. _Use when_ the steering files are large and unwieldy.
 - **Information access**: look for opportunities to increase the agent's access to information. Teeing dev server logs, readonly access to third-party services. _Use when_ a crucial piece of information was not available to the agent.
 
-4. Present these candidates to the user, in order of severity.
+4. Turn recurring mistakes, repeated manual steps and workflow bottlenecks into reusable improvements.
+   Check the existing skills, helpers and checks first. Reuse what already covers the finding. For a gap
+   in a reusable agent workflow, invoke `skill-creator:skill-creator` to update the best existing skill or
+   create a focused one. Put repeatable operations in a script or task and enforce mechanical rules with
+   deterministic checks. Have the skill call those tools where needed.
+
+5. Implement in scope and exercise the improvement on a representative case from the retro. For a
+   guardrail, verify that the original mistake is caught and a valid case still passes. Run any review
+   required by the workflow on the final changes. If the retro is report-only or a change is blocked,
+   record the proposed change and the specific reason it remains pending.
+
+6. Report findings most severe first. For each automation candidate, record what was reused, created,
+   updated or deferred, with the affected paths and verification results where available.
 
 ## Reference
 
@@ -51,4 +65,5 @@ Adapted from mattpocock-skills 1.3.2 `retro` (MIT, see `../LICENSE`).
   agent can run it after a round of work.
 - Named `session-retro`, so it never shares a name with `mattpocock-skills:retro` or with `ticket-retro`, which
   records a finished ticket's lessons in its plan.
-- The opening line also covers a retrospective that a round of work requires; the steps are upstream's.
+- Covers retros required after a round of work and adds a Skill Creator step for reusable workflow
+  improvements, with implementation and verification when in scope.
