@@ -2,7 +2,9 @@
 
 import json
 import os
+import shlex
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -84,6 +86,98 @@ bootstrap_compiler_project "$source"
                 hk = self.root / "hk.log"
                 self.assertEqual(hk.read_text().splitlines(), ["install --mise"])
                 hk.unlink()
+
+    def test_project_shims_do_not_enter_certification(self):
+        # Bootstrap installs project shims. Reshim sees every install in its
+        # data directory, while "which" sees only the active cert profile.
+        (self.root / "source/.mise").mkdir()
+        orphan = "hk"
+        run = self.shell(
+            """
+export MISE_DATA_DIR="$state/cert/mise"
+mise() {
+  [[ "${PATH%%:*}" == "$MISE_DATA_DIR/shims" ]] || return 91
+  mkdir -p "$MISE_DATA_DIR/shims"
+  touch "$MISE_DATA_DIR/shims/$orphan"
+}
+bootstrap_compiler_project "$source"
+mkdir -p "$MISE_DATA_DIR/shims"
+touch "$MISE_DATA_DIR/shims/cmake"
+""",
+            orphan=orphan,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        shims = self.root / "cert/mise/shims"
+        self.assertEqual([s.name for s in shims.iterdir()], ["cmake"])
+        programs = self.root / "programs"
+        programs.mkdir()
+
+        def tool(name, contents):
+            path = programs / name
+            path.write_text("#!/bin/sh\n" + contents + "\n")
+            path.chmod(0o755)
+            return path
+
+        # Shield B2 from the host's system compiler links and dpkg database.
+        gcc = tool("gcc-16", "exit 0")
+        for name in ("cc", "c++", "gcc", "g++", "g++-16", "clang", "clang++", "lldb"):
+            (programs / name).symlink_to(gcc)
+        tool("dpkg-query", "echo llvm-23")
+        tool(
+            "mise",
+            """[ "$1" = --version ] || { [ "$1" = which ] && [ "$2" = cmake ]; }""",
+        )
+        for name in (
+            "cmake",
+            "ninja",
+            "sccache",
+            "vcpkg",
+            "doxygen",
+            "hyperfine",
+            "mold",
+        ):
+            tool(name, f"echo '{name} version 4.5.0'")
+        # Exercise the console entry point with a real Python import into a
+        # writable installation. A control invocation must create a .pyc.
+        module = programs / "gcovr_fixture.py"
+        module.write_text("version = '8.8'\n")
+        script = programs / "gcovr_entry.py"
+        script.write_text("import gcovr_fixture\nprint(gcovr_fixture.version)\n")
+        entry = tool("gcovr", f'exec {shlex.join([sys.executable, str(script)])} "$@"')
+        env = {
+            "PATH": f"{shims}:{programs}:/usr/bin:/bin",
+            "HOME": str(self.root),
+            "PRETTY_NAME": "fixture",
+            "PROBES": str(self.root / "source"),
+            "usage_only": "B1,B2",
+        }
+        subprocess.run([str(entry)], env=env, check=True, capture_output=True)
+        cache = programs / "__pycache__"
+        self.assertTrue(list(cache.glob("gcovr_fixture.*.pyc")))
+        for path in cache.iterdir():
+            path.unlink()
+        cache.rmdir()
+        for injected in (False, True):
+            if injected:
+                (shims / orphan).touch()
+            result = subprocess.run(
+                ["bash", str(ROOT / ".mise/tasks/certify/ubuntu-probes")],
+                cwd=self.root,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertRegex(result.stdout, r"(?m)^B1 +PASS ")
+            if injected:
+                self.assertRegex(
+                    result.stdout, r"(?m)^B2 +FAIL .*stray mise shims: hk$"
+                )
+            else:
+                self.assertRegex(result.stdout, r"(?m)^B2 +PASS .*all 1 mise shims")
+            self.assertFalse(cache.exists())
 
     def test_p2996_build_uses_cert_tools_even_after_changing_directory(self):
         cert = self.root / "cert tools"

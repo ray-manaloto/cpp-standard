@@ -21,7 +21,10 @@ bootstrap_compiler_project() (
   cp -R "$1/." "$project/"
   chmod u+w "$project" "$project/.mise"
   cd "$project"
-  CI=true MISE_TRUSTED_CONFIG_PATHS="$PWD" mise -E ubuntu bootstrap --yes
+  # Project-only tools (including lint shims) live and die with this checkout.
+  # The later locked cert install starts with its own empty mise data directory.
+  export MISE_DATA_DIR="$project/.bootstrap-tools"
+  PATH="$MISE_DATA_DIR/shims:$PATH" CI=true MISE_TRUSTED_CONFIG_PATHS="$PWD" mise -E ubuntu bootstrap --yes
 )
 
 # Run with the locked cert tool binaries on PATH. The project profile selects
