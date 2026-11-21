@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -44,6 +45,45 @@ result=$PWD/result source=$PWD/source state=$PWD
             timeout=10,
             check=False,
         )
+
+    def test_bootstrap_lock_and_postinstall_in_private_project(self):
+        source = self.root / "source"
+        (source / ".mise").mkdir()
+        lock = source / ".mise/mise.lock"
+        lock.write_text("sealed input")
+        hook = tomllib.loads((ROOT / "mise.toml").read_text())["hooks"]["postinstall"]
+        for status in [0, 37]:
+            with self.subTest(status=status):
+                proc = self.shell(
+                    """
+hk() { echo "$*" >> "$state/hk.log"; }
+unset CI
+eval "$postinstall"
+mise() {
+  [[ "$#" == 4 && "$1" == -E && "$2" == ubuntu && "$3" == bootstrap && "$4" == --yes ]]
+  [[ "$PWD" != "$source" && "$MISE_TRUSTED_CONFIG_PATHS" == "$PWD" ]]
+  printf '%s' "$PWD" > "$state/bootstrap-dir"
+  [[ "$(cat .mise/mise.lock)" == "sealed input" ]]
+  tmp_lock="$(mktemp .mise/.mise.lock.XXXXXXXX)"
+  echo refreshed > "$tmp_lock"
+  mv "$tmp_lock" .mise/mise.lock
+  eval "$postinstall"
+  return "$fixture_rc"
+}
+bootstrap_compiler_project "$source"
+""",
+                    TMPDIR=str(self.root / "result"),
+                    postinstall=hook,
+                    fixture_rc=str(status),
+                )
+                self.assertEqual(proc.returncode, status, proc.stderr)
+                self.assertEqual(lock.read_text(), "sealed input")
+                project = Path((self.root / "bootstrap-dir").read_text())
+                self.assertEqual(project.parent.resolve(), self.result.resolve())
+                self.assertFalse(project.exists())
+                hk = self.root / "hk.log"
+                self.assertEqual(hk.read_text().splitlines(), ["install --mise"])
+                hk.unlink()
 
     def prerequisites(self, *, bundle=True, update_rc=0):
         if bundle:

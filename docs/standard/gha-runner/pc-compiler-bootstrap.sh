@@ -12,6 +12,18 @@ install_snapshot_prerequisites() {
   apt-get "${apt_options[@]}" install -y --no-install-recommends ca-certificates curl
 }
 
+# The post-packages task can refresh .mise/mise.lock. Keep the archive sealed
+# and /work empty for the later source build.
+bootstrap_compiler_project() (
+  set -eu
+  project="$(mktemp -d "${TMPDIR:-/tmp}/cpp-bootstrap.XXXXXXXX")"
+  trap 'rm -rf -- "$project"' EXIT
+  cp -R "$1/." "$project/"
+  chmod u+w "$project" "$project/.mise"
+  cd "$project"
+  CI=true MISE_TRUSTED_CONFIG_PATHS="$PWD" mise -E ubuntu bootstrap --yes
+)
+
 # Inside the fresh, capped Ubuntu container only.
 [[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 set -euo pipefail
@@ -46,7 +58,7 @@ tar -C /tmp -xzf /tmp/mise.tar.gz mise/bin/mise
 install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
 rm -rf /tmp/mise /tmp/mise.tar.gz
 mise --version
-mise -E ubuntu bootstrap --yes
+bootstrap_compiler_project /project
 
 # The cert tool profile has its own platform lock, independent of project tools.
 cp -r docs/standard/ubuntu-cert-tools /opt/cpp-standard-tools
