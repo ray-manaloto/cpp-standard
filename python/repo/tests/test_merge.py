@@ -48,7 +48,7 @@ elif args == ["api", "repos/{owner}/{repo}/rules/branches/" + scenario["default"
         sys.exit(1)
     print(scenario["rules"] if isinstance(scenario["rules"], str) else json.dumps(scenario["rules"]))
 elif args[:2] == ["api", "repos/{owner}/{repo}/commits/" + scenario["pr"]["headRefOid"] + "/check-runs"]:
-    if args[2:] != ["-F", "per_page=100"]:
+    if args[2:] != ["--method", "GET", "-F", "per_page=100"]:
         sys.exit(2)
     print(json.dumps({"check_runs": scenario["check_runs"]}))
 elif args[:2] == ["pr", "merge"]:
