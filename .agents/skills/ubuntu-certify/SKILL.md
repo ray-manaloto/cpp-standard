@@ -1,6 +1,6 @@
 ---
 name: ubuntu-certify
-description: Run the Ubuntu 26.10 C++ environment certification (docs/standard/ubuntu.md) in its container, amd64 on the PC's Docker or arm64 in this Mac's Docker Desktop (--local), read the PASS/FAIL/N/A report, and refresh the committed baseline. Use it whenever someone asks to certify, check, verify or re-run the Ubuntu or Linux playbook or checklist, asks "is the Linux container ready for C++", "is the container near native", "what is failing on Ubuntu", after any change to the image (ubuntu-cert.Dockerfile, its pins or tool lock), the p2996 build inputs (docs/standard/ubuntu-p2996/), the docker run flags, or the PC's Docker or kernel, and before calling the Linux environment done.
+description: Qualify the Ubuntu 26.10 amd64 C++ environment through the protected-main pc-compiler.yml workflow and interpret its full checklist and timing evidence. Use the manual tasks to diagnose individual probes, compare reports, or certify arm64 on Docker Desktop.
 ---
 
 # Ubuntu certification
@@ -11,7 +11,27 @@ amd64 on the PC's Docker (the PC's own OS is Omarchy), or arm64 in the
 Mac's Docker Desktop with `--local` (the Docker host is then Docker
 Desktop's Linux VM); kernel-dependent lines say `[host kernel]`. To launch
 and use the arm64 container rather than certify it, see `ubuntu-arm64-run`.
-Three mise tasks:
+
+## Full Ubuntu amd64 qualification
+
+1. Ask the coordinator to dispatch `.github/workflows/pc-compiler.yml` on
+   protected `refs/heads/main` with `certify=true`. Record the run and attempt.
+   The compiler job checks its assignment and isolation on the dedicated
+   `cpp-standard-amd64` self-hosted runner group.
+2. The host launcher runs `mise -E ubuntu bootstrap --yes` in a fresh Ubuntu
+   amd64 build container with 16 CPUs and 48 GiB. It records the resulting
+   image ID in `built-image` and runs the full pinned checklist on that same
+   image, with the build caps removed and A/B enabled for V6.
+3. Read the job's `ubuntu-amd64-<run-id>-<attempt>` artifact. Match `final.json`
+   to the run, attempt, commit and runner. Check `checklist.txt` for all 83
+   playbook rows, zero failures and a reason for each N/A. Qualification
+   requires a successful job and verified timing for both the main and A/B passes.
+
+## Manual diagnostics
+
+Use these tasks to investigate a report or an individual probe. Mac-to-PC SSH,
+`--allow-fail` and `--only` are diagnostic options. For full amd64 qualification,
+use the workflow above. For arm64 certification, use Docker Desktop with `--local`.
 
 | Task | Runs on | Does |
 |---|---|---|
@@ -24,10 +44,10 @@ bench.cpp, heavy.cpp, the CMake probe) are extracted from the playbook's
 appendix at run time: edit them there. The certification installs nothing
 and changes nothing on the PC host (playbook rule 4).
 
-## Reaching the PC
+### Reach the PC from the Mac
 
-Both tasks need `CERT_UBUNTU_SSH`, the ssh destination of the PC: its
-tailnet name or an ssh alias for it, as in `ssh <destination>` from the Mac.
+For manual diagnostics from the Mac, set `CERT_UBUNTU_SSH` to the PC's
+tailnet name or SSH alias, as in `ssh <destination>`.
 It is set per command, never committed (the repository is public):
 
 ```bash
@@ -41,13 +61,13 @@ runs on the Mac. With `--local` (arm64) no ssh is used and everything runs
 in the Mac's Docker Desktop: only in a load window agreed with
 chief-of-staff.
 
-## Run it
+### Run diagnostic probes
 
 From the repository root, on the Mac:
 
 ```bash
 mise run certify:ubuntu-image                                  # once, or after an image change
-MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail                           # the full report, without V6
+MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail                           # diagnostic report without V6
 MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail --ab                      # also V6, the host-vs-container A/B
 MISE_AUTO_INSTALL=0 mise run certify:ubuntu --only DB,P4 --allow-fail              # one section or a few checks
 MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail --keep                    # keep the container and scratch dir
@@ -62,7 +82,7 @@ that matches no check; 3 when the Mac's mise installs changed during the run
 (the report's `mise installs (this Mac):` line names the change), even with
 `--allow-fail`.
 
-## Refresh the baseline
+### Compare manual reports
 
 ```bash
 MISE_AUTO_INSTALL=0 mise run certify:ubuntu --allow-fail --ab --out docs/standard/reports/ubuntu-pc-$(date +%F).txt
@@ -77,7 +97,7 @@ destination as `<pc>`, and labels the machine `pc`. A PASS that turns FAIL
 is a regression; a FAIL that turns PASS needs the playbook's "Usable today"
 table and the check's text updated in the same change.
 
-## What it leaves on the PC
+### Resources retained by manual PC tasks
 
 Kept on purpose, labelled `org.cpp-standard.cert=1`:
 
