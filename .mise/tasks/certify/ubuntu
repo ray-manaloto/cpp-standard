@@ -451,6 +451,11 @@ strict_timing_failed=0
 pass1_skip="$(echo "$TIMING_IDS" | tr ' ' ',')"
 rc_inner=""
 run_inner "$only" "$pass1_skip" >"$scratch/lines1.txt" || rc_inner="$rc_inner pass1:$?"
+# A failed or interrupted first pass cannot establish private sccache drain.
+if [[ "$actions_host" == 1 ]] && { [[ -n "$rc_inner" ]] || ! grep -Eq '^B3 +PASS ' "$scratch/lines1.txt"; }; then
+  echo "certify: first pass did not confirm sccache shutdown; stopping before timing" >&2
+  exit 2
+fi
 timing_only=""
 for id in $TIMING_IDS; do want "$id" && timing_only="$timing_only,$id"; done
 : >"$scratch/lines2.txt"
