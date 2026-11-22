@@ -163,6 +163,22 @@ local gateSteps = new Mapping<String, Step> {
       )
     check = "\(cleanGitEnv) mise run toolchain:cov"
   }
+  ["pc-compiler-test"] {
+    glob =
+      List(
+        "tests/pc_compiler/**",
+        "docs/standard/gha-runner/pc-compiler-*",
+        "docs/standard/ubuntu.md",
+        "docs/standard/ubuntu-p2996/**",
+        ".mise/tasks/certify/ubuntu*",
+        ".github/workflows/pc-compiler.yml",
+        ".github/workflows/publish.yml",
+        "python/toolchain/**",
+        "mise.toml",
+        "hk.pkl",
+      )
+    check = "\(cleanGitEnv) python3 -I -B -m unittest discover -s tests/pc_compiler"
+  }
   // The devcontainer's host-side chain (#137): image:verify -> the generated .devcontainer/.env ->
   // compose. Static checks of the generated files and the verify task, plus the task run with a
   // stand-in python3; artifact.py's env-file unit tests are in tests/artifact/ (artifact-cov).
