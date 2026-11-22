@@ -232,9 +232,11 @@ A positive offset measures lateness in seconds.
 
 For a repeat after busy A/B timing, stream `pc-compiler-quiet.py` from verified
 protected main to Python on the compiler host. Save the JSON output with the
-deployment receipt. It samples the current Docker containers' cgroup CPU
-counters every 15 seconds for four minutes. Request dispatch when the sample
-returns zero and the usual host and Actions admission checks are current.
+deployment receipt. It samples CPU at each container's root cgroup every
+15 seconds for four minutes. It also checks Docker events for lifecycle
+changes between samples, using an event at the start to verify history
+coverage. Request dispatch when the sample returns zero and the usual host
+and Actions admission checks are current.
 If the sample is busy or incomplete, keep the incumbents online and retake
 it in a quieter window. The 800,000 µs readiness budget provides headroom for
 the listener and normal CPU variation. Each certification window still

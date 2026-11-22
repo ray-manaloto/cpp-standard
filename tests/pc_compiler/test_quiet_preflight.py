@@ -25,6 +25,8 @@ class QuietPreflightTest(unittest.TestCase):
                 {
                     "WINDOW_SECONDS": 30,
                     "snapshot": unittest.mock.Mock(side_effect=samples),
+                    "event_anchor": unittest.mock.Mock(),
+                    "check_events": unittest.mock.Mock(return_value=1),
                 },
             ),
             patch.object(QUIET["time"], "sleep"),
@@ -64,3 +66,57 @@ class QuietPreflightTest(unittest.TestCase):
                 self.assertFalse(report["ready"])
                 self.assertIn(error, report["error"])
                 self.assertEqual(len(report["samples"]), 2)
+
+    def test_container_root_includes_services_outside_init_scope(self):
+        container = "a" * 64
+        scope = f"/system.slice/docker-{container}.scope"
+        with patch.object(Path, "read_text", return_value=f"0::{scope}/init.scope\n"):
+            self.assertEqual(
+                QUIET["container_cgroup"](container, "10"),
+                Path(f"/sys/fs/cgroup{scope}"),
+            )
+            with self.assertRaisesRegex(ValueError, "cannot identify"):
+                QUIET["container_cgroup"]("b" * 64, "10")
+
+    def test_short_lived_container_and_missing_history_fail_closed(self):
+        anchor = ("daemon", "incumbent", 100, 150)
+        top = {
+            "Type": "container",
+            "Action": "top",
+            "Actor": {"ID": "incumbent"},
+            "timeNano": 125,
+        }
+        start = {
+            "Type": "container",
+            "Action": "start",
+            "Actor": {"ID": "short"},
+            "timeNano": 160,
+        }
+        die = {**start, "Action": "die", "timeNano": 165}
+        check = QUIET["check_events"]
+        cases = (
+            ([top], "daemon", None),
+            ([top, start, die], "daemon", "lifecycle event"),
+            ([], "daemon", "lost the start anchor"),
+            ([top], "replacement", "daemon restarted"),
+        )
+        for events, invocation, error in cases:
+            with (
+                self.subTest(error=error),
+                patch.dict(
+                    check.__globals__,
+                    {
+                        "docker": unittest.mock.Mock(
+                            return_value="\n".join(map(json.dumps, events))
+                        ),
+                        "daemon_invocation": unittest.mock.Mock(
+                            return_value=invocation
+                        ),
+                    },
+                ),
+            ):
+                if error:
+                    with self.assertRaisesRegex(ValueError, error):
+                        check(anchor, 200)
+                else:
+                    self.assertEqual(check(anchor, 200), 1)

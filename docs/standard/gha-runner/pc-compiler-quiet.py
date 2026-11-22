@@ -29,6 +29,16 @@ def docker(*args):
     )
 
 
+def container_cgroup(container, pid):
+    cgroup_lines = Path(f"/proc/{pid}/cgroup").read_text().splitlines()
+    (cgroup,) = [line[3:] for line in cgroup_lines if line.startswith("0::/")]
+    parts = Path(cgroup).parts
+    expected = f"docker-{container}.scope"
+    if ".." in parts or parts.count(expected) != 1:
+        raise ValueError(f"cannot identify the container root cgroup: {container}")
+    return Path("/sys/fs/cgroup", *parts[1 : parts.index(expected) + 1])
+
+
 def snapshot():
     ids = docker("ps", "-q", "--no-trunc").split()
     if (
@@ -46,12 +56,9 @@ def snapshot():
             raise ValueError("invalid running container identity")
         if name.startswith("/cpp-compiler-"):
             raise ValueError("compiler workload already active")
-        cgroup_lines = Path(f"/proc/{pid}/cgroup").read_text().splitlines()
-        (cgroup,) = [line[3:] for line in cgroup_lines if line.startswith("0::/")]
-        path = Path(cgroup)
-        if path == Path("/") or ".." in path.parts:
-            raise ValueError("invalid container cgroup")
-        stat = (Path("/sys/fs/cgroup") / path.relative_to("/") / "cpu.stat").read_text()
+        root = container_cgroup(container, pid)
+        inode = root.stat().st_ino
+        stat = (root / "cpu.stat").read_text()
         (usage,) = [
             int(line.split()[1])
             for line in stat.splitlines()
@@ -59,7 +66,7 @@ def snapshot():
         ]
         if usage < 0:
             raise ValueError("invalid CPU counter")
-        records[container] = (name, pid, started, restarts, cgroup, usage)
+        records[container] = (name, pid, started, restarts, str(root), inode, usage)
     if records.keys() != set(ids):
         raise ValueError("container inventory changed during snapshot")
     return records
@@ -80,6 +87,82 @@ def deltas(before, after):
     return result
 
 
+def daemon_invocation():
+    invocation = subprocess.check_output(
+        ["systemctl", "show", "docker.service", "-p", "InvocationID", "--value"],
+        text=True,
+        timeout=10,
+    ).strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", invocation) or int(invocation, 16) == 0:
+        raise ValueError("cannot identify the Docker daemon invocation")
+    return invocation
+
+
+def event_anchor():
+    invocation = daemon_invocation()
+    containers = docker("ps", "-q", "--no-trunc").split()
+    if not containers:
+        raise ValueError("no running container for the Docker event anchor")
+    container = containers[0]
+    # The daemon emits a top event for this read-only call. Its continued
+    # presence proves that the bounded event history still reaches our start.
+    since = time.time_ns()
+    docker("top", container, "-eo", "pid")
+    return invocation, container, since, time.time_ns()
+
+
+def event_timestamp(nanoseconds):
+    seconds, fraction = divmod(nanoseconds, 1_000_000_000)
+    return f"{seconds}.{fraction:09d}"
+
+
+def check_events(anchor, end):
+    invocation, container, since, anchor_end = anchor
+    if not since <= anchor_end <= end:
+        raise ValueError("Docker event window clock moved backwards")
+    raw = docker(
+        "events",
+        "--since",
+        event_timestamp(since),
+        "--until",
+        event_timestamp(end),
+        "--format",
+        "{{json .}}",
+    )
+    if daemon_invocation() != invocation:
+        raise ValueError("Docker daemon restarted during sampling")
+    anchor_seen = False
+    for line in raw.splitlines():
+        event = json.loads(line)
+        if event["Type"] != "container":
+            continue
+        action = event["Action"]
+        if (
+            action == "top"
+            and event["Actor"]["ID"] == container
+            and since <= event["timeNano"] <= anchor_end
+        ):
+            anchor_seen = True
+        if action in {
+            "create",
+            "destroy",
+            "die",
+            "kill",
+            "oom",
+            "pause",
+            "rename",
+            "restart",
+            "start",
+            "stop",
+            "unpause",
+            "update",
+        }:
+            raise ValueError(f"container lifecycle event during sampling: {action}")
+    if not anchor_seen:
+        raise ValueError("Docker event history lost the start anchor")
+    return len(raw.splitlines())
+
+
 def main():
     report = {
         "started_at": utc_now(),
@@ -88,6 +171,7 @@ def main():
         "samples": [],
     }
     try:
+        anchor = event_anchor()
         initial = snapshot()
         report["containers"] = {key: value[:-1] for key, value in initial.items()}
         report["samples"].append(
@@ -103,9 +187,16 @@ def main():
                 {"acquired_at": utc_now(), "cpu_us": deltas(initial, current)}
             )
             previous = current
+        report["docker_event_count"] = check_events(anchor, time.time_ns())
         report["total_cpu_us"] = sum(report["samples"][-1]["cpu_us"].values())
         report["ready"] = report["total_cpu_us"] <= BUDGET_US
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
         report.update(ready=False, error=str(exc))
     report["finished_at"] = utc_now()
     print(json.dumps(report, indent=2))
