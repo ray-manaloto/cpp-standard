@@ -228,6 +228,14 @@ and compiler and per-preset object counters. Null counters mean no measurement. 
 signed offsets from the cutoff for job completion, host teardown and independent inventory.
 A positive offset measures lateness in seconds.
 
+For timing attribution, the host keeps private `timing-private/*.tsv` files
+beside the run's `result` directory. Keep them in the operator's private
+record. Compare matching IDs and cgroup paths across each endpoint pair,
+check that each counter is readable and monotonic, and reconcile the sums
+with `timing-cpu` or `ab-cpu`. A dash in the counter column marks a missed
+read. The cgroup paths use Bash quoting for display. These counters measure
+the sampled cgroups, with no process or whole-host attribution.
+
 ### Sample quietness for a strict performance measurement
 
 For a repeat after busy A/B timing, stream `pc-compiler-quiet.py` from verified

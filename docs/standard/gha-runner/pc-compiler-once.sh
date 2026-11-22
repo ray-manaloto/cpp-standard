@@ -114,6 +114,8 @@ prepare_compiler() {
   result="$state/result"
   source="$state/source"
   install -d -m 0755 "$result" "$source" "$state/publish"
+  # Keep sampled cgroup paths outside the result mount and Actions artifacts.
+  install -d -m 0700 "$state/timing-private" 2>/dev/null || true
   owner_name="cpp-compiler-$run-${state##*.}"
   owner_name="${owner_name,,}"
   runner="$owner_name-runner"

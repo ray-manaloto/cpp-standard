@@ -361,6 +361,16 @@ run_inner() { # run_inner ONLY SKIP: one pass of the in-container script
     -e IMAGE_BASE="$image_base" -e HOST_BINFMT_X86="$host_binfmt" -e HOST_ARCH="$host_arch" -e HOST_THREADS="$host_threads" \
     -e BUILD_DIR=/build "$cname" bash /root/probes/ubuntu-probes 2>/dev/null
 }
+retain_cpu_sample() {
+  local private="${CERT_CPP_EVIDENCE%/result}/timing-private" endpoint="$1"
+  # A diagnostic write failure leaves the aggregate and the gate unchanged.
+  (
+    umask 077
+    printf 'container_id\tcgroup_bash_quoted\tusage_usec\n%s' "$2" >"$private/.$endpoint.tmp" &&
+      mv -- "$private/.$endpoint.tmp" "$private/$endpoint.tsv"
+  ) 2>/dev/null || true
+}
+
 # The other running containers on the host: "<ids> <usec> <unreadable>", with ids
 # sorted and comma-joined, usec their total CPU time from cgroup v2, and
 # unreadable the number of them whose cpu.stat could not be read.
@@ -373,25 +383,30 @@ others_cpu() {
   }
   ids="$(grep -v "$self" <<<"$all" | sort | tr '\n' ' ')"
   [[ -z "${ids// /}" ]] && {
+    [[ "$actions_host" != 1 ]] || retain_cpu_sample "$1" ""
     echo "- 0 0"
     return
   }
   printf '%s ' "$(tr ' ' , <<<"${ids% }")"
   if [[ "$actions_host" == 1 ]]; then
-    local i pid cg total=0 value misses=0
+    local i pid cg total=0 value misses=0 sample=''
     for i in $ids; do
+      cg=''
       if ! pid="$(docker inspect -f '{{.State.Pid}}' "$i")" ||
         ! cg="$(sed -n 's/^0:://p' "/proc/$pid/cgroup")" ||
         [[ "$cg" != /* || "$cg" == / ]] ||
         ! value="$(awk '$1 == "usage_usec" { print $2 }' "/sys/fs/cgroup$cg/cpu.stat")" ||
         [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        printf -v sample '%s%s\t%q\t-\n' "$sample" "$i" "$cg"
         misses=$((misses + 1))
         continue
       fi
       total=$((total + value))
+      printf -v sample '%s%s\t%q\t%s\n' "$sample" "$i" "$cg" "$value"
     done
     printf '%s %s
 ' "$total" "$misses"
+    retain_cpu_sample "$1" "$sample"
     return
   fi
   hostsh "s=0 m=0; for i in $ids; do f=/sys/fs/cgroup/system.slice/docker-\$i.scope/cpu.stat; \
@@ -467,9 +482,9 @@ if [[ -n "$timing_only" ]]; then
   if [[ "$actions_host" == 1 ]]; then
     time0="$(date -u +%FT%T.%NZ)" && timing_marker "$cname-main-before" || exit 2
   fi
-  s0="$(others_cpu)" l0="$(hostsh 'cut -d" " -f1 /proc/loadavg')"
+  s0="$(others_cpu main-before)" l0="$(hostsh 'cut -d" " -f1 /proc/loadavg')"
   run_inner "${timing_only#,}" "" >"$scratch/lines2.txt" || rc_inner="$rc_inner pass2:$?"
-  s1="$(others_cpu)" l1="$(hostsh 'cut -d" " -f1 /proc/loadavg')"
+  s1="$(others_cpu main-after)" l1="$(hostsh 'cut -d" " -f1 /proc/loadavg')"
   cpu_trust "$s0" "$s1"
   if [[ "$actions_host" == 1 ]]; then
     timing_marker "$cname-main-after" && time1="$(date -u +%FT%T.%NZ)" &&
@@ -522,7 +537,7 @@ if want V6; then
     if [[ "$actions_host" == 1 ]]; then
       time0="$(date -u +%FT%T.%NZ)" && timing_marker "$cname-ab-before" || exit 2
     fi
-    s0="$(others_cpu)"
+    s0="$(others_cpu ab-before)"
     : >"$scratch/ab_c" && : >"$scratch/ab_h"
     for _ in 1 2 3; do # alternate the two sides
       { docker exec -e MISE_AUTO_INSTALL=0 "$cname" bash -o pipefail -c "$meas" | tr '\n' ' ' >>"$scratch/ab_c" &&
@@ -530,7 +545,7 @@ if want V6; then
       { hostsh "$bw bash -o pipefail -c '$meas'" | tr '\n' ' ' >>"$scratch/ab_h" &&
         echo >>"$scratch/ab_h"; } || timing_integrity_failed=1
     done
-    s1="$(others_cpu)"
+    s1="$(others_cpu ab-after)"
     if [[ "$actions_host" == 1 ]]; then
       timing_marker "$cname-ab-after" && time1="$(date -u +%FT%T.%NZ)" &&
         prove_timing_events "$time0" "$time1" "$cname-ab-before" "$cname-ab-after" "$scratch/ab-events.jsonl" ||
