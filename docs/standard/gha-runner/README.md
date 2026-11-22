@@ -228,7 +228,7 @@ and compiler and per-preset object counters. Null counters mean no measurement. 
 signed offsets from the cutoff for job completion, host teardown and independent inventory.
 A positive offset measures lateness in seconds.
 
-### Sample quietness before requesting compiler dispatch
+### Sample quietness for a strict performance measurement
 
 For a repeat after busy A/B timing, stream `pc-compiler-quiet.py` from verified
 protected main to Python on the compiler host. Save the JSON output with the
@@ -239,9 +239,15 @@ Docker events for lifecycle
 changes between samples, using events at both ends to verify history
 coverage. Missed sampling deadlines or wall-clock steps invalidate the
 sample. The clock check uses Linux timerfd through Python 3.13 or later.
-Request dispatch when the sample returns zero and the usual host and
-Actions admission checks are current.
-If the sample is busy or incomplete, keep the incumbents online and retake
-it in a quieter window. The 800,000 µs readiness budget provides headroom for
-the listener and normal CPU variation. Each certification window still
-requires its own in-run quietness evidence.
+For a strict performance result, request dispatch after a passing sample and
+current host and Actions admission checks. If the sample is busy or incomplete,
+keep the incumbents online and retake it in a quieter window. The 800,000 µs
+readiness budget provides headroom for the listener and normal CPU variation.
+
+Routine compiler dispatch requires the usual host and Actions admission checks.
+The quietness sample is optional. The run still records both in-run windows and
+the V6 overhead. A complete busy window yields a strict performance
+`UNVERIFIED` verdict. With quiet windows, overhead above the V6 limit yields
+`FAIL`. Both allow the three project presets and their six tests to run on the
+same built image. Functional failures and missing or invalid evidence still
+fail the workflow.

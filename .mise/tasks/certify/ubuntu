@@ -411,6 +411,8 @@ cpu_trust() {
   [[ "$c0" != "?" && "$c1" != "?" ]] || why="${why:+$why; }the container list could not be read"
   [[ "$c0" == "$c1" ]] || why="${why:+$why; }the set of other containers changed"
   [[ "$u0" =~ ^[0-9]+$ && "$u1" =~ ^[0-9]+$ && $u1 -lt $u0 ]] && why="${why:+$why; }a CPU counter went backwards"
+  cpu_evidence_ok=0
+  [[ -z "$why" ]] && cpu_evidence_ok=1
   busy=0
   [[ "$u0" =~ ^[0-9]+$ && "$u1" =~ ^[0-9]+$ ]] && busy=$(((u1 - u0) / 1000))
   [[ $busy -gt 1000 ]] && why="${why:+$why; }over one CPU-second elsewhere"
@@ -448,6 +450,7 @@ prove_timing_events() { # start end before-marker after-marker receipt
   ' "$5" >/dev/null
 }
 strict_timing_failed=0
+timing_integrity_failed=0
 pass1_skip="$(echo "$TIMING_IDS" | tr ' ' ',')"
 rc_inner=""
 run_inner "$only" "$pass1_skip" >"$scratch/lines1.txt" || rc_inner="$rc_inner pass1:$?"
@@ -471,9 +474,13 @@ if [[ -n "$timing_only" ]]; then
   if [[ "$actions_host" == 1 ]]; then
     timing_marker "$cname-main-after" && time1="$(date -u +%FT%T.%NZ)" &&
       prove_timing_events "$time0" "$time1" "$cname-main-before" "$cname-main-after" "$scratch/timing-events.jsonl" ||
-      why="${why:+$why; }incomplete timing-events evidence"
+      {
+        why="${why:+$why; }incomplete timing-events evidence"
+        timing_integrity_failed=1
+      }
+    ((cpu_evidence_ok)) || timing_integrity_failed=1
     printf '%s
-' "$s0" "$s1" >"$scratch/timing-cpu"
+' "$s0" "$s1" >"$scratch/timing-cpu" || exit 2
     [[ -z "$why" ]] || strict_timing_failed=1
   fi
   busy_note="other containers used ${busy} ms CPU during the timing pass; host load ${l0} -> ${l1}${why:+ (untrusted: $why)}"
@@ -518,33 +525,36 @@ if want V6; then
     s0="$(others_cpu)"
     : >"$scratch/ab_c" && : >"$scratch/ab_h"
     for _ in 1 2 3; do # alternate the two sides
-      docker exec -e MISE_AUTO_INSTALL=0 "$cname" bash -c "$meas" | tr '\n' ' ' >>"$scratch/ab_c" && echo >>"$scratch/ab_c"
-      hostsh "$bw bash -c '$meas'" | tr '\n' ' ' >>"$scratch/ab_h" && echo >>"$scratch/ab_h"
+      { docker exec -e MISE_AUTO_INSTALL=0 "$cname" bash -o pipefail -c "$meas" | tr '\n' ' ' >>"$scratch/ab_c" &&
+        echo >>"$scratch/ab_c"; } || timing_integrity_failed=1
+      { hostsh "$bw bash -o pipefail -c '$meas'" | tr '\n' ' ' >>"$scratch/ab_h" &&
+        echo >>"$scratch/ab_h"; } || timing_integrity_failed=1
     done
     s1="$(others_cpu)"
     if [[ "$actions_host" == 1 ]]; then
       timing_marker "$cname-ab-after" && time1="$(date -u +%FT%T.%NZ)" &&
         prove_timing_events "$time0" "$time1" "$cname-ab-before" "$cname-ab-after" "$scratch/ab-events.jsonl" ||
-        strict_timing_failed=1
+        timing_integrity_failed=1
       printf '%s
-' "$s0" "$s1" >"$scratch/ab-cpu"
+' "$s0" "$s1" >"$scratch/ab-cpu" || exit 2
     fi
     hostsh "rm -rf $ab; test -e $ab && echo still-there || echo removed" >"$scratch/ab_rm"
     cpu_trust "$s0" "$s1"
-    if [[ "$actions_host" == 1 && -n "$why" ]]; then
-      strict_timing_failed=1
+    if [[ "$actions_host" == 1 ]]; then
+      ((cpu_evidence_ok)) || timing_integrity_failed=1
+      [[ -z "$why" ]] || strict_timing_failed=1
       why=""
     fi
     # Best (minimum) wall time per side over 3 rounds; overhead in % of the host's.
     # -B: no .pyc written into the Mac's mise python install (rule 4 proof).
-    python3 -I -B - "$scratch/ab_c" "$scratch/ab_h" "$busy" "$(cat "$scratch/ab_size")" "$free_gb" "$(cat "$scratch/ab_rm")" "$why" \
+    if ! python3 -I -B - "$scratch/ab_c" "$scratch/ab_h" "$busy" "$(cat "$scratch/ab_size")" "$free_gb" "$(cat "$scratch/ab_rm")" "$why" \
       >"$scratch/lines3.txt" <<'PY'
 import sys
 def rows(p):
     return [list(map(int, l.split())) for l in open(p) if len(l.split()) == 4]
 c, h = rows(sys.argv[1]), rows(sys.argv[2])
 busy, size, free, rm, why = int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]
-if len(c) < 3 or len(h) < 3:
+if len(c) != 3 or len(h) != 3 or any(value <= 0 for row in c + h for value in row):
     print(f"V6    FAIL [timing] incomplete A/B: container {len(c)} rounds, host {len(h)}; rootfs {rm}")
     sys.exit()
 cc, cb = min(r[0] for r in c), min(r[1] for r in c)
@@ -555,10 +565,15 @@ ib = "same" if c[0][3] == h[0][3] else f"{c[0][3]} vs {h[0][3]}"
 ev = (f"[timing] compile {cc} vs {hc} ms ({oc:+.1f}%), bench {cb} vs {hb} ms ({ob:+.1f}%) container vs host, best of 3x5; "
       f"instructions:u compile {ic}, bench {ib}; rootfs {size} MB of {free} GB free, {rm}; others {busy} ms CPU")
 status = "PASS" if oc <= 2.0 and ob <= 2.0 and rm == "removed" else "FAIL"
+if status == "FAIL" and rm == "removed":
+    ev = ev.replace("[timing]", "[timing: overhead limit exceeded]", 1)
 if why:
     status, ev = "N/A ", f"[timing untrusted: {why}] " + ev
-print(f"V6    {status} {ev}"[:250].rstrip())
+print(f"V6    {status} {ev}")
 PY
+    then
+      timing_integrity_failed=1
+    fi
   fi
 fi
 
@@ -666,5 +681,20 @@ if [[ -n "$out" ]]; then
   report | mask >"$out" || exit 2
 fi
 [[ "$inst_after" == "$inst_before" ]] || exit 3
+if [[ "$actions_host" == 1 ]]; then
+  [[ -z "$rc_inner" && "$timing_integrity_failed" == 0 ]] || exit 1
+  if [[ "${CERT_CPP_TIMING_ADVISORY:-0}" == 1 ]]; then
+    if [[ "$nfail" == 0 ]]; then
+      performance=verified
+    elif [[ "$nfail" == 1 ]] && grep -Eq '^V6 +FAIL +\[timing: overhead limit exceeded\] ' "$scratch/body.txt"; then
+      performance=failed
+    else
+      exit 1
+    fi
+    [[ "$strict_timing_failed" == 0 ]] || performance=unverified
+    printf '%s\n' "$performance" >"$CERT_CPP_EVIDENCE/timing-verdict.txt" || exit 2
+    exit 0
+  fi
+fi
 [[ -z "$rc_inner" && "$strict_timing_failed" == 0 ]] || exit 1
 [[ $nfail == 0 || "${usage_allow_fail:-false}" == true ]]
