@@ -234,7 +234,7 @@ For a repeat after busy A/B timing, stream `pc-compiler-quiet.py` from verified
 protected main to Python on the compiler host. Save the JSON output with the
 deployment receipt. It samples CPU at each container's root cgroup every
 15 seconds for four minutes. It also checks Docker events for lifecycle
-changes between samples, using an event at the start to verify history
+changes between samples, using events at both ends to verify history
 coverage. Missed sampling deadlines or wall-clock steps invalidate the
 sample. The clock check uses Linux timerfd through Python 3.13 or later.
 Request dispatch when the sample returns zero and the usual host and

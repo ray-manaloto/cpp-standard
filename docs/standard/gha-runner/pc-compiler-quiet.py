@@ -107,11 +107,15 @@ def event_anchor():
     if not containers:
         raise ValueError("no running container for the Docker event anchor")
     container = containers[0]
-    # The daemon emits a top event for this read-only call. Its continued
-    # presence proves that the bounded event history still reaches our start.
-    since = time.time_ns()
+    return invocation, container, top_marker(container)
+
+
+def top_marker(container):
+    # Docker emits an event for this read-only call. Two markers prove the
+    # bounded replay covers the entire sample, even with sparse events.
+    before = time.time_ns()
     docker("top", container, "-eo", "pid")
-    return invocation, container, since, time.time_ns()
+    return before, time.time_ns()
 
 
 def event_timestamp(nanoseconds):
@@ -119,33 +123,35 @@ def event_timestamp(nanoseconds):
     return f"{seconds}.{fraction:09d}"
 
 
-def check_events(anchor, end):
-    invocation, container, since, anchor_end = anchor
-    if not since <= anchor_end <= end:
+def check_events(anchor, closing):
+    invocation, container, (since, opening_end) = anchor
+    closing_start, until = closing
+    if not since <= opening_end < closing_start <= until:
         raise ValueError("Docker event window clock moved backwards")
     raw = docker(
         "events",
         "--since",
         event_timestamp(since),
         "--until",
-        event_timestamp(end),
+        event_timestamp(until),
         "--format",
         "{{json .}}",
     )
     if daemon_invocation() != invocation:
         raise ValueError("Docker daemon restarted during sampling")
-    anchor_seen = False
+    opening_seen = False
+    closing_seen = False
     for line in raw.splitlines():
         event = json.loads(line)
         if event["Type"] != "container":
             continue
         action = event["Action"]
-        if (
-            action == "top"
-            and event["Actor"]["ID"] == container
-            and since <= event["timeNano"] <= anchor_end
-        ):
-            anchor_seen = True
+        if action == "top" and event["Actor"]["ID"] == container:
+            timestamp = event["timeNano"]
+            if since <= timestamp <= opening_end:
+                opening_seen = True
+            elif opening_seen and closing_start <= timestamp <= until:
+                closing_seen = True
         if action in {
             "create",
             "destroy",
@@ -161,8 +167,10 @@ def check_events(anchor, end):
             "update",
         }:
             raise ValueError(f"container lifecycle event during sampling: {action}")
-    if not anchor_seen:
+    if not opening_seen:
         raise ValueError("Docker event history lost the start anchor")
+    if not closing_seen:
+        raise ValueError("Docker event history lost the end anchor")
     return len(raw.splitlines())
 
 
@@ -219,7 +227,7 @@ def collect_samples(report):
             {"acquired_at": utc_now(), "cpu_us": deltas(initial, current)}
         )
         previous = current
-    report["docker_event_count"] = check_events(anchor, time.time_ns())
+    report["docker_event_count"] = check_events(anchor, top_marker(anchor[1]))
 
 
 def main():

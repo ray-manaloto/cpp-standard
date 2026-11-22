@@ -26,8 +26,11 @@ class QuietPreflightTest(unittest.TestCase):
                 {
                     "WINDOW_SECONDS": 30,
                     "snapshot": unittest.mock.Mock(side_effect=samples),
-                    "event_anchor": unittest.mock.Mock(),
-                    "check_events": unittest.mock.Mock(return_value=1),
+                    "event_anchor": unittest.mock.Mock(
+                        return_value=("daemon", "incumbent", (100, 150))
+                    ),
+                    "top_marker": unittest.mock.Mock(return_value=(180, 200)),
+                    "check_events": unittest.mock.Mock(return_value=2),
                     "stable_wall_clock": clock_guard,
                 },
             ),
@@ -142,7 +145,8 @@ class QuietPreflightTest(unittest.TestCase):
                 QUIET["container_cgroup"]("b" * 64, "10")
 
     def test_short_lived_container_and_missing_history_fail_closed(self):
-        anchor = ("daemon", "incumbent", 100, 150)
+        anchor = ("daemon", "incumbent", (100, 150))
+        closing = (180, 200)
         top = {
             "Type": "container",
             "Action": "top",
@@ -156,12 +160,15 @@ class QuietPreflightTest(unittest.TestCase):
             "timeNano": 160,
         }
         die = {**start, "Action": "die", "timeNano": 165}
+        end = {**top, "timeNano": 190}
         check = QUIET["check_events"]
         cases = (
-            ([top], "daemon", None),
-            ([top, start, die], "daemon", "lifecycle event"),
+            ([top, end], "daemon", None),
+            ([top, start, die, end], "daemon", "lifecycle event"),
             ([], "daemon", "lost the start anchor"),
-            ([top], "replacement", "daemon restarted"),
+            ([top], "daemon", "lost the end anchor"),
+            ([end, top], "daemon", "lost the end anchor"),
+            ([top, end], "replacement", "daemon restarted"),
         )
         for events, invocation, error in cases:
             with (
@@ -180,6 +187,6 @@ class QuietPreflightTest(unittest.TestCase):
             ):
                 if error:
                     with self.assertRaisesRegex(ValueError, error):
-                        check(anchor, 200)
+                        check(anchor, closing)
                 else:
-                    self.assertEqual(check(anchor, 200), 1)
+                    self.assertEqual(check(anchor, closing), 2)
