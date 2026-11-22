@@ -186,6 +186,8 @@ cleanup() {
         [[ -f "$scratch/$name" && ! -L "$scratch/$name" ]] || continue
         mv "$scratch/$name" "$CERT_CPP_EVIDENCE/partial/" || echo "certify: could not retain partial/$name" >&2
       done
+    else
+      echo "certify: could not create partial evidence directory" >&2
     fi
   fi
   rm -f "$inst_mark" "$inst_mark.start" "$inst_mark.end"

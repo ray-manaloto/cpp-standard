@@ -157,7 +157,9 @@ ln -s "$scratch/unrelated" "$scratch/lines2.txt"
         (self.result / "partial").touch()
         proc = self.run_guard("")
         self.assertEqual(proc.returncode, 3, proc.stderr)
-        self.assertIn("partial", proc.stderr)
+        self.assertIn(
+            "certify: could not create partial evidence directory", proc.stderr
+        )
         self.assertFalse((self.base / "scratch").exists())
 
     def test_accepted_diff_retains_complete_top_level_evidence(self):
