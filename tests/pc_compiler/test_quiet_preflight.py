@@ -74,12 +74,21 @@ class QuietPreflightTest(unittest.TestCase):
 
     def test_missed_monotonic_sample_fails_instead_of_catching_up(self):
         exit_code, report = self.run_sample(
-            sample(10), sample(20), sample(30), monotonic=[0, 0, 18]
+            sample(10), sample(20), sample(30), monotonic=[0, 0, 0, 18]
         )
         self.assertEqual(exit_code, 1)
         self.assertFalse(report["ready"])
         self.assertIn("missed CPU sample deadline at +15s", report["error"])
         self.assertEqual(len(report["samples"]), 1)
+
+    def test_incomplete_baseline_fails_before_window_can_be_certified(self):
+        exit_code, report = self.run_sample(
+            sample(10), sample(20), sample(30), monotonic=[0, 3]
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(report["ready"])
+        self.assertIn("missed CPU sample deadline at +0s", report["error"])
+        self.assertEqual(report["samples"], [])
 
     def test_clock_step_disqualifies_an_otherwise_quiet_sample(self):
         os_module = QUIET["os"]
