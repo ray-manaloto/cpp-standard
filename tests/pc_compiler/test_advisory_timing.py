@@ -18,6 +18,91 @@ def shell_function(script, name):
     return script[start:].split("\n}", 1)[0] + "\n}"
 
 
+class PrivateTimingSamples(unittest.TestCase):
+    def test_receipts_match_aggregate_without_extra_counter_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            public = state / "result"
+            private = state / "timing-private"
+            public.mkdir()
+            private.mkdir(mode=0o700)
+            script = "\n".join(
+                shell_function(DRIVER, name)
+                for name in ("retain_cpu_sample", "others_cpu", "cpu_trust")
+            )
+            script += r"""
+actions_host=1
+cname=check
+state="$1"
+CERT_CPP_EVIDENCE="$state/result"
+docker() {
+    case "$*" in
+        'ps -q --no-trunc') printf '%s\n' beta self alpha ;;
+        *"{{.Id}}"*) echo self ;;
+        *"{{.State.Pid}} alpha") echo 101 ;;
+        *"{{.State.Pid}} beta") echo 102 ;;
+        *) return 1 ;;
+    esac
+}
+sed() {
+    local pid="${3#/proc/}"
+    printf '/example/%s\n' "${pid%/cgroup}"
+}
+awk() {
+    printf '%s\n' "$2" >>"$state/reads"
+    case "$2" in
+        */101/cpu.stat) echo "$counter" ;;
+        */102/cpu.stat) echo "$second" ;;
+    esac
+}
+counter=100
+second=20
+before="$(others_cpu main-before)"
+counter=1000101
+after="$(others_cpu main-after)"
+cpu_trust "$before" "$after"
+printf '%s\n' "$before" "$after" "$cpu_evidence_ok/$busy/$why"
+printf '%s\n' "$(others_cpu ab-before)"
+second=invalid
+printf '%s\n' "$(others_cpu ab-after)"
+"""
+            output = subprocess.check_output(
+                ["bash", "-eu", "-c", script, "fixture", state], text=True
+            )
+            self.assertEqual(
+                output.splitlines(),
+                [
+                    "alpha,beta 120 0",
+                    "alpha,beta 1000121 0",
+                    "1/1000/over one CPU-second elsewhere",
+                    "alpha,beta 1000121 0",
+                    "alpha,beta 1000101 1",
+                ],
+            )
+            self.assertEqual(len((state / "reads").read_text().splitlines()), 8)
+            self.assertEqual(list(public.iterdir()), [])
+            self.assertEqual(len(list(private.iterdir())), 4)
+            for index, endpoint in enumerate(
+                ("main-before", "main-after", "ab-before", "ab-after")
+            ):
+                path = private / f"{endpoint}.tsv"
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                rows = path.read_text().splitlines()[1:]
+                self.assertEqual(
+                    rows,
+                    [
+                        f"alpha\t/example/101\t{100 if index == 0 else 1000101}",
+                        f"beta\t/example/102\t{'-' if index == 3 else '20'}",
+                    ],
+                )
+            private.rename(state / "unavailable")
+            retry = subprocess.check_output(
+                ["bash", "-eu", "-c", script, "fixture", state], text=True
+            )
+            self.assertEqual(retry, output)
+            self.assertFalse(private.exists())
+
+
 class AdvisoryTiming(unittest.TestCase):
     def setUp(self):
         scratch = tempfile.TemporaryDirectory()
