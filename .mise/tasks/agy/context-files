@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="List what fills an agy conversation's context: auto-loaded rule and skill files, and the files and commands its tools pulled in"
+#USAGE flag "--conversation <id>" help="Conversation ID (default: the newest transcript)"
+#USAGE flag "--capacity <tokens>" help="Context window in tokens, from /context (1000000 for Claude Opus 5.5)"
+#USAGE flag "--cwd <dir>" help="Folder the agy session started in (default: the current folder)"
+#USAGE flag "--follow" help="Keep printing new tool results and turns as the transcript grows"
+#USAGE flag "--json" help="Print JSON instead of text"
+# Run from anywhere with: mise -C <cpp-standard checkout> run agy:context-files
+set -euo pipefail
+root="${MISE_PROJECT_ROOT:-$PWD}"
+args=(--cwd "${usage_cwd:-${MISE_ORIGINAL_CWD:-$PWD}}")
+[[ -n "${usage_conversation:-}" ]] && args+=(--conversation "$usage_conversation")
+[[ -n "${usage_capacity:-}" ]] && args+=(--capacity "$usage_capacity")
+[[ "${usage_follow:-false}" == "true" ]] && args+=(--follow)
+[[ "${usage_json:-false}" == "true" ]] && args+=(--json)
+exec uv run --no-project --quiet python -I -u "$root/python/agents/agy_context.py" "${args[@]}"

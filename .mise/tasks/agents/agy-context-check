@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Check agy_context.py offline: scratch ~/.gemini, repository and transcripts, never the real agy folders"
+set -euo pipefail
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec uv run --no-project --quiet python -I -u "$root/python/agents/agy_context_check.py"

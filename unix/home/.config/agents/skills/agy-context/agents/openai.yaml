@@ -1,0 +1,5 @@
+interface:
+  display_name: "agy context"
+  short_description: "What fills an agy session's context: the /context panel and a live file list."
+policy:
+  allow_implicit_invocation: true
