@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Measure idle CPU usage on the compiler host before requesting dispatch."""
 
+import errno
 import json
 import os
 import re
 import subprocess
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
 WINDOW_SECONDS = 240
 INTERVAL_SECONDS = 15
+MAX_LATENESS_SECONDS = 2
 BUDGET_US = 800_000
 
 
@@ -163,6 +166,59 @@ def check_events(anchor, end):
     return len(raw.splitlines())
 
 
+@contextmanager
+def stable_wall_clock():
+    if not hasattr(os, "timerfd_create"):
+        raise ValueError("Linux timerfd is required to verify the Docker event clock")
+    fd = os.timerfd_create(time.CLOCK_REALTIME, flags=os.TFD_NONBLOCK)
+    try:
+        # An armed absolute realtime timer records a discontinuous change even
+        # if the wall clock steps back and recovers between two samples.
+        os.timerfd_settime_ns(
+            fd,
+            flags=os.TFD_TIMER_ABSTIME | os.TFD_TIMER_CANCEL_ON_SET,
+            initial=time.time_ns() + 2 * WINDOW_SECONDS * 1_000_000_000,
+        )
+        yield
+        try:
+            os.read(fd, 8)
+        except BlockingIOError:
+            pass
+        except OSError as exc:
+            if exc.errno == errno.ECANCELED:
+                raise ValueError(
+                    "wall clock stepped during Docker event sampling"
+                ) from exc
+            raise
+        else:
+            raise ValueError("Docker event clock guard expired")
+    finally:
+        os.close(fd)
+
+
+def collect_samples(report):
+    anchor = event_anchor()
+    initial = snapshot()
+    report["containers"] = {key: value[:-1] for key, value in initial.items()}
+    report["samples"].append(
+        {"acquired_at": utc_now(), "cpu_us": {key: 0 for key in initial}}
+    )
+    began = time.monotonic()
+    previous = initial
+    for offset in range(INTERVAL_SECONDS, WINDOW_SECONDS + 1, INTERVAL_SECONDS):
+        deadline = began + offset
+        time.sleep(max(0, deadline - time.monotonic()))
+        current = snapshot()
+        if time.monotonic() > deadline + MAX_LATENESS_SECONDS:
+            raise ValueError(f"missed CPU sample deadline at +{offset}s")
+        deltas(previous, current)
+        report["samples"].append(
+            {"acquired_at": utc_now(), "cpu_us": deltas(initial, current)}
+        )
+        previous = current
+    report["docker_event_count"] = check_events(anchor, time.time_ns())
+
+
 def main():
     report = {
         "started_at": utc_now(),
@@ -171,23 +227,8 @@ def main():
         "samples": [],
     }
     try:
-        anchor = event_anchor()
-        initial = snapshot()
-        report["containers"] = {key: value[:-1] for key, value in initial.items()}
-        report["samples"].append(
-            {"acquired_at": utc_now(), "cpu_us": {key: 0 for key in initial}}
-        )
-        began = time.monotonic()
-        previous = initial
-        for offset in range(INTERVAL_SECONDS, WINDOW_SECONDS + 1, INTERVAL_SECONDS):
-            time.sleep(max(0, began + offset - time.monotonic()))
-            current = snapshot()
-            deltas(previous, current)
-            report["samples"].append(
-                {"acquired_at": utc_now(), "cpu_us": deltas(initial, current)}
-            )
-            previous = current
-        report["docker_event_count"] = check_events(anchor, time.time_ns())
+        with stable_wall_clock():
+            collect_samples(report)
         report["total_cpu_us"] = sum(report["samples"][-1]["cpu_us"].values())
         report["ready"] = report["total_cpu_us"] <= BUDGET_US
     except (

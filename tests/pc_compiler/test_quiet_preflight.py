@@ -1,6 +1,7 @@
 """Offline controls for quiet-window admission and CPU attribution."""
 
 import contextlib
+import errno
 import io
 import json
 import runpy
@@ -17,7 +18,7 @@ def sample(usage, *, pid="10"):
 
 
 class QuietPreflightTest(unittest.TestCase):
-    def run_sample(self, *samples):
+    def run_sample(self, *samples, monotonic=None, clock_guard=contextlib.nullcontext):
         main = QUIET["main"]
         with (
             patch.dict(
@@ -27,9 +28,13 @@ class QuietPreflightTest(unittest.TestCase):
                     "snapshot": unittest.mock.Mock(side_effect=samples),
                     "event_anchor": unittest.mock.Mock(),
                     "check_events": unittest.mock.Mock(return_value=1),
+                    "stable_wall_clock": clock_guard,
                 },
             ),
             patch.object(QUIET["time"], "sleep"),
+            patch.object(
+                QUIET["time"], "monotonic", side_effect=monotonic, return_value=0
+            ),
             contextlib.redirect_stdout(io.StringIO()) as output,
         ):
             exit_code = main()
@@ -66,6 +71,41 @@ class QuietPreflightTest(unittest.TestCase):
                 self.assertFalse(report["ready"])
                 self.assertIn(error, report["error"])
                 self.assertEqual(len(report["samples"]), 2)
+
+    def test_missed_monotonic_sample_fails_instead_of_catching_up(self):
+        exit_code, report = self.run_sample(
+            sample(10), sample(20), sample(30), monotonic=[0, 0, 18]
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(report["ready"])
+        self.assertIn("missed CPU sample deadline at +15s", report["error"])
+        self.assertEqual(len(report["samples"]), 1)
+
+    def test_clock_step_disqualifies_an_otherwise_quiet_sample(self):
+        os_module = QUIET["os"]
+        close = unittest.mock.Mock()
+        with patch.multiple(
+            os_module,
+            timerfd_create=unittest.mock.Mock(return_value=123),
+            timerfd_settime_ns=unittest.mock.Mock(),
+            TFD_NONBLOCK=1,
+            TFD_TIMER_ABSTIME=2,
+            TFD_TIMER_CANCEL_ON_SET=4,
+            read=unittest.mock.Mock(side_effect=OSError(errno.ECANCELED, "clock step")),
+            close=close,
+            create=True,
+        ):
+            exit_code, report = self.run_sample(
+                sample(10),
+                sample(20),
+                sample(30),
+                clock_guard=QUIET["stable_wall_clock"],
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(report["ready"])
+        self.assertIn("wall clock stepped", report["error"])
+        self.assertEqual(len(report["samples"]), 3)
+        close.assert_called_once_with(123)
 
     def test_container_root_includes_services_outside_init_scope(self):
         container = "a" * 64
