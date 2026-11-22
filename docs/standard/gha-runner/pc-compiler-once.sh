@@ -167,14 +167,28 @@ check_compiler_rows() {
   local performance="$1" doc="$source/docs/standard/ubuntu.md"
   case "$performance" in verified | failed | unverified) ;; *) return 1 ;; esac
   awk -v performance="$performance" '
+    BEGIN {
+      # Both the playbook and the body must contain each Ubuntu amd64 ID once.
+      ids="A1 A2 A3 A4 A5 A6 A7 B1 B2 B3 B4 C1 C2 C3 C4 C5 C6 C7 C8 C9"
+      ids=ids " G1 G2 G4 G5 G6 P1 P2 P3 P4 P5 P6 P7 P8 P9 P10 P11 P12 P13 P14"
+      ids=ids " GO1 GO2 GO3 DB1 DB2 DB3 DB4 DB5 L1 L2 L3 L4 H1 H2 K1 K2 E1 E2 E3"
+      ids=ids " T1 T2 T3 T4 T5 T6 T7 R1 R2 R3 R4 R5 R6 R7 U1 U2 U3 U4 U5 V1 V2 V3 V4 V5 V6"
+      split(ids, keys)
+      for (i in keys) expected[keys[i]]=1
+    }
     FILENAME==ARGV[1] {
       if (match($0, /^\*\*[A-Z]+[0-9]+\./)) {
-        expected[substr($0, 3, RLENGTH-3)]=1
-        count++
+        key=substr($0, 3, RLENGTH-3)
+        if (!(key in expected) || headings[key]++) bad=1
       }
       next
     }
     !($1 in expected) || seen[$1]++ { bad=1 }
+    $1=="G5" {
+      evidence=$0
+      sub(/^[[:space:]]*G5[[:space:]]+N\/A[[:space:]]+/, "", evidence)
+      if (evidence!="rule, no probe: C++ dependencies for GCC come from vcpkg with the GCC triplet (K1)") bad=1
+    }
     $1=="P8" && $2=="PASS" { p2996_iwyu++ }
     $1=="T3" && $2=="PASS" { stock_iwyu++ }
     $2=="FAIL" && $1=="V6" && /^V6 +FAIL +\[timing: overhead limit exceeded\] / { overhead++; next }
@@ -182,7 +196,8 @@ check_compiler_rows() {
     $2=="N/A" && (NF<3 || $1!~/^(A4|E1|G5|H1|K1|T[16]|U[234]|V5)$/ || /timing untrusted/) { bad=1 }
     $2!="PASS" && $2!="N/A" { bad=1 }
     END {
-      exit (bad || FNR!=count || p2996_iwyu!=1 || stock_iwyu!=1 ||
+      for (key in expected) if (!headings[key] || !seen[key]) bad=1
+      exit (bad || p2996_iwyu!=1 || stock_iwyu!=1 ||
             (performance=="verified" && overhead) || (performance=="failed" && overhead!=1))
     }' "$doc" "$result/body.txt"
 }
