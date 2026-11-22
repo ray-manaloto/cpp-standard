@@ -72,7 +72,15 @@ class Discovery:
             return
         self.seen.add(real)
         size = frontmatter_bytes(path) if kind == "skill" else path.stat().st_size
-        self.entries.append({"kind": kind, "source": source, "path": str(path), "bytes": size, "est_tokens": est(size)})
+        self.entries.append(
+            {
+                "kind": kind,
+                "source": source,
+                "path": str(path),
+                "bytes": size,
+                "est_tokens": est(size),
+            }
+        )
 
     def rules_in(self, folder: Path, source: str) -> None:
         for p in sorted(folder.glob("*.md")):
@@ -120,7 +128,9 @@ def find_transcript(brain: Path, conversation: str | None) -> Path | None:
 
     if conversation:
         return pick(brain / conversation / ".system_generated" / "logs")
-    candidates = [t for t in (pick(p) for p in brain.glob("*/.system_generated/logs")) if t]
+    candidates = [
+        t for t in (pick(p) for p in brain.glob("*/.system_generated/logs")) if t
+    ]
     return max(candidates, key=lambda t: t.stat().st_mtime) if candidates else None
 
 
@@ -151,7 +161,8 @@ class Ledger:
             if "input_tokens" in row or "cache_read_tokens" in row:
                 turn = {
                     "step": row.get("step_index"),
-                    "context_tokens": int(row.get("input_tokens", 0)) + int(row.get("cache_read_tokens", 0)),
+                    "context_tokens": int(row.get("input_tokens", 0))
+                    + int(row.get("cache_read_tokens", 0)),
                     "output_tokens": int(row.get("output_tokens", 0)),
                 }
                 self.turns.append(turn)
@@ -204,14 +215,21 @@ def tilde(text: str, home: str) -> str:
 
 
 def report(
-    entries: list[dict[str, Any]], ledger: Ledger, transcript: Path | None, capacity: int | None, home: str
+    entries: list[dict[str, Any]],
+    ledger: Ledger,
+    transcript: Path | None,
+    capacity: int | None,
+    home: str,
 ) -> dict[str, Any]:
     last = ledger.turns[-1] if ledger.turns else None
     context: dict[str, Any] = {"measured": last is not None}
     if last:
         context.update(tokens=last["context_tokens"], step=last["step"])
         if capacity:
-            context.update(capacity=capacity, percentage=round(100 * last["context_tokens"] / capacity, 2))
+            context.update(
+                capacity=capacity,
+                percentage=round(100 * last["context_tokens"] / capacity, 2),
+            )
     return {
         "transcript": tilde(str(transcript), home) if transcript else None,
         "context": context,
@@ -232,16 +250,28 @@ def render(data: dict[str, Any], out: IO[str]) -> None:
     ctx = data["context"]
     out.write(f"Transcript: {data['transcript'] or 'none found'}\n")
     if ctx["measured"]:
-        pct = f" of {ctx['capacity']:,} ({ctx['percentage']}%)" if "capacity" in ctx else ""
-        out.write(f"Context now: {ctx['tokens']:,} tokens{pct}, measured at step {ctx['step']}\n")
+        pct = (
+            f" of {ctx['capacity']:,} ({ctx['percentage']}%)"
+            if "capacity" in ctx
+            else ""
+        )
+        out.write(
+            f"Context now: {ctx['tokens']:,} tokens{pct}, measured at step {ctx['step']}\n"
+        )
     else:
         out.write("Context now: no model turn recorded yet\n")
     auto = data["auto_loaded"]
-    out.write(f"\nAuto-loaded files, ~{auto['total_est_tokens']:,} tokens (estimated; skills count frontmatter only)\n")
+    out.write(
+        f"\nAuto-loaded files, ~{auto['total_est_tokens']:,} tokens (estimated; skills count frontmatter only)\n"
+    )
     for e in auto["files"]:
-        out.write(f"  {e['kind']:<5} {e['est_tokens']:>7,}  {e['source']:<24} {e['path']}\n")
+        out.write(
+            f"  {e['kind']:<5} {e['est_tokens']:>7,}  {e['source']:<24} {e['path']}\n"
+        )
     tools = data["tool_results"]
-    out.write(f"\nTool results in context, ~{tools['total_est_tokens']:,} tokens (estimated)\n")
+    out.write(
+        f"\nTool results in context, ~{tools['total_est_tokens']:,} tokens (estimated)\n"
+    )
     for c in tools["calls"]:
         out.write(render_call(c))
 
@@ -252,7 +282,15 @@ def render_call(c: dict[str, Any]) -> str:
     return f"  step {c['step']!s:>5}  {c['tool']:<14} {size:>7}  {c['target']}{mark}\n"
 
 
-def follow(path: Path, offset: int, ledger: Ledger, out: IO[str], interval: float, polls: int, home: str) -> None:
+def follow(
+    path: Path,
+    offset: int,
+    ledger: Ledger,
+    out: IO[str],
+    interval: float,
+    polls: int,
+    home: str,
+) -> None:
     """Print each completed call and each new turn as the transcript grows. polls=0 follows until interrupted."""
     n = 0
     while polls == 0 or n < polls:
@@ -261,7 +299,9 @@ def follow(path: Path, offset: int, ledger: Ledger, out: IO[str], interval: floa
         for row in rows:
             for ev in ledger.feed(row):
                 if ev["event"] == "turn":
-                    out.write(f"turn  step {ev['step']!s:>5}  context {ev['context_tokens']:,} tokens (measured)\n")
+                    out.write(
+                        f"turn  step {ev['step']!s:>5}  context {ev['context_tokens']:,} tokens (measured)\n"
+                    )
                 else:
                     out.write(render_call({**ev, "target": tilde(ev["target"], home)}))
         out.flush()
@@ -271,26 +311,49 @@ def follow(path: Path, offset: int, ledger: Ledger, out: IO[str], interval: floa
 
 def main(argv: list[str] | None = None, out: IO[str] = sys.stdout) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--conversation", help="conversation ID (default: the newest transcript)")
-    parser.add_argument("--transcript", type=Path, help="a transcript file, instead of looking one up")
-    parser.add_argument("--cwd", type=Path, default=Path.cwd(), help="folder the agy session started in")
+    parser.add_argument(
+        "--conversation", help="conversation ID (default: the newest transcript)"
+    )
+    parser.add_argument(
+        "--transcript", type=Path, help="a transcript file, instead of looking one up"
+    )
+    parser.add_argument(
+        "--cwd", type=Path, default=Path.cwd(), help="folder the agy session started in"
+    )
     parser.add_argument("--gemini-home", type=Path, default=Path.home() / ".gemini")
-    parser.add_argument("--app-dir", type=Path, help="agy's app data folder (default: <gemini-home>/antigravity-cli)")
-    parser.add_argument("--capacity", type=int, help="context window in tokens, e.g. 1000000 from /context")
-    parser.add_argument("--json", action="store_true", help="print JSON instead of text")
-    parser.add_argument("--follow", action="store_true", help="keep printing new tool results and turns")
+    parser.add_argument(
+        "--app-dir",
+        type=Path,
+        help="agy's app data folder (default: <gemini-home>/antigravity-cli)",
+    )
+    parser.add_argument(
+        "--capacity",
+        type=int,
+        help="context window in tokens, e.g. 1000000 from /context",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print JSON instead of text"
+    )
+    parser.add_argument(
+        "--follow", action="store_true", help="keep printing new tool results and turns"
+    )
     parser.add_argument("--interval", type=float, default=1.0, help=argparse.SUPPRESS)
     parser.add_argument("--polls", type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     app_dir = args.app_dir or args.gemini_home / "antigravity-cli"
     home = str(Path.home())
-    transcript = args.transcript or find_transcript(app_dir / "brain", args.conversation)
+    transcript = args.transcript or find_transcript(
+        app_dir / "brain", args.conversation
+    )
     if args.transcript and not args.transcript.is_file():
         print(f"agy-context: no transcript at {args.transcript}", file=sys.stderr)
         return 2
     if args.conversation and transcript is None:
-        print(f"agy-context: no transcript for conversation {args.conversation}", file=sys.stderr)
+        print(
+            f"agy-context: no transcript for conversation {args.conversation}",
+            file=sys.stderr,
+        )
         return 2
 
     ledger = Ledger()
@@ -299,7 +362,13 @@ def main(argv: list[str] | None = None, out: IO[str] = sys.stdout) -> int:
         rows, offset = complete_rows(transcript, 0)
         for row in rows:
             ledger.feed(row)
-    data = report(discover(args.cwd.resolve(), args.gemini_home, app_dir), ledger, transcript, args.capacity, home)
+    data = report(
+        discover(args.cwd.resolve(), args.gemini_home, app_dir),
+        ledger,
+        transcript,
+        args.capacity,
+        home,
+    )
     if args.json:
         out.write(json.dumps(data, indent=2) + "\n")
     else:
