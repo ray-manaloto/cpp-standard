@@ -102,15 +102,148 @@ lsan_fires() { # lsan_fires CXX TAG: LeakSanitizer reports the appendix leak
   o="$(timeout 60 "./lsan_$2" 2>&1)"
   [[ "$o" == *"detected memory leaks"* ]]
 }
-iwyu_works() { # iwyu_works IWYU [FLAGS]: it analyses a file and finds the unused include
-  printf '#include <vector>\nint main() { return 0; }\n' >"$PROBE/iw.cpp"
-  local o r
-  # shellcheck disable=SC2086
-  o="$("$1" -std=c++26 ${2:-} "$PROBE/iw.cpp" 2>&1)"
-  r=$?
-  # Without --error, IWYU exits 0 after an analysis, suggestions or not
-  # (0.25 and 0.27 both did here); anything else is a failed run.
-  [[ $r == 0 && "$o" == *"should remove these lines"* && "$o" == *"#include <vector>"* && "$o" != *"error:"* ]]
+# Both certification routes copy this script into the image. IWYU reports an
+# abbreviated Git ID; match the whole abbreviation against the recipe's pin.
+iwyu_clang_version() { # IWYU VERSION SOURCE_PIN
+  local version pattern='^include-what-you-use ([0-9.]+) \(git:([0-9a-f]{7,40})\) based on (.+)$'
+  version="$("$1" --version 2>&1)" || return 1
+  [[ "${version%%$'\n'*}" =~ $pattern ]] || return 1
+  [[ ${BASH_REMATCH[1]} == "$2" && "$3" == "${BASH_REMATCH[2]}"* ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[3]}"
+}
+iwyu_analysis() { # IWYU [driver flags]; leaves the include trace in iw.log
+  local iw="$1" rc
+  shift
+  cat >iw.cpp || return 1
+  timeout 60 "$iw" -std=c++26 "$@" -H iw.cpp >iw.log 2>&1
+  rc=$?
+  if [[ $rc != 0 ]] || grep -Fq 'error:' iw.log; then
+    printf 'analysis exit %s: %s\n' "$rc" "$(grep -m1 -F 'error:' iw.log)"
+    return 1
+  fi
+  # Scope the removal to our translation unit. A vector in the add or full
+  # list, or a removal suggested for another file, cannot satisfy this check.
+  awk '
+    $0 == "iw.cpp should remove these lines:" { removing=1; next }
+    !/^- / { removing=0 }
+    removing && /^- #include <vector>([[:space:]]*\/\/.*)?$/ { found=1 }
+    END { exit !found }
+  ' iw.log || {
+    echo 'no unused <vector> removal for iw.cpp'
+    return 1
+  }
+}
+iwyu_header() { # Canonical path of a directly included header in the -H trace.
+  local header
+  header="$(awk -F/ -v name="$1" 'index($0, ". /") == 1 && $NF == name {print substr($0, 3); exit}' iw.log)"
+  [[ -f "$header" ]] && readlink -f "$header"
+}
+p2996_iwyu() {
+  local prefix iw clang iw_root clang_root header rc=0
+  local source_pin=791e69ea4662cb3e74e8128fd5fd69bd7f4ea6b3 # build-linux.sh
+  if [[ $fork_version_rc != 0 ]]; then
+    echo "$P --version exited $fork_version_rc"
+    return 1
+  fi
+  prefix="$(readlink -f "$P2996")"
+  iw="$(readlink -f "$P2996/bin/include-what-you-use")"
+  if [[ ! -x "$iw" || "$iw" != "$prefix/bin/include-what-you-use" ]]; then
+    echo "missing or misplaced fork IWYU: $iw"
+    return 1
+  fi
+  clang="$(iwyu_clang_version "$iw" 0.25 "$source_pin")"
+  if [[ ! "$PIN" =~ ^[0-9a-f]{40}$ || "$clang" != "clang version 21."*" $PIN)" || "$clang" != "${pv%%$'\n'*}" ]]; then
+    echo "IWYU 0.25@${source_pin:0:7} and clang++ must identify fork $PIN"
+    return 1
+  fi
+  # IWYU can print the directory and return 1 (no compilation job).
+  iw_root="$("$iw" -print-resource-dir 2>&1)" || rc=$?
+  if [[ $rc -gt 1 || "$iw_root" != /* || ! -d "$iw_root" ]]; then
+    echo "invalid IWYU resource query (exit $rc): $iw_root"
+    return 1
+  fi
+  iw_root="$(readlink -f "$iw_root")"
+  if ! clang_root="$("$P" -print-resource-dir)" || [[ "$clang_root" != /* || ! -d "$clang_root" ||
+    "$(readlink -f "$clang_root")" != "$iw_root" || "$iw_root" != "$prefix/"* ]]; then
+    echo "resource mismatch: IWYU=$iw_root clang=$clang_root prefix=$prefix"
+    return 1
+  fi
+  iwyu_analysis "$iw" <<'CPP' || return 1
+#include <__stddef_size_t.h>
+#include <vector>
+int main() { return 0; }
+CPP
+  header="$(iwyu_header __stddef_size_t.h)"
+  if [[ "$header" != "$iw_root/include/__stddef_size_t.h" ]]; then
+    echo "builtin include from ${header:-unknown}; expected $iw_root/include/__stddef_size_t.h"
+    return 1
+  fi
+  echo "$iw 0.25@${source_pin:0:7} fork=$PIN root=$iw_root builtin=$header removed <vector> rc=0"
+}
+stock_iwyu() {
+  local installed=/opt/iwyu-llvm23/bin/include-what-you-use iw clang embedded header
+  local source_pin=c9cbc836a1af631610266c53cf1671b1671a0fdc # ubuntu-cert.Dockerfile
+  local snapshot='^Ubuntu clang version (23\.[0-9.]+) \((\+\+[0-9]+\+[0-9a-f]{12,40}-[^ )]+)\)$'
+  local expected_version arch package clang_deb libcxx_deb
+  # shellcheck disable=SC2016 # dpkg-query expands these fields.
+  local format='${db:Status-Status} ${Version}'
+  iw="$(command -v include-what-you-use)" && iw="$(readlink -f "$iw")"
+  if [[ "$iw" != "$installed" || ! -x "$iw" || "$iw" -ef "$P2996/bin/include-what-you-use" ]]; then
+    echo "expected distinct stock install $installed; PATH resolved to ${iw:-nothing}"
+    return 1
+  fi
+  if ! clang="$("$L" --version 2>&1)"; then
+    echo "failed to identify $L"
+    return 1
+  fi
+  clang="${clang%%$'\n'*}"
+  embedded="$(iwyu_clang_version "$iw" 0.27 "$source_pin")"
+  if [[ ! "$clang" =~ $snapshot || "$embedded" != "$clang" ]]; then
+    echo "IWYU 0.27@${source_pin:0:7} on ${embedded:-unknown}; expected $clang"
+    return 1
+  fi
+  expected_version="${BASH_REMATCH[1]}~${BASH_REMATCH[2]}"
+  iwyu_analysis "$iw" -stdlib=libc++ <<'CPP' || return 1
+#include <vector>
+#if !defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
+#error expected libc++ headers
+#endif
+int main() { return 0; }
+CPP
+  header="$(iwyu_header vector)"
+  if [[ "$header" != */c++/v1/vector ]]; then
+    echo "expected libc++ <vector>; traced ${header:-nothing}"
+    return 1
+  fi
+  if ! arch="$(dpkg --print-architecture)" || [[ -z "$arch" ]]; then
+    echo "cannot identify native dpkg architecture"
+    return 1
+  fi
+  package="libc++-23-dev:$arch"
+  if ! clang_deb="$(dpkg-query -W --showformat="$format" "clang-23:$arch")" || [[ "$clang_deb" != "installed "* ]]; then
+    echo "cannot identify installed clang-23:$arch"
+    return 1
+  fi
+  if ! libcxx_deb="$(dpkg-query -W --showformat="$format" "$package")" || [[ "$libcxx_deb" != "$clang_deb" ]]; then
+    echo "$package reports '$libcxx_deb'; clang-23:$arch reports '$clang_deb'"
+    return 1
+  fi
+  clang_deb="${clang_deb#installed }"
+  if [[ "${clang_deb#*:}" != "$expected_version" ]]; then
+    echo "installed clang-23:$arch $clang_deb differs from active $expected_version"
+    return 1
+  fi
+  # The trace may use the public include symlink. Its resolved file must
+  # appear in the native package's manifest. Drain the list under pipefail.
+  if ! dpkg-query -L "$package" | grep -Fx -- "$header" >/dev/null; then
+    echo "$package does not own traced $header"
+    return 1
+  fi
+  echo "$iw 0.27@${source_pin:0:7} $clang libc++=$header $package=$clang_deb removed <vector> rc=0"
+}
+iwyu_pass() {
+  # Keep both resolved paths even for prefixes longer than res's display limit.
+  printf '%-5s PASS %s\n' "$1" "$(printf '%s' "$2" | tr '\n\t' '  ')"
 }
 dap_probe() { # dap_probe LLDB-DAP PROGRAM: the appendix probe (it launches with ASLR on, DB2)
   timeout 120 python3 -I -B dap_probe.py "$1" "$2" dap.cpp 10 2>&1 | tail -1
@@ -458,6 +591,7 @@ if [[ ! -x "$P" ]]; then
   for id in P1 P2 P3 P4 P5 P6 P7 P8 P9 P10 P11 P12 P13 P14; do want $id && res $id FAIL "$P not found (mount the p2996 install at \$P2996)"; done
 else
   pv="$("$P" --version 2>&1)"
+  fork_version_rc=$?
   if want P1; then
     [[ -n "$PIN" && "$pv" == *"$PIN"* && "$pv" == *"+assertions"* ]] && res P1 PASS "commit ${PIN:0:12}; +assertions" ||
       res P1 FAIL "$(printf '%s' "$pv" | head -1) (pin ${PIN:-unknown})"
@@ -509,17 +643,7 @@ else
     else res P7 FAIL "tidy exit $r1, $e1 errors; format exit $r2; include-cleaner exit $r3, $e3 errors"; fi
   fi
   if want P8; then
-    iw="$P2996/bin/include-what-you-use"
-    if [[ ! -e "$iw" ]]; then
-      res P8 FAIL "no include-what-you-use in \$P2996/bin (not built)"
-    else
-      o="$("$iw" --version 2>&1)"
-      r=$?
-      if [[ $r == 0 && -n "$PIN" && "$o" == *"include-what-you-use 0.25"* && "$o" == *"$PIN"* ]]; then
-        iwyu_works "$iw" && res P8 PASS "$(head -1 <<<"$o"); flags the unused <vector>" ||
-          res P8 FAIL "$(head -1 <<<"$o"); did not flag the unused <vector> (builtin headers?)"
-      else res P8 FAIL "exit $r: $(tr '\n' ' ' <<<"$o" | cut -c1-120) (want 0.25 on p2996 ${PIN:0:12})"; fi
-    fi
+    if o="$(p2996_iwyu)"; then iwyu_pass P8 "$o"; else res P8 FAIL "$o"; fi
   fi
   if want P9; then
     o="$("$P" --coverage -std=c++26 p.cpp -o pc 2>&1 && ./pc >/dev/null && "$P2996/bin/llvm-cov" gcov -n pc-p.gcda 2>&1 | head -2)"
@@ -770,17 +894,7 @@ if want T2; then
   [[ "$o" == "USAGE: scan-build"* ]] && res T2 PASS "$o" || res T2 FAIL "$o"
 fi
 if want T3; then
-  iw="$(command -v include-what-you-use 2>/dev/null)"
-  v="" r=127
-  [[ -n "$iw" ]] && {
-    v="$("$iw" --version 2>&1)"
-    r=$?
-  }
-  cv="$(clang++-23 --version | head -1 | grep -oE 'clang version [0-9.]+')"
-  if [[ $r == 0 && "$v" == *"include-what-you-use 0.27"* && -n "$cv" && "$v" == *"$cv"* ]]; then
-    iwyu_works "$iw" && res T3 PASS "$(head -1 <<<"$v" | cut -c1-150); flags the unused <vector>" ||
-      res T3 FAIL "$(head -1 <<<"$v"); did not flag the unused <vector> (builtin headers?)"
-  else res T3 FAIL "want IWYU 0.27 on ${cv:-clang 23}: ${iw:-none on PATH}, exit $r, $(head -1 <<<"$v" | cut -c1-100)"; fi
+  if o="$(stock_iwyu)"; then iwyu_pass T3 "$o"; else res T3 FAIL "$o"; fi
 fi
 if want T4; then
   ok=""
