@@ -18,7 +18,13 @@ def sample(usage, *, pid="10"):
 
 
 class QuietPreflightTest(unittest.TestCase):
-    def run_sample(self, *samples, monotonic=None, clock_guard=contextlib.nullcontext):
+    def run_sample(
+        self,
+        *samples,
+        monotonic=None,
+        clock_guard=contextlib.nullcontext,
+        identity=("nzxth1desktop", "x86_64"),
+    ):
         main = QUIET["main"]
         with (
             patch.dict(
@@ -26,6 +32,7 @@ class QuietPreflightTest(unittest.TestCase):
                 {
                     "WINDOW_SECONDS": 30,
                     "snapshot": unittest.mock.Mock(side_effect=samples),
+                    "host_identity": unittest.mock.Mock(return_value=identity),
                     "event_anchor": unittest.mock.Mock(
                         return_value=("daemon", "incumbent", (100, 150))
                     ),
@@ -51,6 +58,8 @@ class QuietPreflightTest(unittest.TestCase):
                     sample(10), sample(210), sample(10 + total)
                 )
                 self.assertEqual(exit_code, expected)
+                self.assertEqual(report["host"], "nzxth1desktop")
+                self.assertEqual(report["architecture"], "x86_64")
                 self.assertEqual(report["total_cpu_us"], total)
                 self.assertEqual(
                     [item["cpu_us"] for item in report["samples"]],
@@ -60,6 +69,20 @@ class QuietPreflightTest(unittest.TestCase):
                         {"a": total},
                     ],
                 )
+
+    def test_wrong_host_or_architecture_is_rejected_before_sampling(self):
+        for host, architecture in (
+            ("other-desktop", "x86_64"),
+            ("nzxth1desktop", "aarch64"),
+        ):
+            with self.subTest(host=host, architecture=architecture):
+                exit_code, report = self.run_sample(identity=(host, architecture))
+                self.assertEqual(exit_code, 1)
+                self.assertFalse(report["ready"])
+                self.assertEqual(
+                    (report["host"], report["architecture"]), (host, architecture)
+                )
+                self.assertEqual(report["samples"], [])
 
     def test_fails_on_inventory_change_restart_and_counter_reset(self):
         cases = (

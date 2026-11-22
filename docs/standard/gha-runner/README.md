@@ -232,8 +232,10 @@ A positive offset measures lateness in seconds.
 
 For a repeat after busy A/B timing, stream `pc-compiler-quiet.py` from verified
 protected main to Python on the compiler host. Save the JSON output with the
-deployment receipt. It samples CPU at each container's root cgroup every
-15 seconds for four minutes. It also checks Docker events for lifecycle
+deployment receipt. The report identifies the host and architecture. The
+command only admits nzxth1desktop on x86_64. It samples CPU at each
+container's root cgroup every 15 seconds for four minutes. It also checks
+Docker events for lifecycle
 changes between samples, using events at both ends to verify history
 coverage. Missed sampling deadlines or wall-clock steps invalidate the
 sample. The clock check uses Linux timerfd through Python 3.13 or later.

@@ -17,6 +17,11 @@ MAX_LATENESS_SECONDS = 2
 BUDGET_US = 800_000
 
 
+def host_identity():
+    system = os.uname()
+    return system.nodename.partition(".")[0], system.machine
+
+
 def utc_now():
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -231,13 +236,18 @@ def collect_samples(report):
 
 
 def main():
+    host, architecture = host_identity()
     report = {
+        "host": host,
+        "architecture": architecture,
         "started_at": utc_now(),
         "window_seconds": WINDOW_SECONDS,
         "budget_us": BUDGET_US,
         "samples": [],
     }
     try:
+        if (host, architecture) != ("nzxth1desktop", "x86_64"):
+            raise ValueError("quiet sampling requires nzxth1desktop on x86_64")
         with stable_wall_clock():
             collect_samples(report)
         report["total_cpu_us"] = sum(report["samples"][-1]["cpu_us"].values())
