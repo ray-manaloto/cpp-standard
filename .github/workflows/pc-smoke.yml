@@ -15,17 +15,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  seed-private-cache:
-    name: Verify runner and seed private cache
+  check-runner-route:
+    name: Check dedicated smoke runner readiness
     if: >-
       ${{ inputs.qualify &&
           github.event_name == 'workflow_dispatch' &&
           github.repository == 'ray-manaloto/cpp-standard' &&
           github.ref == 'refs/heads/main' &&
           github.workflow_ref == 'ray-manaloto/cpp-standard/.github/workflows/pc-smoke.yml@refs/heads/main' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 5
+    steps:
+      - name: Require the dedicated runner route to be provisioned
+        shell: bash
+        env:
+          PC_SMOKE_RUNNER_READY: ${{ vars.PC_SMOKE_RUNNER_READY }}
+        run: |
+          if [[ "$PC_SMOKE_RUNNER_READY" != true ]]; then
+            echo '::error::The dedicated PC smoke runner route is not provisioned. See docs/standard/gha-runner/README.md.'
+            exit 1
+          fi
+
+  seed-private-cache:
+    name: Verify runner and seed private cache
+    needs: check-runner-route
     runs-on:
-      group: cpp-standard-amd64
-      # Group policy pins this workflow to protected main. It has no pull request trigger.
+      group: cpp-standard-pc-smoke
       labels: [self-hosted, pc-x86, container, cpp-standard]  # jactionlint ignore=self-hosted-runner
     timeout-minutes: 5
     steps:
@@ -76,15 +91,8 @@ jobs:
   verify-private-cache-disposal:
     name: Verify private cache disposal on a fresh runner
     needs: seed-private-cache
-    if: >-
-      ${{ inputs.qualify &&
-          github.event_name == 'workflow_dispatch' &&
-          github.repository == 'ray-manaloto/cpp-standard' &&
-          github.ref == 'refs/heads/main' &&
-          github.workflow_ref == 'ray-manaloto/cpp-standard/.github/workflows/pc-smoke.yml@refs/heads/main' }}
     runs-on:
-      group: cpp-standard-amd64
-      # Group policy pins this workflow to protected main. It has no pull request trigger.
+      group: cpp-standard-pc-smoke
       labels: [self-hosted, pc-x86, container, cpp-standard]  # jactionlint ignore=self-hosted-runner
     timeout-minutes: 5
     steps:

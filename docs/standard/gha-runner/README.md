@@ -54,6 +54,22 @@ that job's `mise install` fails until the change reaches the default branch.
   an sccache hit.
 - `gha-slot wipe glaze` removes both volumes and the age stamp; `dry-run` shows repo scope and app `main`.
 
+## CPP runner smoke
+
+`pc-smoke.yml` is a manual qualification of two fresh self-hosted runners in sequence. Both jobs
+target `cpp-standard-pc-smoke`. The hosted check fails before either job can queue until
+`PC_SMOKE_RUNNER_READY` is set to `true` in the repository.
+
+Enable the variable only after the settings owner verifies that the dedicated group selects only
+`ray-manaloto/cpp-standard`, allows this public repository, and selects exactly
+`ray-manaloto/cpp-standard/.github/workflows/pc-smoke.yml@refs/heads/main`. The PC needs a matching
+one-job launcher and admission hook with the smoke labels, a 16 CPU / 48 GiB envelope, zero swap,
+read-only tools and policy mounts, and a new private sccache directory for each job. Keep the variable
+unset until that route is ready, and clear it before retiring the route.
+
+The compiler group `cpp-standard-amd64` admits only `pc-compiler.yml`. The generic Default-group
+slot below exposes a persistent writable sccache and cannot satisfy the smoke cache-disposal check.
+
 ## Adding a repository
 
 Run these on the PC as root, in order. Slots register **org-scope** runners in the org's Default runner group, which
