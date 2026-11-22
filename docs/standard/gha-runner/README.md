@@ -211,3 +211,19 @@ For a runtime reuse claim, retain the following in ordinary run receipts.
 - Compare two distinct protected project checkouts with equal full compiler input and package digests. The consumer log identifies the source and skips the LLVM configure and Ninja build. Include the producer run or registry digest.
 - For each checkout, record the project image ID, then configure, build and run CTest on each of `gcc16-coverage-amd64`, `clang23-coverage-amd64` and `p2996-coverage-amd64`. Each must execute both `standin_test` and `core_test` with zero skipped or failed. Preserve the compiler, triplet, stdlib, runtime and applicable hardening evidence.
 - Check that a real patch, compiler or dependency input change selects a new key. Record the measured object-cache counters separately from the whole-package hit. Unsupported compile modes can produce non-cacheable requests. Retain the fresh quiet-window and teardown evidence for the run.
+
+### Read a saved checkpoint or closeout
+
+At each monitor checkpoint, run `python3 pc-compiler-readback.py checkpoint ATTEMPT POLL_TIME`
+from this directory. Supply the GitHub poll time with its UTC offset. The report compares
+timestamped sample files with the runtime owner's dated "Latest host sample" notes and prints
+the acquisition time and source. Pass any newer dated native observations with repeatable
+`--owner-receipt FILE`. Each JSON file has numeric `run` and `attempt`, an offset-aware
+`acquired` timestamp and the owner's `observation` text. A missing measurement remains unknown.
+
+After collection, run `python3 pc-compiler-readback.py closeout COLLECTION`. Use it on the
+operator-verified collection. Match the assignment commit to the operator's deployment receipt.
+Report the selected package source and input key, built image ID, registry digest when available,
+and compiler and per-preset object counters. Null counters mean no measurement. Compare the
+signed offsets from the cutoff for job completion, host teardown and independent inventory.
+A positive offset measures lateness in seconds.
