@@ -59,6 +59,7 @@ TEST_FIXTURE_TASKS = (
     ".mise/tasks/pins/validate",
     ".mise/tasks/suites/cov",
     ".mise/tasks/agents/cov",
+    ".mise/tasks/agents/hook-native",
     ".mise/tasks/agents/testtab-check",
     ".mise/tasks/agents/agy-worker-check",
     ".mise/tasks/slot/guard-check",

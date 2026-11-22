@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#MISE description="Verify hook publication with a pinned Codex binary and disposable native installs"
+set -euo pipefail
+: "${CODEX_HOOK_FIXTURE_BINARY:?Set CODEX_HOOK_FIXTURE_BINARY to the absolute path of the pinned Codex binary}"
+if [[ "$CODEX_HOOK_FIXTURE_BINARY" != /* || ! -f "$CODEX_HOOK_FIXTURE_BINARY" || ! -x "$CODEX_HOOK_FIXTURE_BINARY" ]]; then
+  echo 'CODEX_HOOK_FIXTURE_BINARY must be an absolute path to an executable file' >&2
+  exit 2
+fi
+# A Git hook can export a repository context that overrides git -C.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+exec python3 -I "$root/python/agents/hook_health_check.py" NativeTest -v

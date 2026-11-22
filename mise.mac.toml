@@ -175,6 +175,8 @@ run = "mkdir -p ~/.agents/skills"
 "~/.config/agents/skills/secrets" = { source = "unix/home/.config/agents/skills/secrets", mode = "symlink" }
 "~/.config/agents/skills/herdr-startup" = { source = "unix/home/.config/agents/skills/herdr-startup", mode = "symlink" }
 "~/.config/agents/skills/herdr-shutdown" = { source = "unix/home/.config/agents/skills/herdr-shutdown", mode = "symlink" }
+"~/.config/agents/skills/codex-hook-health" = { source = "unix/home/.config/agents/skills/codex-hook-health", mode = "symlink" }
+"~/.agents/skills/codex-hook-health" = { source = "unix/home/.config/agents/skills/codex-hook-health", mode = "symlink" }
 # ticket-retro (#453): the user-scope skill, one folder for both agents; the LICENSE sits beside it in the source.
 "~/.claude/skills/ticket-retro" = { source = "~/dev/github/ray-manaloto/cpp-standard/unix/home/.config/agents/skills/ticket-retro", mode = "symlink" }
 "~/.agents/skills/ticket-retro" = { source = "~/dev/github/ray-manaloto/cpp-standard/unix/home/.config/agents/skills/ticket-retro", mode = "symlink" }
