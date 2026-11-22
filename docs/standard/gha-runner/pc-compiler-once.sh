@@ -15,7 +15,7 @@ prepare_compiler() {
   local refresh_at=0 seed_run='' cold_reason='' stage_package=0
   local p slot
   local began status=FAIL timing=unverified deadline path
-  local passes=0 fails=0 na=0 total=0 expected
+  local passes=0 fails=0 na=0 total=0
   # The App may be unable to read group policy. Require operator confirmation
   # of group 6's exact CPP repository and protected-main workflow allowlist.
   [[ "$run" =~ ^[1-9][0-9]*$ && "$sha" =~ ^[0-9a-f]{40}$ && ($# == 3 || $# == 4 || $# == 5) &&
@@ -159,6 +159,30 @@ capture_compiler_build() {
   else
     return 1
   fi
+}
+
+check_compiler_rows() {
+  local performance="$1" doc="$source/docs/standard/ubuntu.md"
+  case "$performance" in verified | failed | unverified) ;; *) return 1 ;; esac
+  awk -v performance="$performance" '
+    FILENAME==ARGV[1] {
+      if (match($0, /^\*\*[A-Z]+[0-9]+\./)) {
+        expected[substr($0, 3, RLENGTH-3)]=1
+        count++
+      }
+      next
+    }
+    !($1 in expected) || seen[$1]++ { bad=1 }
+    $1=="P8" && $2=="PASS" { p2996_iwyu++ }
+    $1=="T3" && $2=="PASS" { stock_iwyu++ }
+    $2=="FAIL" && $1=="V6" && /^V6 +FAIL +\[timing: overhead limit exceeded\] / { overhead++; next }
+    # The amd64 playbook records facts, timing numbers and project rules as N/A.
+    $2=="N/A" && (NF<3 || $1!~/^(A4|E1|G5|H1|K1|T[16]|U[234]|V5)$/ || /timing untrusted/) { bad=1 }
+    $2!="PASS" && $2!="N/A" { bad=1 }
+    END {
+      exit (bad || FNR!=count || p2996_iwyu!=1 || stock_iwyu!=1 ||
+            (performance=="verified" && overhead) || (performance=="failed" && overhead!=1))
+    }' "$doc" "$result/body.txt"
 }
 
 certify_compiler_project() {
@@ -383,13 +407,15 @@ supervise_compiler() {
     printf '%s\n' "$candidate" >"$result/built-image"
     remove_compiler_container "$build"
     # No build quota, swap quota, CPU affinity or toolchain mount is inherited.
-    # --ab enables the pinned V6 comparison. The driver must retain V1/V3 and
-    # fail on a busy/unobservable timing window or an unavailable GPU.
+    # --ab enables the pinned V6 comparison. Routine Actions accept a complete
+    # busy window or excess overhead as advisory. The driver still fails on
+    # incomplete evidence and required functional checks (including V1/V3).
     timeout --kill-after=30s 35m env -i PATH="$PATH" HOME=/root TMPDIR="$state" \
-      MISE_AUTO_INSTALL=0 CERT_CPP_ACTIONS_HOST=1 "CERT_CPP_SOURCE=$source" \
+      MISE_AUTO_INSTALL=0 CERT_CPP_ACTIONS_HOST=1 CERT_CPP_TIMING_ADVISORY=1 "CERT_CPP_SOURCE=$source" \
       "CERT_CPP_CONTAINER=$check" "CERT_CPP_EVIDENCE=$result" \
       "usage_image=$candidate" usage_ab=true usage_name=nzxth1desktop \
       "CERT_CPP_OWNER=$owner_name" bash "$source/.mise/tasks/certify/ubuntu" >"$result/checklist.txt" 2>"$result/checklist.stderr"
+    check_compiler_rows "$(<"$result/timing-verdict.txt")"
     certify_compiler_project "$candidate"
   }
   phase=compile-and-certify
@@ -413,19 +439,16 @@ supervise_compiler() {
   else
     die 'workflow ended, lost assignment, or passed its host deadline'
   fi
+  if [[ -s "$result/timing-verdict.txt" ]]; then
+    timing="$(<"$result/timing-verdict.txt")"
+  fi
   if [[ -s "$result/body.txt" ]]; then
-    expected="$(grep -cE '^\*\*[A-Z]+[0-9]+\.' "$source/docs/standard/ubuntu.md")"
     read -r passes fails na total < <(awk '
       $2=="PASS" {pass++} $2=="FAIL" {fail++} $2=="N/A" {na++}
       END {print pass+0,fail+0,na+0,NR}
     ' "$result/body.txt")
-    if ((execution_rc == 0 && total == expected && passes + na == total && fails == 0)) &&
-      awk '$1=="P8" && $2=="PASS" { p2996_iwyu++ }
-            $1=="T3" && $2=="PASS" { stock_iwyu++ }
-            $2=="N/A" && (NF<3 || $1~/^(GO[123]|R2|V[12346])$/ || /timing untrusted/) { bad=1 }
-            END {exit (bad || p2996_iwyu!=1 || stock_iwyu!=1)}' "$result/body.txt"; then
+    if ((execution_rc == 0)) && [[ -s "$result/timing-verdict.txt" ]]; then
       status=PASS
-      timing=verified
     fi
   fi
 
