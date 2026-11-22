@@ -179,6 +179,111 @@ touch "$MISE_DATA_DIR/shims/cmake"
                 self.assertRegex(result.stdout, r"(?m)^B2 +PASS .*all 1 mise shims")
             self.assertFalse(cache.exists())
 
+    def test_b3_owns_and_stops_its_probe_server(self):
+        trace = self.root / "sccache-trace"
+        sccache = self.root / "sccache"
+        sccache.write_text(
+            f"#!{sys.executable}\n"
+            + r"""
+import os, socket, sys
+from pathlib import Path
+trace = Path(os.environ["trace"])
+address = os.environ.get("SCCACHE_SERVER_UDS", "unset")
+command = sys.argv[1] if len(sys.argv) > 1 else "serve"
+with trace.open("a") as log:
+    print(command, address, file=log)
+if command == "serve":
+    assert os.environ["SCCACHE_START_SERVER"] == os.environ["SCCACHE_NO_DAEMON"] == "1"
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(address)
+        server.listen()
+        conn, _ = server.accept()
+        conn.close()
+elif command == "--show-stats":
+    sys.exit(int(os.environ["stats_fail"]))
+elif command == "--stop-server":
+    mode = os.environ["stop_fail"]
+    if mode == "always" or (mode == "once" and trace.read_text().count(command) == 1):
+        sys.exit(1)
+    if mode != "ack-only":
+        with socket.socket(socket.AF_UNIX) as client:
+            client.connect(address)
+else:
+    sys.exit(2)
+"""
+        )
+        sccache.chmod(0o755)
+        # Exercise every poll in the deadline without spending five seconds per refusal.
+        sleep = self.root / "sleep"
+        sleep.write_text("#!/bin/sh\nexec /bin/sleep 0.01\n")
+        sleep.chmod(0o755)
+        lifecycle = ["serve", "--show-stats", "--stop-server"]
+        for actions_host, stats_fail, stop_fail, expected, commands in (
+            ("0", "0", "0", "PASS", ["--show-stats"]),
+            ("1", "0", "0", "PASS", lifecycle),
+            ("1", "1", "0", "FAIL", lifecycle),
+            ("1", "0", "once", "PASS", lifecycle + ["--stop-server"]),
+            ("1", "0", "always", "FAIL", lifecycle + ["--stop-server"]),
+            ("1", "0", "ack-only", "FAIL", lifecycle),
+        ):
+            with self.subTest(
+                actions_host=actions_host, stats_fail=stats_fail, stop_fail=stop_fail
+            ):
+                trace.write_text("")
+                result = subprocess.run(
+                    ["bash", str(ROOT / ".mise/tasks/certify/ubuntu-probes")],
+                    cwd=self.root,
+                    env={
+                        "PATH": f"{self.root}:/usr/bin:/bin",
+                        "HOME": str(self.root),
+                        "PRETTY_NAME": "fixture",
+                        "PROBES": str(self.root / "source"),
+                        "usage_only": "B3",
+                        "CERT_CPP_ACTIONS_HOST": actions_host,
+                        "trace": str(trace),
+                        "stats_fail": stats_fail,
+                        "stop_fail": stop_fail,
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                )
+                self.assertRegex(result.stdout, rf"(?m)^B3 +{expected} ")
+                observations = [line.split() for line in trace.read_text().splitlines()]
+                self.assertEqual([command for command, _ in observations], commands)
+                sockets = {socket for _, socket in observations}
+                self.assertEqual(len(sockets), 1)
+                if actions_host == "1":
+                    (socket,) = sockets
+                    self.assertEqual(Path(socket).name, "server.sock")
+                    self.assertFalse(Path(socket).parent.exists())
+                else:
+                    self.assertEqual(sockets, {"unset"})
+
+                if actions_host == "1":
+                    self.assert_b3_timing_fence(result.stdout, expected)
+
+    def assert_b3_timing_fence(self, rows, status):
+        # Execute the host driver's first pass through its first timing marker.
+        driver = (ROOT / ".mise/tasks/certify/ubuntu").read_text()
+        start = driver.index("strict_timing_failed=0")
+        end = driver.index('timing_marker "$cname-main-before" || exit 2', start)
+        end = driver.index("\n", end)
+        body = driver[start:end] + "\n  fi\nfi"
+        run = self.shell(
+            """
+actions_host=1 scratch=$PWD only="" TIMING_IDS=V4 cname=fixture
+run_inner() { printf '%s\n' "$rows"; }
+want() { return 0; }
+timing_marker() { echo TIMING_STARTED; }
+"""
+            + body,
+            rows=rows,
+        )
+        self.assertEqual(run.returncode, 0 if status == "PASS" else 2, run.stderr)
+        self.assertEqual("TIMING_STARTED" in run.stdout, status == "PASS")
+
     def test_p2996_build_uses_cert_tools_even_after_changing_directory(self):
         cert = self.root / "cert tools"
         tools = cert / "bin"

@@ -304,12 +304,45 @@ if want B2; then
     res B2 FAIL "links:${bad:- ok}; other LLVM packages: ${others:-none}; stray mise shims:${stray:- none}"
 fi
 if want B3; then
-  if sccache --show-stats >/dev/null 2>&1; then
-    if [[ "${CERT_CPP_ACTIONS_HOST:-0}" == 1 ]]; then
-      sccache --stop-server >/dev/null 2>&1 && res B3 PASS "sccache statistics read and probe server stopped before timing" || res B3 FAIL "could not stop sccache before timing"
+  if [[ "${CERT_CPP_ACTIONS_HOST:-0}" == 1 ]]; then
+    # Own the foreground process so a shutdown reply alone cannot prove drain.
+    if (
+      export SCCACHE_SERVER_UDS="$PROBE/server.sock"
+      SCCACHE_START_SERVER=1 SCCACHE_NO_DAEMON=1 sccache </dev/null &
+      server=$!
+      for _ in {1..50}; do
+        [[ -S "$SCCACHE_SERVER_UDS" ]] && break
+        kill -0 "$server" 2>/dev/null || exit 1
+        sleep 0.1
+      done
+      stats_rc=1
+      if [[ -S "$SCCACHE_SERVER_UDS" ]]; then
+        timeout -k 1 5 sccache --show-stats && stats_rc=0
+      fi
+      stop_rc=1
+      for _ in 1 2; do
+        if timeout -k 1 5 sccache --stop-server; then
+          stop_rc=0
+          break
+        fi
+      done
+      for _ in {1..50}; do
+        if ! kill -0 "$server" 2>/dev/null; then
+          wait "$server" && ((stats_rc == 0 && stop_rc == 0))
+          exit $?
+        fi
+        sleep 0.1
+      done
+      # The host aborts before timing and tears down the owned container.
+      kill -KILL "$server" 2>/dev/null
+      exit 1
+    ) >/dev/null; then
+      res B3 PASS "sccache statistics read and probe server stopped before timing"
     else
-      res B3 PASS "sccache --show-stats prints statistics"
+      res B3 FAIL "sccache probe server start, statistics, or stop failed"
     fi
+  elif sccache --show-stats >/dev/null 2>&1; then
+    res B3 PASS "sccache --show-stats prints statistics"
   else
     res B3 FAIL "sccache --show-stats failed"
   fi
