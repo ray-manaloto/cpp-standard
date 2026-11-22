@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DRIVER = (ROOT / ".mise/tasks/certify/ubuntu").read_text()
 LAUNCHER = (ROOT / "docs/standard/gha-runner/pc-compiler-once.sh").read_text()
 ARCHIVED_NA = {"A4", "E1", "G5", "H1", "K1", "T1", "T6", "U2", "U3", "U4", "V5"}
+G5_ROW = "G5    N/A  rule, no probe: C++ dependencies for GCC come from vcpkg with the GCC triplet (K1)"
 
 
 def shell_function(script, name):
@@ -112,6 +113,64 @@ class AdvisoryTiming(unittest.TestCase):
         self.ids = re.findall(r"^\*\*([A-Z]+\d+)\.", doc, re.MULTILINE)
         self.assertEqual(len(self.ids), 83)
 
+    def fixture_rows(self):
+        rows = [
+            f"{check} {'N/A' if check in ARCHIVED_NA else 'PASS'} fixture"
+            for check in self.ids
+        ]
+        rows[self.ids.index("G5")] = G5_ROW
+        return rows
+
+    def test_checklist_identity_and_g5_evidence(self):
+        headings = "".join(f"**{key}.**\n" for key in self.ids)
+        rows = "\n".join(self.fixture_rows()) + "\n"
+        doc = self.scratch / "docs/standard/ubuntu.md"
+        doc.parent.mkdir(parents=True)
+        body = self.scratch / "body.txt"
+        check = (
+            shell_function(LAUNCHER, "check_compiler_rows")
+            + "\ncheck_compiler_rows verified"
+        )
+        g2 = "G2 PASS fixture\n"
+        for name, playbook, report, expected in (
+            ("full", headings, rows, 0),
+            (
+                "both omit G2",
+                headings.replace("**G2.**\n", ""),
+                rows.replace(g2, ""),
+                1,
+            ),
+            (
+                "both substitute G3",
+                headings.replace("G2.", "G3."),
+                rows.replace("G2 ", "G3 "),
+                1,
+            ),
+            ("headings duplicate G1", headings.replace("G2.", "G1."), rows, 1),
+            (
+                "G5 arbitrary N/A",
+                headings,
+                rows.replace(G5_ROW, "G5 N/A arbitrary"),
+                1,
+            ),
+            ("G5 claims PASS", headings, rows.replace("G5    N/A ", "G5    PASS"), 1),
+        ):
+            with self.subTest(name=name):
+                doc.write_text(playbook)
+                body.write_text(report)
+                checked = subprocess.run(
+                    ["bash", "-c", check],
+                    env={
+                        **os.environ,
+                        "source": str(self.scratch),
+                        "result": str(self.scratch),
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(checked.returncode, expected, checked.stderr)
+
     def replay(
         self, *, ab_after=1170124684, overhead=False, failure=None, advisory="1"
     ):
@@ -148,10 +207,7 @@ class AdvisoryTiming(unittest.TestCase):
             ],
             text=True,
         )
-        rows = [
-            f"{check} {'N/A' if check in ARCHIVED_NA else 'PASS'} fixture"
-            for check in self.ids
-        ]
+        rows = self.fixture_rows()
         rows[self.ids.index("V6")] = v6.rstrip()
         if failure in {"B3", "U3", "V4"}:
             rows[self.ids.index(failure)] = f"{failure} FAIL [timing] fixture"
