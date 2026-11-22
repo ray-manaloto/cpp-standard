@@ -31,13 +31,14 @@ class QuietPreflightTest(unittest.TestCase):
                     "stable_wall_clock": clock_guard,
                 },
             ),
-            patch.object(QUIET["time"], "sleep"),
+            patch.object(QUIET["time"], "sleep") as sleep,
             patch.object(
                 QUIET["time"], "monotonic", side_effect=monotonic, return_value=0
             ),
             contextlib.redirect_stdout(io.StringIO()) as output,
         ):
             exit_code = main()
+            self.sleep_calls = sleep.call_args_list
         return exit_code, json.loads(output.getvalue())
 
     def test_budget_boundary_and_per_container_deltas(self):
@@ -89,6 +90,19 @@ class QuietPreflightTest(unittest.TestCase):
         self.assertFalse(report["ready"])
         self.assertIn("missed CPU sample deadline at +0s", report["error"])
         self.assertEqual(report["samples"], [])
+
+    def test_full_window_starts_after_a_slow_valid_baseline(self):
+        exit_code, report = self.run_sample(
+            sample(10),
+            sample(20),
+            sample(30),
+            monotonic=[0, 1.8, 1.8, 16.85, 16.85, 31.85],
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(report["ready"])
+        self.assertEqual(len(self.sleep_calls), 2)
+        self.assertAlmostEqual(self.sleep_calls[0].args[0], 15)
+        self.assertAlmostEqual(self.sleep_calls[1].args[0], 14.95)
 
     def test_clock_step_disqualifies_an_otherwise_quiet_sample(self):
         os_module = QUIET["os"]

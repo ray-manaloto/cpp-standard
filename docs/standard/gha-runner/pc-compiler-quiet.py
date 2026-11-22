@@ -198,9 +198,10 @@ def stable_wall_clock():
 
 def collect_samples(report):
     anchor = event_anchor()
-    began = time.monotonic()
+    baseline_started = time.monotonic()
     initial = snapshot()
-    if time.monotonic() > began + MAX_LATENESS_SECONDS:
+    began = time.monotonic()
+    if began > baseline_started + MAX_LATENESS_SECONDS:
         raise ValueError("missed CPU sample deadline at +0s")
     report["containers"] = {key: value[:-1] for key, value in initial.items()}
     report["samples"].append(
