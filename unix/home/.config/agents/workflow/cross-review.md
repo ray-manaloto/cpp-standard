@@ -39,7 +39,13 @@ shell it needs, and it stops to ask.
 | Kind | In the tab |
 |------|------------|
 | Branch | `/review` -> Custom review instructions: the acceptance criteria, `git diff origin/<default>...HEAD`, and the title and body file |
+| Uncommitted changes | `/review` -> Custom review instructions: the linked worktree, exact paths including new files, and the focused checks |
 | Document | A typed brief naming the file's absolute path and that it is read-only |
+
+For a change spanning repositories, use one custom review per worktree. Give each reviewer the paths, criteria,
+and an exact fixture command that can run in a disposable directory. State the allowed execution scope before
+the review starts. Keep broad verification in the implementation worktree. Record the native review turn and its
+completed outcome against the reviewed diff. After a fix, scope the follow-up to the affected paths and cases.
 
 A document review asks by document type: a spec for gaps, untestable criteria, missing seams and
 contradictions with the glossary and ADRs; ticket bodies for vertical slices, written seams and
