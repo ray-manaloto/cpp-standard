@@ -143,3 +143,55 @@ kernel settings to the PC itself (it happened on 2026-11-16). A job that needs a
 thing: `--device <path>`, a CDI device such as `--device nvidia.com/gpu=all`, or `--cap-add <capability>`. A
 container that runs `apt` also sets `-e container=docker`, which makes procps' post-install script skip its
 `sysctl --system`. `mise run pc:doctor` fails while a privileged container is running and names it and its image.
+
+## Dedicated amd64 compiler cache
+
+The coordinator dispatches `pc-compiler.yml` from protected main to group 6 on
+`nzxth1desktop`. The host launcher admits the assignment before opening its
+private store under `/var/lib/gha-runner/cpp-standard-amd64`. Each workload
+uses an unprivileged container. The root-owned store survives workload cleanup.
+The listener can read the specific run's results and staged publication files.
+
+| Layer | Reuse and invalidation | Evidence |
+| --- | --- | --- |
+| Installed p2996 and matching IWYU | Select the local package by the full SHA-256 of the actual compiler inputs. The key covers linux/amd64, base and donor image IDs, both source pins, recipe and patches, the bootstrap compilers, linker, CMake, Ninja, sccache and installed build dependencies. Project source can change independently. Verify the compressed archive digest and embedded full input identity before installation. | `compiler-inputs.json`, `compiler-cache.txt`, `compiler-package.json` and the Clang and IWYU version checks in `build.log`. |
+| Compiler objects | The LLVM build and each fresh project container share a bounded 40 GB sccache on the PC. The top-level LLVM build and its nested C and C++ runtime builds inherit the locked launcher. Each project preset also configures sccache. The listener and the quiet certification windows have no persistent-cache mount. | On a cold compiler build retain `compiler-sccache.json`. For each native preset retain `sccache.json`, the CMake cache and compilation database. Report cache hits, misses and non-cacheable requests as measured. |
+| mise downloads | The fresh bootstrap and locked cert profile share mise's 10 GiB content-addressed download store. The pinned mise release archive is also retained by SHA-256 and checked before each extraction. Project installs and cert shims remain separate. Locked installs verify the expected checksum. | Read the release hit/store line, digest check and before/after store sizes in `build.log`. Sizes show occupancy. An offline installation into a fresh data directory can demonstrate a download hit. |
+| Python tool wheels | The locked gcovr graphs in the project and cert profiles use a shared, private uv cache. uv copies wheels into each fresh environment. | Compare the frozen inputs and installed versions. A second offline sync of the same lock into a fresh environment demonstrates reuse. [mise frozen install](https://github.com/jdx/mise/blob/v2026.11.9/src/backend/pipx/lock.rs#L910-L928) · [uv cache directory](https://docs.astral.sh/uv/concepts/cache/#cache-directory) |
+| Package downloads | APT retains acquired archives and verifies signed repository metadata. vcpkg reuses its download directory and configures the dependencies for the actual preset triplet. The presets retain `VCPKG_BINARY_SOURCES=clear`. | See the signed APT bootstrap log, vcpkg package status and real project CTest reports. |
+
+On a local compiler miss, the host looks up
+`ghcr.io/ray-manaloto/cpp-standard/tools:p2996-pc-linux-amd64-<first-16-hex>`.
+It verifies the immutable OCI digest against the protected publisher attestation,
+checks the payload and compares the full embedded key before use. A service,
+authentication, integrity or attestation error fails the attempt. A confirmed
+miss asks for a verified prior compiler or the reason a new source build is needed.
+[Verified mise downloads](https://github.com/jdx/mise/blob/v2026.11.9/docs/continuous-integration.md#L73-L105)
+
+Use the ordinary `gha-slot compiler-once RUN MAIN_SHA --group-verified` launch
+for a cache consumer. Append `--seed-run PRIOR_RUN` for migration from a retained
+PC build. The host checks the prior build exit, assignment, exact image ID and
+owner, archived recipe, original file hashes and its installed build inputs.
+Append `--source-change "reason"` only for a necessary compiler input change
+or diagnosed compiler defect. A valid existing package still takes precedence.
+The host retains a verified package before the downstream checklist or project
+verdict. A seeded or cold run stages the OCI payload. For an existing local
+package, `--stage-package` stages it again for recovery of an expired upload.
+The coordinator dispatches the existing protected `publish.yml` with that run's
+ID. Record the package tag, digest and verified attestation after publication.
+
+To check mise download reuse in isolation, select one HTTPS tool with its
+platform checksum in the lockfile. Install it with `mise install --locked TOOL`
+into an empty data directory and record the checksum and download-store entry.
+Use a second empty data directory, the same download store and
+`MISE_OFFLINE=1`. The install must succeed with identical bytes. An empty
+store under the same offline conditions must fail. After eviction, an online
+locked install can fetch the expected bytes again. If verification fails,
+record the digest, isolate the bad entry and reacquire the pinned artifact
+before retrying. Use scratch directories for these checks.
+
+For a runtime reuse claim, retain the following in ordinary run receipts.
+
+- Compare two distinct protected project checkouts with equal full compiler input and package digests. The consumer log identifies the source and skips the LLVM configure and Ninja build. Include the producer run or registry digest.
+- For each checkout, record the project image ID, then configure, build and run CTest on each of `gcc16-coverage-amd64`, `clang23-coverage-amd64` and `p2996-coverage-amd64`. Each must execute both `standin_test` and `core_test` with zero skipped or failed. Preserve the compiler, triplet, stdlib, runtime and applicable hardening evidence.
+- Check that a real patch, compiler or dependency input change selects a new key. Record the measured object-cache counters separately from the whole-package hit. Unsupported compile modes can produce non-cacheable requests. Retain the fresh quiet-window and teardown evidence for the run.

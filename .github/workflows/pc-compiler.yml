@@ -64,6 +64,31 @@ jobs:
           mkdir -m 0700 "${RUNNER_TEMP}/cpp-result"
           cp -a /cpp-result/. "${RUNNER_TEMP}/cpp-result/"
 
+      - name: Stage verified compiler package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f /cpp-package/tag ]]; then
+            tag="$(cat /cpp-package/tag)"
+            [[ "$tag" =~ ^p2996-pc-linux-amd64-[0-9a-f]{16}$ ]]
+            for f in image.txt inputs-hash.txt image.tar; do test -s "/cpp-package/$f"; done
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload verified compiler package
+        if: ${{ steps.package.outputs.tag != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: toolchain-${{ steps.package.outputs.tag }}
+          path: |
+            /cpp-package/image.txt
+            /cpp-package/image.tar
+            /cpp-package/inputs-hash.txt
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Retain compiler and checklist evidence
         if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -91,9 +116,11 @@ jobs:
           grep -Fx "tag=cpp-standard-qualified:run-$GITHUB_RUN_ID" "$root/retained-image.txt"
           for tool in gcc16 clang23 p2996; do
             preset="$tool-coverage-amd64"
-            for receipt in CMakeCache.txt compile_commands.json ctest.xml core_test.ldd vcpkg-status.txt; do
+            for receipt in CMakeCache.txt compile_commands.json ctest.xml core_test.ldd vcpkg-status.txt sccache.json; do
               test -s "$root/project/$preset/$receipt"
             done
             grep -E "^PASS $preset [^ ]+ [^ ]+ core_test standin_test$" "$root/project.log"
           done
+          jq -e '.inputs_sha256 | test("^[0-9a-f]{64}$")' "$root/compiler-package.json"
+          test "$(sha256sum "$root/compiler-inputs.json" | cut -d' ' -f1)" = "$(jq -er .inputs_sha256 "$root/compiler-package.json")"
           cat "$root/checklist.txt"

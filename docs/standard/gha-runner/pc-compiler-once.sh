@@ -12,15 +12,32 @@ prepare_compiler() {
   local repo=ray-manaloto/cpp-standard wf=.github/workflows/pc-compiler.yml
   local base_ref base_digest base_id donor=sha256:31a18ff1d600fcbc3eb860105f499ee290f03ef6a747a1bb63745a38e1ef6f04
   local image_ref hooked policy runner_img live head job job_id jit resp
-  local refresh_at=0
+  local refresh_at=0 seed_run='' cold_reason='' stage_package=0
   local p slot
   local began status=FAIL timing=unverified deadline path
   local passes=0 fails=0 na=0 total=0 expected
   # The App may be unable to read group policy. Require operator confirmation
   # of group 6's exact CPP repository and protected-main workflow allowlist.
-  [[ "$run" =~ ^[1-9][0-9]*$ && "$sha" =~ ^[0-9a-f]{40}$ && $# == 3 &&
+  [[ "$run" =~ ^[1-9][0-9]*$ && "$sha" =~ ^[0-9a-f]{40}$ && ($# == 3 || $# == 4 || $# == 5) &&
     "${3:-}" == --group-verified ]] ||
-    die 'usage: gha-slot compiler-once <run-id> <verified-main-sha> --group-verified'
+    die 'usage: gha-slot compiler-once <run-id> <main-sha> --group-verified [--seed-run ID | --source-change REASON | --stage-package]'
+  if (($# == 4)); then
+    [[ "$4" == --stage-package ]] || die 'unknown compiler publication option'
+    stage_package=1
+  fi
+  if (($# == 5)); then
+    case "$4" in
+      --seed-run)
+        [[ "$5" =~ ^[1-9][0-9]*$ ]] || die 'invalid seed run'
+        seed_run="$5"
+        ;;
+      --source-change)
+        [[ -n "$5" ]] || die 'missing compiler change or defect'
+        cold_reason="$5"
+        ;;
+      *) die 'invalid compiler recovery option' ;;
+    esac
+  fi
   [[ $EUID == 0 && "$(hostname -s)" == nzxth1desktop && "$(uname -m)" == x86_64 ]] ||
     die 'compiler-once requires root on nzxth1desktop'
   unset DOCKER_CONTEXT
@@ -88,10 +105,15 @@ prepare_compiler() {
   install -d -m 0700 "$STATE"
   exec 8<"$STATE"
   flock -n 8 || die 'another one-time CPP compiler launch is active'
+  # Only the protected build and project containers see the persistent object cache.
+  compiler_store="$STATE/cpp-standard-amd64"
+  install -d -m 0700 "$compiler_store" "$compiler_store"/{sccache,packages,mise-downloads,mise-release,uv,apt-archives,vcpkg-downloads}
   state="$(mktemp -d "$STATE/cpp-compiler.${run}.XXXXXXXX")"
+  transfer="$state/transfer"
+  install -d -m 0700 "$transfer"
   result="$state/result"
   source="$state/source"
-  install -d -m 0755 "$result" "$source"
+  install -d -m 0755 "$result" "$source" "$state/publish"
   owner_name="cpp-compiler-$run-${state##*.}"
   owner_name="${owner_name,,}"
   runner="$owner_name-runner"
@@ -149,6 +171,9 @@ certify_compiler_project() {
   docker create --name "$name" --platform linux/amd64 --privileged=false \
     --label "org.cpp-standard.compiler=$owner_name" --network "$NET" --dns 1.1.1.1 --dns 9.9.9.9 \
     --cap-drop ALL --security-opt no-new-privileges --pids-limit 32768 --cpus 16 --memory 48g --memory-swap 48g \
+    --mount "type=bind,src=$compiler_store/sccache,dst=/cache/sccache" \
+    --mount "type=bind,src=$compiler_store/vcpkg-downloads,dst=/cache/vcpkg-downloads" \
+    -e VCPKG_DOWNLOADS=/cache/vcpkg-downloads -e SCCACHE_DIR=/cache/sccache -e SCCACHE_CACHE_SIZE=40G \
     --mount "type=bind,src=$source,dst=/project,readonly" --workdir /tmp \
     -e container=docker -e MISE_AUTO_INSTALL=0 -e MISE_TRUSTED_CONFIG_PATHS=/opt/cpp-standard-tools \
     --entrypoint /usr/local/bin/mise "$tag" -C /opt/cpp-standard-tools exec -- \
@@ -170,6 +195,7 @@ release_compiler_workload() {
   done
   for item in "$work_volume" "$cert_volume"; do remove_compiler_volume "$item" || failure=1; done
   remove_compiler_container "$check-project" || failure=1
+  remove_compiler_container "$check-seed" || failure=1
   if [[ "${1:-}" != keep-image && -s "$state/compiled-image" ]]; then
     built="$(cat "$state/compiled-image")"
     if [[ "$built" =~ ^sha256:[a-f0-9]{64}$ &&
@@ -221,7 +247,7 @@ compiler_cleanup() {
       "https://api.github.com/orgs/ray-manaloto/actions/runners/$rid" <<<"Authorization: Bearer $TOKEN")"
     [[ "$code" == 204 || "$code" == 404 ]] || failure=1
   fi
-  rm -rf -- "$source" || failure=1
+  rm -rf -- "$source" "$state/transfer" "$state/seed-source" "$state/oci" "$state/publish" || failure=1
   printf 'phase=%s exit=%s cleanup=%s completed=%s\n' "$phase" "$rc" "$failure" "$(date -u +%FT%TZ)" >"$state/closeout"
   printf 'CPP compiler run %s runner %s (%s): phase %s; receipts %s; cleanup %s\n' \
     "$run" "$runner" "${rid:-unregistered}" "$phase" "$result" "$failure"
@@ -273,7 +299,7 @@ supervise_compiler() {
     die 'another runner already owns this job or it is not queued'
   job_id="$(jq -er .id <<<"$job")"
   # The candidate-specific RO tools mount is empty. All build-time tool
-  # installations and compiler caches are local to the separate fresh rootfs.
+  # installations and the persistent object cache are inaccessible to the listener.
   install -d -m 0555 "$state/tools"
   phase=registration
   resp="$(api POST /orgs/ray-manaloto/actions/runners/generate-jitconfig "$(jq -nc --arg n "$runner" '
@@ -288,6 +314,7 @@ supervise_compiler() {
     --user 1001:1001 "${hardening[@]}" --cpus 2 --memory 2g --memory-swap 2g \
     --mount "type=bind,src=$hooked,dst=/etc/gha-cpp-compiler-admission.sh,readonly" \
     --mount "type=bind,src=$result,dst=/cpp-result,readonly" \
+    --mount "type=bind,src=$state/publish,dst=/cpp-package,readonly" \
     --mount "type=bind,src=$state/tools,dst=/cache/mise,readonly" \
     -e ACTIONS_RUNNER_INPUT_JITCONFIG -e GHA_SLOT=cpp-standard -e SCCACHE_DIR=/tmp/gha-cpp-sccache \
     -e "CPP_EXPECTED_RUN=$run" -e "CPP_EXPECTED_SHA=$sha" \
@@ -322,9 +349,17 @@ supervise_compiler() {
     docker create --platform linux/amd64 --name "$build" --init --privileged=false \
       --label "org.cpp-standard.compiler=$owner_name" --network "$NET" --dns 1.1.1.1 --dns 9.9.9.9 \
       --cpus 16 --memory 48g --memory-swap 48g --pids-limit 32768 --security-opt no-new-privileges \
+      -e "CPP_BASE_ID=$base_id" -e "CPP_DONOR_ID=$donor" \
       -e container=docker -e MISE_GLOBAL_CONFIG_FILE=/opt/cpp-standard-tools/mise.toml \
       -e "PATH=/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
       --mount "type=bind,src=$source,dst=/project,readonly" \
+      --mount "type=bind,src=$compiler_store/apt-archives,dst=/cache/apt-archives" \
+      --mount "type=bind,src=$compiler_store/packages,dst=/cache/compiler,readonly" \
+      --mount "type=bind,src=$transfer,dst=/run/cpp-compiler-transfer" \
+      --mount "type=bind,src=$compiler_store/mise-downloads,dst=/root/.cache/mise/downloads-cas" \
+      --mount "type=bind,src=$compiler_store/mise-release,dst=/cache/mise-release" \
+      --mount "type=bind,src=$compiler_store/uv,dst=/cache/uv" \
+      --mount "type=bind,src=$compiler_store/sccache,dst=/cache/sccache" \
       --mount "type=volume,src=$work_volume,dst=/work" --workdir /root --log-driver local --entrypoint /bin/bash \
       "$base_id" /project/docs/standard/gha-runner/pc-compiler-bootstrap.sh >"$state/build.cid"
     seed_compiler_ca
@@ -333,7 +368,11 @@ supervise_compiler() {
     done
     remove_compiler_container "$donor_name"
     docker start "$build" >/dev/null
+    # shellcheck source=docs/standard/gha-runner/pc-compiler-store.sh
+    source "$source/docs/standard/gha-runner/pc-compiler-store.sh"
+    resolve_compiler_package
     wait_compiler_build "$build"
+    retain_compiler_package
     capture_compiler_build
     [[ "$(docker inspect -f '{{.State.Status}}' "$build")" == exited ]]
     docker commit --change 'ENTRYPOINT ["/usr/bin/env"]' --change "LABEL org.opencontainers.image.base.digest=$base_digest" \
@@ -404,6 +443,7 @@ supervise_compiler() {
   finish_compiler_workload
   phase=actions-finalize
   slot=$((SECONDS + 600))
+  if [[ -s "$state/publish/tag" ]]; then slot=$((SECONDS + 1800)); fi
   while ((SECONDS < slot)); do
     refresh_compiler_token
     live="$(runner_job)" || die 'could not verify the completed Actions job'

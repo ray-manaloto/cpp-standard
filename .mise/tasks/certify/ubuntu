@@ -355,7 +355,7 @@ fi
 run_inner() { # run_inner ONLY SKIP: one pass of the in-container script
   local probe_env=()
   if [[ "$actions_host" == 1 ]]; then
-    probe_env=(-e CLANGD=/opt/llvm-23.1.6/bin/clangd)
+    probe_env=(-e CLANGD=/opt/llvm-23.1.6/bin/clangd -e CERT_CPP_ACTIONS_HOST=1)
   fi
   docker exec "${probe_env[@]}" -e MISE_AUTO_INSTALL=0 -e usage_only="$1" -e SKIP="$2" -e PROBES=/root/probes -e PIN="$pin" -e EXPECT_DIGEST="$digest" \
     -e IMAGE_BASE="$image_base" -e HOST_BINFMT_X86="$host_binfmt" -e HOST_ARCH="$host_arch" -e HOST_THREADS="$host_threads" \
