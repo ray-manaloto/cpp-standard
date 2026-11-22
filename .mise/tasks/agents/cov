@@ -20,5 +20,6 @@ cov=(uv run --no-project --quiet --with coverage==7.17.3 python -I -m coverage)
 "${cov[@]}" run --rcfile="$rc" python/agents/supervise_check.py >/dev/null
 "${cov[@]}" run --rcfile="$rc" python/agents/agy_worker_check.py >/dev/null
 "${cov[@]}" run --rcfile="$rc" python/agents/hook_health_check.py >/dev/null
+"${cov[@]}" run --rcfile="$rc" python/agents/agy_context_check.py >/dev/null
 "${cov[@]}" combine --rcfile="$rc" --quiet "$data"
 "${cov[@]}" report --rcfile="$rc"
