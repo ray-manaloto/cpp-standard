@@ -192,6 +192,7 @@ resolve_compiler_package
         self.assertIn(mount, build)
         self.assertIn(mount, project)
         self.assertIn("dst=/root/.cache/mise/downloads-cas", build)
+        self.assertIn("src=$compiler_store/uv,dst=/cache/uv", build)
         for isolated in (listener, timed):
             self.assertNotIn("src=$compiler_store", isolated)
         self.assertNotIn(

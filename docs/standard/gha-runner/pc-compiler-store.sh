@@ -107,5 +107,6 @@ retain_compiler_package() {
     chmod a+r "$state/oci/"*
     mv "$state/oci/"* "$state/publish/"
     printf '%s\n' "p2996-pc-linux-amd64-${key:0:16}" >"$state/publish/tag"
+    chmod 0444 "$state/publish/tag"
   fi
 }

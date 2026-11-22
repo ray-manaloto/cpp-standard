@@ -190,6 +190,8 @@ touch "$MISE_DATA_DIR/shims/cmake"
         recipe.write_text(
             'set -eu\n[[ "$#" == 3 && "$2" == /opt/p2996 && "$3" == 6 ]]\n'
             'cd "$1"\n[[ "$(command -v sccache)" == "$cert/bin/sccache" ]]\n'
+            '[[ "$(printenv CMAKE_C_COMPILER_LAUNCHER)" == sccache ]]\n'
+            '[[ "$(printenv CMAKE_CXX_COMPILER_LAUNCHER)" == sccache ]]\n'
             "sccache --zero-stats\n"
         )
         for status in (0, 37):

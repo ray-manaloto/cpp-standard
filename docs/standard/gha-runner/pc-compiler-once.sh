@@ -107,7 +107,7 @@ prepare_compiler() {
   flock -n 8 || die 'another one-time CPP compiler launch is active'
   # Only the protected build and project containers see the persistent object cache.
   compiler_store="$STATE/cpp-standard-amd64"
-  install -d -m 0700 "$compiler_store" "$compiler_store"/{sccache,packages,mise-downloads,mise-release,apt-archives,vcpkg-downloads}
+  install -d -m 0700 "$compiler_store" "$compiler_store"/{sccache,packages,mise-downloads,mise-release,uv,apt-archives,vcpkg-downloads}
   state="$(mktemp -d "$STATE/cpp-compiler.${run}.XXXXXXXX")"
   transfer="$state/transfer"
   install -d -m 0700 "$transfer"
@@ -358,6 +358,7 @@ supervise_compiler() {
       --mount "type=bind,src=$transfer,dst=/run/cpp-compiler-transfer" \
       --mount "type=bind,src=$compiler_store/mise-downloads,dst=/root/.cache/mise/downloads-cas" \
       --mount "type=bind,src=$compiler_store/mise-release,dst=/cache/mise-release" \
+      --mount "type=bind,src=$compiler_store/uv,dst=/cache/uv" \
       --mount "type=bind,src=$compiler_store/sccache,dst=/cache/sccache" \
       --mount "type=volume,src=$work_volume,dst=/work" --workdir /root --log-driver local --entrypoint /bin/bash \
       "$base_id" /project/docs/standard/gha-runner/pc-compiler-bootstrap.sh >"$state/build.cid"

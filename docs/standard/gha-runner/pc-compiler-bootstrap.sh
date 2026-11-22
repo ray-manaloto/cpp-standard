@@ -30,7 +30,10 @@ bootstrap_compiler_project() (
 # Run with the locked cert tool binaries on PATH. The project profile selects
 # sccache only on macOS, and Ninja can invoke its compiler launcher from /work.
 build_p2996() {
-  MISE_AUTO_INSTALL=0 mise -C "${MISE_GLOBAL_CONFIG_FILE%/*}" exec -- bash "$@"
+  # Builtins and runtimes start their own CMake configurations with the newly built Clang.
+  # Give them the same locked launcher on PATH as the top-level Ninja build.
+  MISE_AUTO_INSTALL=0 mise -C "${MISE_GLOBAL_CONFIG_FILE%/*}" exec -- \
+    env CMAKE_C_COMPILER_LAUNCHER=sccache CMAKE_CXX_COMPILER_LAUNCHER=sccache bash "$@"
 }
 
 # Inside the fresh, capped Ubuntu container only.
@@ -67,6 +70,8 @@ read -r mise_version mise_digest < <(awk -F '[=" ]+' '
 [[ "$mise_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$mise_digest" =~ ^[0-9a-f]{64}$ ]]
 # Keep only verified downloads across otherwise fresh tool environments.
 export MISE_CACHE_DIR=/root/.cache/mise MISE_DOWNLOAD_CACHE=1 MISE_DOWNLOAD_CACHE_MAX_SIZE=10GiB
+# mise delegates frozen Python tool graphs to uv. Keep wheels across both clean installs.
+export UV_CACHE_DIR=/cache/uv UV_LINK_MODE=copy
 cas="$MISE_CACHE_DIR/downloads-cas"
 mkdir -p "$cas"
 mise_blob="/cache/mise-release/$mise_digest"
