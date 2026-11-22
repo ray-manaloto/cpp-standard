@@ -227,3 +227,15 @@ Report the selected package source and input key, built image ID, registry diges
 and compiler and per-preset object counters. Null counters mean no measurement. Compare the
 signed offsets from the cutoff for job completion, host teardown and independent inventory.
 A positive offset measures lateness in seconds.
+
+### Sample quietness before requesting compiler dispatch
+
+For a repeat after busy A/B timing, stream `pc-compiler-quiet.py` from verified
+protected main to Python on the compiler host. Save the JSON output with the
+deployment receipt. It samples the current Docker containers' cgroup CPU
+counters every 15 seconds for four minutes. Request dispatch when the sample
+returns zero and the usual host and Actions admission checks are current.
+If the sample is busy or incomplete, keep the incumbents online and retake
+it in a quieter window. The 800,000 µs readiness budget provides headroom for
+the listener and normal CPU variation. Each certification window still
+requires its own in-run quietness evidence.
