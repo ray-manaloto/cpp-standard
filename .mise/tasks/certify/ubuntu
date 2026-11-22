@@ -402,7 +402,7 @@ others_cpu() {
 # other containers used in between) and why (empty when the timings can be
 # trusted: the same containers, every one accounted for, at most one CPU-second).
 cpu_trust() {
-  local c0 u0 m0 c1 u1 m1
+  local c0 u0 m0 c1 u1 m1 used_us=0
   read -r c0 u0 m0 <<<"$1"
   read -r c1 u1 m1 <<<"$2"
   why=""
@@ -413,9 +413,9 @@ cpu_trust() {
   [[ "$u0" =~ ^[0-9]+$ && "$u1" =~ ^[0-9]+$ && $u1 -lt $u0 ]] && why="${why:+$why; }a CPU counter went backwards"
   cpu_evidence_ok=0
   [[ -z "$why" ]] && cpu_evidence_ok=1
-  busy=0
-  [[ "$u0" =~ ^[0-9]+$ && "$u1" =~ ^[0-9]+$ ]] && busy=$(((u1 - u0) / 1000))
-  [[ $busy -gt 1000 ]] && why="${why:+$why; }over one CPU-second elsewhere"
+  [[ "$u0" =~ ^[0-9]+$ && "$u1" =~ ^[0-9]+$ ]] && used_us=$((u1 - u0))
+  busy=$((used_us / 1000))
+  [[ $used_us -gt 1000000 ]] && why="${why:+$why; }over one CPU-second elsewhere"
   return 0
 }
 
@@ -550,13 +550,22 @@ if want V6; then
     if ! python3 -I -B - "$scratch/ab_c" "$scratch/ab_h" "$busy" "$(cat "$scratch/ab_size")" "$free_gb" "$(cat "$scratch/ab_rm")" "$why" \
       >"$scratch/lines3.txt" <<'PY'
 import sys
-def rows(p):
-    return [list(map(int, l.split())) for l in open(p) if len(l.split()) == 4]
+def rows(path):
+    with open(path) as evidence:
+        return [line.split() for line in evidence]
+
+def complete(rounds):
+    return len(rounds) == 3 and all(
+        len(row) == 4 and all(value.isdecimal() and int(value) > 0 for value in row)
+        for row in rounds
+    )
+
 c, h = rows(sys.argv[1]), rows(sys.argv[2])
 busy, size, free, rm, why = int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]
-if len(c) != 3 or len(h) != 3 or any(value <= 0 for row in c + h for value in row):
-    print(f"V6    FAIL [timing] incomplete A/B: container {len(c)} rounds, host {len(h)}; rootfs {rm}")
+if not complete(c) or not complete(h):
+    print(f"V6    FAIL [timing] incomplete or malformed A/B: container {len(c)} records, host {len(h)}; rootfs {rm}")
     sys.exit()
+c, h = [[int(value) for value in row] for row in c], [[int(value) for value in row] for row in h]
 cc, cb = min(r[0] for r in c), min(r[1] for r in c)
 hc, hb = min(r[0] for r in h), min(r[1] for r in h)
 oc, ob = (cc - hc) / hc * 100, (cb - hb) / hb * 100

@@ -176,7 +176,8 @@ check_compiler_rows() {
     $1=="P8" && $2=="PASS" { p2996_iwyu++ }
     $1=="T3" && $2=="PASS" { stock_iwyu++ }
     $2=="FAIL" && $1=="V6" && /^V6 +FAIL +\[timing: overhead limit exceeded\] / { overhead++; next }
-    $2=="N/A" && (NF<3 || $1~/^(GO[123]|R2|V[12346])$/ || /timing untrusted/) { bad=1 }
+    # The amd64 playbook records facts, timing numbers and project rules as N/A.
+    $2=="N/A" && (NF<3 || $1!~/^(A4|E1|G5|H1|K1|T[16]|U[234]|V5)$/ || /timing untrusted/) { bad=1 }
     $2!="PASS" && $2!="N/A" { bad=1 }
     END {
       exit (bad || FNR!=count || p2996_iwyu!=1 || stock_iwyu!=1 ||

@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DRIVER = (ROOT / ".mise/tasks/certify/ubuntu").read_text()
 LAUNCHER = (ROOT / "docs/standard/gha-runner/pc-compiler-once.sh").read_text()
+ARCHIVED_NA = {"A4", "E1", "G5", "H1", "K1", "T1", "T6", "U2", "U3", "U4", "V5"}
 
 
 def shell_function(script, name):
@@ -40,10 +41,13 @@ class AdvisoryTiming(unittest.TestCase):
             "5067 245 36537472688 1270497622\n"
             "5083 245 36539509555 1270497624\n"
         )
-        v6_code = DRIVER.split("<<'PY'\nimport sys\ndef rows(p):\n", 1)[1]
-        v6_code = "import sys\ndef rows(p):\n" + v6_code.split("\nPY\n", 1)[0]
+        v6_start = DRIVER.index("import sys\ndef rows(path):")
+        v6_code = DRIVER[v6_start:].split("\nPY\n", 1)[0]
         if failure == "incomplete-ab":
             (self.scratch / "ab_c").write_text("5072 246 36545707205 1270490726\n")
+        if failure == "truncated-extra-ab":
+            with (self.scratch / "ab_c").open("a") as evidence:
+                evidence.write("12 34\n")
         v6 = subprocess.check_output(
             [
                 "python3",
@@ -60,13 +64,16 @@ class AdvisoryTiming(unittest.TestCase):
             text=True,
         )
         rows = [
-            v6.rstrip() if check == "V6" else f"{check} PASS fixture"
+            f"{check} {'N/A' if check in ARCHIVED_NA else 'PASS'} fixture"
             for check in self.ids
         ]
+        rows[self.ids.index("V6")] = v6.rstrip()
         if failure in {"B3", "U3", "V4"}:
             rows[self.ids.index(failure)] = f"{failure} FAIL [timing] fixture"
         if failure == "missing-required":
             rows[self.ids.index("V1")] = "V1 N/A fixture"
+        if failure == "skipped-required":
+            rows[self.ids.index("A1")] = "A1 N/A fixture"
         if failure == "wrong-id":
             rows[self.ids.index("V1")] = "UNKNOWN PASS fixture"
         (self.scratch / "body.txt").write_text("\n".join(rows) + "\n")
@@ -143,16 +150,27 @@ certify_compiler_project() { printf 'project image: %s\n' "$1"; }
         self.assertEqual(result.stdout, "project image: sha256:" + "a" * 64 + "\n")
         self.assertEqual((self.scratch / "timing-verdict.txt").read_text(), "failed\n")
 
+    def test_raw_microseconds_determine_strict_quietness(self):
+        for delta, verdict in [(1_000_000, "verified"), (1_000_001, "unverified")]:
+            with self.subTest(delta=delta):
+                result = self.replay(ab_after=1168901434 + delta)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    (self.scratch / "timing-verdict.txt").read_text(), verdict + "\n"
+                )
+
     def test_functional_and_integrity_failures_stop_before_project(self):
         for failure in (
             "B3",
             "U3",
             "V4",
             "incomplete-ab",
+            "truncated-extra-ab",
             "rootfs",
             "missing-cpu",
             "invalid-events",
             "missing-required",
+            "skipped-required",
             "wrong-id",
             "probe-exit",
             "install-change",
