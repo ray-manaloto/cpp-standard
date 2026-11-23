@@ -5,6 +5,8 @@ set -euo pipefail
 # would then write into this repository (its config, index and branches) instead of their own folders.
 # shellcheck disable=SC2046
 unset $(git rev-parse --local-env-vars)
+# Force fresh mise env reads inside agy_worker_check when outer shells export MISE_ENV_CACHE=1.
+export MISE_ENV_CACHE=0
 root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 cd "$root"
 data="$(mktemp -d)"

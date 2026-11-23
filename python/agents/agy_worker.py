@@ -195,6 +195,7 @@ def repo_env(main: Path) -> dict[str, str]:
             capture_output=True,
             text=True,
             timeout=60,
+            env=os.environ | {"MISE_ENV_CACHE": "0"},
         )
         env = json.loads(done.stdout) if done.returncode == 0 else {}
     except (OSError, subprocess.TimeoutExpired, ValueError):

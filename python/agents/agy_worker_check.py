@@ -91,6 +91,8 @@ def run(
         "STANDIN_AGYLOG": agylog,
         "AGY_LOG_DIR": str(root / "logs"),
         "MISE_TRUSTED_CONFIG_PATHS": str(root),
+        # Prove repo_env disables stale mise env caching even when caller shells export MISE_ENV_CACHE=1.
+        "MISE_ENV_CACHE": "1",
     }
     shutil.rmtree(root / "logs", ignore_errors=True)
     if plan:
