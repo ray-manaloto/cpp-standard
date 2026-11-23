@@ -141,6 +141,8 @@ run = "mkdir -p ~/.agents/skills"
 "~/.claude/skills/macos-agent-permissions" = { source = "unix/home/.agents/skills/macos-agent-permissions", mode = "symlink" }
 "~/.agents/skills/visual-plan" = { source = "unix/home/.agents/skills/visual-plan", mode = "symlink" }
 "~/.claude/skills/visual-plan" = { source = "unix/home/.agents/skills/visual-plan", mode = "symlink" }
+"~/.agents/skills/herdr-zcode" = { source = "unix/home/.agents/skills/herdr-zcode", mode = "symlink" }
+"~/.claude/skills/herdr-zcode" = { source = "unix/home/.agents/skills/herdr-zcode", mode = "symlink" }
 # TokenEconomizer's global policy, copied (TE rewrites the file, which would break a symlink). Change it
 # with `te --host claude config set --global ...`, then capture it from the main checkout with
 # `mise dot add ~/.tokeneconomizer/config.json` before any `mise dot apply`: an apply overwrites an

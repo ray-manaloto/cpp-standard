@@ -1,0 +1,4 @@
+interface:
+  display_name: "Herdr ZCode"
+  short_description: "Coordinate watched ZCode TUI workers in Herdr using hc"
+  default_prompt: "Use $herdr-zcode to launch watched ZCode workers, coordinate tasks through hc, and collect session receipts."
