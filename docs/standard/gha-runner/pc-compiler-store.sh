@@ -28,7 +28,7 @@ seed_retained_compiler() {
   test -s "$transfer/seed/expected"
   # Check the old image using its own installed compilers and original recipe. Only the
   # prefix passes to the new image. The historical checklist status is independent.
-  docker run --rm --name "$check-seed" --platform linux/amd64 --privileged=false \
+  docker run --rm -e container=docker --name "$check-seed" --platform linux/amd64 --privileged=false \
     --label "org.cpp-standard.compiler=$owner_name" --network none --cap-drop ALL \
     --security-opt no-new-privileges --pids-limit 512 --cpus 2 --memory 4g --memory-swap 4g \
     --mount "type=bind,src=$state/seed-source,dst=/prior-source,readonly" \

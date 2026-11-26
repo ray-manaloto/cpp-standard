@@ -24,7 +24,7 @@ per-slot CPU limits.
    with the tools volume writable. Only this step ever writes the tools.
 3. It asks GitHub for a single-use runner (`generate-jitconfig`, repo or org scope per slot) with the slot's labels.
 4. It starts a **new job container**: user `runner` (uid 1001), all capabilities dropped, no-new-privileges, no
-   sudo, no Docker socket, CPU quota / memory / pids limits, logs to the journal (`journalctl
+   sudo, no Docker socket, `-e container=docker`, CPU quota / memory / pids limits, logs to the journal (`journalctl
    CONTAINER_TAG=gha-slot-<slot>`). Mounts:
    - `gha-tools-<slot>` at `/cache/mise` **read-only** (mise data dir);
    - a 64 MB tmpfs at `/cache/mise/shims`, seeded from the volume's shims at start (mise rebuilds shims during

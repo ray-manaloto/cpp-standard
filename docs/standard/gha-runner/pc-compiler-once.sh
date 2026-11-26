@@ -357,7 +357,7 @@ supervise_compiler() {
     --mount "type=bind,src=$result,dst=/cpp-result,readonly" \
     --mount "type=bind,src=$state/publish,dst=/cpp-package,readonly" \
     --mount "type=bind,src=$state/tools,dst=/cache/mise,readonly" \
-    -e ACTIONS_RUNNER_INPUT_JITCONFIG -e GHA_SLOT=cpp-standard -e SCCACHE_DIR=/tmp/gha-cpp-sccache \
+    -e container=docker -e ACTIONS_RUNNER_INPUT_JITCONFIG -e GHA_SLOT=cpp-standard -e SCCACHE_DIR=/tmp/gha-cpp-sccache \
     -e "CPP_EXPECTED_RUN=$run" -e "CPP_EXPECTED_SHA=$sha" \
     -e ACTIONS_RUNNER_HOOK_JOB_STARTED=/etc/gha-cpp-compiler-admission.sh \
     --log-driver local --entrypoint ./run.sh "$image_ref" >"$state/runner.cid"

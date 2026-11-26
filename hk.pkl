@@ -167,6 +167,7 @@ local gateSteps = new Mapping<String, Step> {
     glob =
       List(
         "tests/pc_compiler/**",
+        "docs/standard/gha-runner/gha-slot",
         "docs/standard/gha-runner/pc-compiler-*",
         "docs/standard/ubuntu.md",
         "docs/standard/ubuntu-p2996/**",

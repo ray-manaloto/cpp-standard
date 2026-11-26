@@ -85,7 +85,7 @@ limits() { # resource and security limits shared by job, warm and test container
 job_args() {
   # $1 = container name. --cpus is a quota, so nproc still shows all 24 threads; tell build tools the real
   # parallelism so they don't oversubscribe the slot.
-  printf '%s\n' run -d --name "$1" --network "$NET" $DNS_ARGS \
+  printf '%s\n' run -d -e container=docker --name "$1" --network "$NET" $DNS_ARGS \
     --log-driver journald --log-opt "tag=gha-slot-$SLOT" \
     -v "$TOOLS:/cache/mise:ro" -v "$SCC:/cache/sccache" \
     -e GHA_SLOT="$SLOT" -e GHA_SLOT_JOBS="$JOBS" \
@@ -118,7 +118,7 @@ ensure_volumes() {
   for v in "$TOOLS" "$SCC"; do
     docker volume inspect "$v" >/dev/null 2>&1 && continue
     docker volume create "$v" >/dev/null
-    docker run --rm --network none -u 0 -v "$v:/v" --entrypoint sh "$IMAGE" -c 'chown 1001:1001 /v'
+    docker run --rm -e container=docker --network none -u 0 -v "$v:/v" --entrypoint sh "$IMAGE" -c 'chown 1001:1001 /v'
   done
   install -d -m 700 "$STATE"
   [ -e "$STATE/$SLOT.created" ] || date +%s > "$STATE/$SLOT.created"
@@ -184,7 +184,7 @@ warm() {
   fi
   mapfile -t lim < <(limits)
   # --init: PID 1 in the container passes SIGTERM on, so a slot stop during warm ends it instead of waiting.
-  docker run --rm --init --name "pc-x86-$SLOT-warm-$$" --network "$NET" $DNS_ARGS "${lim[@]}" --log-driver journald --log-opt "tag=gha-slot-$SLOT" \
+  docker run --rm --init -e container=docker --name "pc-x86-$SLOT-warm-$$" --network "$NET" $DNS_ARGS "${lim[@]}" --log-driver journald --log-opt "tag=gha-slot-$SLOT" \
     -v "$TOOLS:/cache/mise" "${mounts[@]}" "${envs[@]}" --entrypoint bash "$IMAGE" -c '
       set -euo pipefail
       export MISE_DATA_DIR=/cache/mise MISE_CACHE_DIR=/tmp/mise-cache MISE_STATE_DIR=/tmp/mise-state
