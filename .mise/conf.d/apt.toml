@@ -78,7 +78,7 @@
 "apt:gcc-16-offload-nvptx" = { version = "16.2.0-3ubuntu1", os = ["linux"] }
 "apt:gdb" = { version = "17.2-1ubuntu1", os = ["linux"] }
 "apt:gnupg" = { version = "2.4.9-4ubuntu3", os = ["linux"] }
-"apt:linux-perf" = { version = "7.3.0-10.10", os = ["linux"] }
+"apt:linux-perf" = { version = "7.3.0-11.12", os = ["linux"] }
 "apt:nvptx-tools" = { version = "0.20260402-1", os = ["linux"] }
 "apt:python3" = { version = "3.14.7-3", os = ["linux"] }
 "apt:unzip" = { version = "6.0-31ubuntu1", os = ["linux"] }
