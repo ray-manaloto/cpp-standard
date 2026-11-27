@@ -2,9 +2,10 @@
 
 > **Sunset (2026-11-27).** This repository is being sunset. Its successor is
 > [ray-manaloto/dotfiles-v2](https://github.com/ray-manaloto/dotfiles-v2). Start new work, issues and pull requests
-> there, not here. The daily schedules of `apt-bump`, `post-merge` and `builder` are gone; `apt-bump` and `builder`
-> can still be run by hand (`workflow_dispatch`) and `post-merge` still runs on a push to `main`. The repository is
-> not archived yet. Everything below describes how it worked up to the sunset and stays as a record.
+> there, not here. The daily schedules of `apt-bump`, `post-merge` and `builder` are removed from the workflow files
+> (D182); the owner may also disable those workflows (`gh workflow disable`), which stops their manual and push runs
+> too. The repository is not archived yet. Everything below describes how it worked up to the sunset and stays as a
+> record.
 
 EGM artifact directory: docs/designs/level-1/
 
@@ -90,8 +91,8 @@ archiving) still lands here; anything else goes to ray-manaloto/dotfiles-v2.
   project container it is `ray-manaloto-agents`, whose token is mounted at `/run/agent-secrets` (D155).
 
 - Apt pins: `mise run pins:apt-bump` (skill `pins-apt-bump`) moves them to the newest indexed version; `--check`
-  reports pins gone from their index. Not a heavy run; the `apt-bump` workflow runs it (D165), by hand only since
-  the sunset.
+  reports pins gone from their index. Not a heavy run; the `apt-bump` workflow ran it daily until the sunset
+  (D165, D182).
 
 - Heavy runs: one at a time on the owner's Mac, and only with the coordinator's go-ahead. Heavy are
   `mise run check`, `mise run ci`, any other build, `pytest -n auto`, image builds and pushes, and any job over

@@ -11,8 +11,8 @@ image and the clang-p2996 toolchain builds, and the gate that checked them.
 
 - No new issues or pull requests here, except the work that finishes the sunset. The existing issues stay as a
   record.
-- The daily schedules of the `apt-bump`, `post-merge` and `builder` workflows are gone. `apt-bump` and `builder` can
-  still be run by hand; `post-merge` still runs on a push to `main`.
+- The daily schedules of the `apt-bump`, `post-merge` and `builder` workflows are removed from the workflow files.
+  The owner may also disable those workflows, which stops their manual and push runs too.
 - The repository is not archived yet; archiving comes last.
 
 Agents: read `AGENTS.md` first.
