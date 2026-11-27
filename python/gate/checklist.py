@@ -1,7 +1,7 @@
 """The gate checklist checker (D119): gate-items.toml and the run's report lines in, the results
 JSON out. post-merge.yml (D119) runs the gate and the must-fail fixtures on every M1a preset after
-each push to main and once a day; its jobs report what each check's outcome was, and this script
-writes the results JSON — one entry per item, passed / failed / not run — that ticks the checklist
+each push to main (D182 ended its daily run); its jobs report what each check's outcome was, and
+this script writes the results JSON — one entry per item, passed / failed / not run — that ticks the checklist
 (D119) and, later, review:digest reads. An item whose check did not run is reported "not run",
 never passed (spec #133); any item not passed exits non-zero, so the run fails.
 

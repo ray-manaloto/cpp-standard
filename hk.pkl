@@ -188,7 +188,8 @@ local gateSteps = new Mapping<String, Step> {
     check = "\(cleanGitEnv) python3 -I tests/devcontainer/test_devcontainer.py"
   }
   // The gate checklist and its checker (D119, #133): the checklist file, the workflow that
-  // ticks it and the cov task that gates the checker's tests.
+  // ticks it and the cov task that gates the checker's tests. apt-bump.yml and builder.yml are here
+  // for their trigger test: no schedule since the sunset, workflow_dispatch kept (D182).
   ["gate-cov"] {
     glob =
       List(
@@ -196,6 +197,8 @@ local gateSteps = new Mapping<String, Step> {
         "tests/gate/**",
         "gate-items.toml",
         ".github/workflows/post-merge.yml",
+        ".github/workflows/apt-bump.yml",
+        ".github/workflows/builder.yml",
         ".mise/tasks/gate/cov",
       )
     check = "\(cleanGitEnv) mise run gate:cov"

@@ -1,8 +1,8 @@
 # The Level 1 gate checklist (D119; environment-standard.md G7 and the file plan's
 # gate-items.toml row). Each entry is one gate item: what it is, the environment whose
 # workflow ticks it, and the check that proves it. post-merge.yml runs on every push to
-# main and once a day and ticks the linux items: an item is ticked (passed in the results
-# JSON) only when its check was green in the newest completed main run (D119). An item
+# main (D182 ended its daily run) and ticks the linux items: an item is ticked (passed in
+# the results JSON) only when its check was green in the newest completed main run (D119). An item
 # whose check did not run is reported "not run" and fails the run, never passed
 # (spec #133). A macOS item (D46) belongs to mac-gate.yml. Later tickets add their checks
 # and fixtures to this file in the pull request that creates them (spec #133).

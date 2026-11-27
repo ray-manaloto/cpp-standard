@@ -1,4 +1,4 @@
-# The post-merge gate run (D119, #133). On every push to main and once a day it runs
+# The post-merge gate run (D119, D182, #133). On every push to main it runs
 # the gate (`mise run ci`) and the must-fail fixtures (`mise run ci-must-fail`) on
 # each M1a preset in the tools image on the hosted arm64 runners — free for a public
 # repository (G8); ci.yml stays PR- and merge-group-only (D130). Its jobs copy
@@ -7,19 +7,19 @@
 # into the results JSON (D119): one entry per gate-items.toml item, passed / failed /
 # not run — an item whose check did not run is "not run" and fails the run, never
 # passed (spec #133) — and uploads it as the gate-results artifact; until
-# review:digest exists, the run summary shows the table (D119). The daily schedule is
-# also the daily fixture run (D119). A trust root (D108).
+# review:digest exists, the run summary shows the table (D119). A trust root (D108).
+#
+# Until the 2026-11-27 sunset (successor: ray-manaloto/dotfiles-v2) it also ran once a day, which was the daily
+# fixture run (D119); D182 removed that schedule.
 name: post-merge
 
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '43 2 * * *'
 
 permissions: {}
 
-# Keep the push and scheduled evidence for each commit independent.
+# One group per event and commit, so the evidence for each commit is never cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: false
@@ -31,8 +31,8 @@ defaults:
 jobs:
   # Copied from ci.yml's job of the same name (D61, D62, D134): waits until main's
   # tools image and p2996 toolchain for this commit exist, for at most 180 minutes,
-  # and runs the wait's, resolve's and toolchain:fetch's unit tests. A push or
-  # schedule run has no pr- image and no staged copy; the wait never builds.
+  # and runs the wait's, resolve's and toolchain:fetch's unit tests. A push run
+  # has no pr- image and no staged copy; the wait never builds.
   artifact-check:
     name: artifact-check
     runs-on: ubuntu-26.04-arm
@@ -183,7 +183,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-  # Copied from ci.yml's job of the same name (#130), the daily fixture run (D119):
+  # Copied from ci.yml's job of the same name (#130), the fixture run on main (D119, D182):
   # `mise run ci-must-fail` in the same tools image. Its runner's own test runs
   # first: a fixture that goes green fails the job.
   must-fail:

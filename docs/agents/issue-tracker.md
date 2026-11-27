@@ -1,6 +1,10 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues and specs for this repo lived as GitHub issues until the 2026-11-27 sunset. Do not create or edit issues
+here; new work goes to ray-manaloto/dotfiles-v2.
+
+The **Conventions**, **Pull requests as a triage surface** and **Wayfinding operations** sections below are a record of
+how this repo was run; do not apply their write commands to this repo.
 
 ## Conventions
 
@@ -32,7 +36,7 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 ## When a skill says "publish to the issue tracker"
 
-Create a GitHub issue.
+Create the issue in ray-manaloto/dotfiles-v2 (`gh issue create --repo ray-manaloto/dotfiles-v2 ...`); never here.
 
 ## When a skill says "fetch the relevant ticket"
 

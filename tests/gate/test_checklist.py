@@ -1,7 +1,9 @@
-"""Tests of the gate checklist and its checker (D119, spec #133).
+"""Tests of the gate checklist and its checker (D119 as amended by D182, spec #133).
 
 Covers:
-1. post-merge.yml has exactly two triggers: a push to main and one daily schedule.
+1. post-merge.yml has exactly one trigger, a push to main; its daily schedule ended with the
+   2026-11-27 sunset (D182). apt-bump.yml runs only by hand and builder.yml keeps its push,
+   dispatch, pull-request and merge-queue triggers; none of the three has a schedule (D182).
 2. Every post-merge.yml job runs on ubuntu-26.04-arm, the free hosted arm64 runner (G8).
 3. The checker writes one entry per item, passed / failed / not run: an item whose
    check has no report line is "not run" and exits non-zero, never passed.
@@ -32,6 +34,8 @@ sys.path.insert(0, str(ROOT / "python/gate"))
 import checklist
 
 POST_MERGE = ROOT / ".github/workflows/post-merge.yml"
+APT_BUMP = ROOT / ".github/workflows/apt-bump.yml"
+BUILDER = ROOT / ".github/workflows/builder.yml"
 ITEMS_FILE = ROOT / "gate-items.toml"
 EXPECTED = ROOT / "fixtures/must-fail/expected.toml"
 CI_DEFAULT = ROOT / ".mise/tasks/ci/_default"
@@ -84,34 +88,49 @@ def _job_blocks(text: str) -> dict[str, str]:
     return blocks
 
 
+def _triggers(path: Path) -> list[str]:
+    """The trigger names in a workflow's `on:` block, in file order."""
+    return re.findall(
+        r"^  ([a-z_-]+):", _on_block(path.read_text(encoding="utf-8")), re.MULTILINE
+    )
+
+
 class Triggers(unittest.TestCase):
-    """Rule 1: two triggers, a push to main and one daily schedule, and no other."""
+    """Rule 1: one trigger, a push to main, and no other (the daily schedule ended with D182)."""
 
     def setUp(self) -> None:
         self.block = _on_block(POST_MERGE.read_text(encoding="utf-8"))
 
-    def test_exactly_a_push_to_main_and_a_schedule(self) -> None:
-        self.assertEqual(
-            re.findall(r"^  ([a-z-]+):", self.block, re.MULTILINE),
-            ["push", "schedule"],
-        )
+    def test_exactly_a_push_to_main(self) -> None:
+        self.assertEqual(_triggers(POST_MERGE), ["push"])
         self.assertRegex(
             self.block,
             re.compile(r"^  push:\n    branches: \[main\]$", re.MULTILINE),
         )
 
-    def test_the_schedule_is_one_daily_cron(self) -> None:
-        crons = re.findall(r"^    - cron: '([^']+)'$", self.block, re.MULTILINE)
-        self.assertEqual(len(crons), 1, crons)
-        fields = crons[0].split()
-        self.assertEqual(len(fields), 5, crons[0])
-        self.assertEqual(fields[2:], ["*", "*", "*"], f"{crons[0]} is not daily")
-        for field in fields[:2]:
-            self.assertTrue(field.isdigit(), f"{crons[0]} is not daily")
-
     def test_no_other_trigger(self) -> None:
         for word in ("workflow_dispatch", "pull_request", "merge_group"):
             self.assertNotIn(word, self.block)
+
+
+class SunsetTriggers(unittest.TestCase):
+    """Rule 1, D182: the scheduled workflows lost their schedules and kept workflow_dispatch."""
+
+    def test_apt_bump_runs_only_by_hand(self) -> None:
+        self.assertEqual(_triggers(APT_BUMP), ["workflow_dispatch"])
+
+    def test_builder_keeps_its_other_triggers(self) -> None:
+        self.assertEqual(
+            _triggers(BUILDER),
+            ["push", "workflow_dispatch", "pull_request", "merge_group"],
+        )
+
+    def test_no_schedule_or_cron(self) -> None:
+        for path in (POST_MERGE, APT_BUMP, BUILDER):
+            block = _on_block(path.read_text(encoding="utf-8"))
+            with self.subTest(workflow=path.name):
+                self.assertNotIn("schedule", block)
+                self.assertNotIn("cron", block)
 
 
 class RunnerLabels(unittest.TestCase):

@@ -1,4 +1,4 @@
-# The daily apt pin bump (D165, #193). `check` compares every apt pin with the live indexes and fails, naming the
+# The apt pin bump (D165, D182, #193). `check` compares every apt pin with the live indexes and fails, naming the
 # package, when a pinned version is no longer published. `bump` runs `mise run pins:apt-bump` once per group
 # (llvm: the apt.llvm.org pins; ubuntu: the Ubuntu archive pins and mise.ubuntu.toml's snapshot date), so a red
 # Ubuntu bump never holds an LLVM bump back. A group with changes gets one pull request from its own branch,
@@ -11,11 +11,12 @@
 # APT_BUMP_PRIVATE_KEY. Store the same client ID as an environment secret named APT_BUMP_CLIENT_ID.
 # Use the masked copy in the job because Actions logs evaluated step environments and action inputs.
 # The token is minted per run and scoped down to contents and pull requests.
+#
+# Since the 2026-11-27 sunset (successor: ray-manaloto/dotfiles-v2) it has no daily schedule (D182): it runs only
+# when dispatched by hand, and not at all if the owner disables it.
 name: apt-bump
 
 on:
-  schedule:
-    - cron: '23 3 * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -144,7 +145,7 @@ jobs:
             head="$(git rev-parse HEAD)"
           fi
           {
-            echo "The daily apt-bump workflow ran \`mise run pins:apt-bump --group $GROUP\` (D165):"
+            echo "The apt-bump workflow ran \`mise run pins:apt-bump --group $GROUP\` (D165):"
             echo
             echo '```text'
             cat "$RUNNER_TEMP/changes.txt"
