@@ -9,13 +9,14 @@
 # passed (spec #133) — and uploads it as the gate-results artifact; until
 # review:digest exists, the run summary shows the table (D119). The daily schedule is
 # also the daily fixture run (D119). A trust root (D108).
+#
+# Since the 2026-11-27 sunset (successor: ray-manaloto/dotfiles-v2) the daily schedule is gone: it runs only on a
+# push to main.
 name: post-merge
 
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '43 2 * * *'
 
 permissions: {}
 

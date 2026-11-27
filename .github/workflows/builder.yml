@@ -23,13 +23,13 @@
 #               main's images (base, tools and toolchains) and attests (D114, D116, #254)
 #
 # It holds no id-token and no attestations permission: only publish.yml signs (D114).
+#
+# Since the 2026-11-27 sunset (successor: ray-manaloto/dotfiles-v2) the daily schedule is gone.
 name: builder
 
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '17 4 * * *'
   workflow_dispatch:
   # Pull requests that change an image or toolchain input (python/pins/pins.py tag <name> --inputs,
   # toolchains/**) or this file. The merge queue cannot filter paths; there `tags` finds main's

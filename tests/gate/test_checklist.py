@@ -1,7 +1,8 @@
 """Tests of the gate checklist and its checker (D119, spec #133).
 
 Covers:
-1. post-merge.yml has exactly two triggers: a push to main and one daily schedule.
+1. post-merge.yml has exactly one trigger, a push to main; its daily schedule ended with the
+   2026-11-27 sunset.
 2. Every post-merge.yml job runs on ubuntu-26.04-arm, the free hosted arm64 runner (G8).
 3. The checker writes one entry per item, passed / failed / not run: an item whose
    check has no report line is "not run" and exits non-zero, never passed.
@@ -85,29 +86,24 @@ def _job_blocks(text: str) -> dict[str, str]:
 
 
 class Triggers(unittest.TestCase):
-    """Rule 1: two triggers, a push to main and one daily schedule, and no other."""
+    """Rule 1: one trigger, a push to main, and no other (the daily schedule ended with the sunset)."""
 
     def setUp(self) -> None:
         self.block = _on_block(POST_MERGE.read_text(encoding="utf-8"))
 
-    def test_exactly_a_push_to_main_and_a_schedule(self) -> None:
+    def test_exactly_a_push_to_main(self) -> None:
         self.assertEqual(
-            re.findall(r"^  ([a-z-]+):", self.block, re.MULTILINE),
-            ["push", "schedule"],
+            re.findall(r"^  ([a-z_-]+):", self.block, re.MULTILINE),
+            ["push"],
         )
         self.assertRegex(
             self.block,
             re.compile(r"^  push:\n    branches: \[main\]$", re.MULTILINE),
         )
 
-    def test_the_schedule_is_one_daily_cron(self) -> None:
-        crons = re.findall(r"^    - cron: '([^']+)'$", self.block, re.MULTILINE)
-        self.assertEqual(len(crons), 1, crons)
-        fields = crons[0].split()
-        self.assertEqual(len(fields), 5, crons[0])
-        self.assertEqual(fields[2:], ["*", "*", "*"], f"{crons[0]} is not daily")
-        for field in fields[:2]:
-            self.assertTrue(field.isdigit(), f"{crons[0]} is not daily")
+    def test_no_schedule_since_the_sunset(self) -> None:
+        self.assertNotIn("schedule", self.block)
+        self.assertNotIn("cron", self.block)
 
     def test_no_other_trigger(self) -> None:
         for word in ("workflow_dispatch", "pull_request", "merge_group"):

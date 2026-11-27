@@ -11,11 +11,11 @@
 # APT_BUMP_PRIVATE_KEY. Store the same client ID as an environment secret named APT_BUMP_CLIENT_ID.
 # Use the masked copy in the job because Actions logs evaluated step environments and action inputs.
 # The token is minted per run and scoped down to contents and pull requests.
+#
+# Since the 2026-11-27 sunset (successor: ray-manaloto/dotfiles-v2) the daily schedule is gone; it runs by hand only.
 name: apt-bump
 
 on:
-  schedule:
-    - cron: '23 3 * * *'
   workflow_dispatch:
 
 permissions: {}
