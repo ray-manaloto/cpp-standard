@@ -1,6 +1,7 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues and specs for this repo lived as GitHub issues until the 2026-11-27 sunset. Do not create or edit issues
+here; new work goes to ray-manaloto/dotfiles-v2.
 
 ## Conventions
 
