@@ -24,7 +24,7 @@
 #
 # It holds no id-token and no attestations permission: only publish.yml signs (D114).
 #
-# Since the 2026-11-27 sunset (successor: ray-manaloto/dotfiles-v2) the daily schedule is gone.
+# Since the 2026-11-27 sunset (successor: ray-manaloto/dotfiles-v2) it has no daily schedule (D182).
 name: builder
 
 on:
